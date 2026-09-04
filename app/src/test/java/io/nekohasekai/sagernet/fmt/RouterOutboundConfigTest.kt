@@ -33,7 +33,7 @@ class RouterOutboundConfigTest {
         assertEquals("router.sg", urlTest.tag)
         assertEquals(listOf("sg-1"), urlTest.outbounds)
         assertEquals("https://example.com/204", urlTest.url)
-        assertEquals(120_000_000_000L, urlTest.interval)
+        assertEquals("120s", urlTest.interval)
         assertEquals(75, urlTest.tolerance)
     }
 

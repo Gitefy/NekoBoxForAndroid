@@ -142,7 +142,7 @@ internal fun buildRouterOutbounds(
                 tag = router.tag
                 outbounds = router.outbounds
                 url = router.filter.testUrl
-                interval = router.filter.intervalSeconds * 1_000_000_000L
+                interval = "${router.filter.intervalSeconds}s"
                 tolerance = router.filter.toleranceMs
             }
         }
