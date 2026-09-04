@@ -69,4 +69,17 @@ class RouterRuntimeTest {
 
         assertEquals(listOf("router.us"), outbounds.map { it.tag })
     }
+
+    @Test
+    fun findsUrlTestGroupForTheSelectedHomeProxy() {
+        val tag = RouterRuntime.findUrlTestGroupForProxy(
+            groups = listOf(
+                RouterRuntimeGroup("router.manual", RouterRuntimeMode.SELECTOR, listOf(1), 1),
+                RouterRuntimeGroup("router.web3", RouterRuntimeMode.URL_TEST, listOf(2, 3), -1),
+            ),
+            selectedProxyId = 3L,
+        )
+
+        assertEquals("router.web3", tag)
+    }
 }

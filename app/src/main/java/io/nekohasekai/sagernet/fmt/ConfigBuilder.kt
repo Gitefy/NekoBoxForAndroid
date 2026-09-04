@@ -722,22 +722,23 @@ fun buildConfig(
         extraProxies.forEach { (key, p) ->
             tagMap[key] = buildChain(key, p)
         }
+        val runtimeRouterGroups = routerGroups.map { router ->
+            RouterRuntimeGroup(
+                stableTag = router.stableTag,
+                mode = if (router.mode == RouterGroup.MODE_URL_TEST) {
+                    RouterRuntimeMode.URL_TEST
+                } else {
+                    RouterRuntimeMode.SELECTOR
+                },
+                memberProxyIds = routerMembers[router.id].orEmpty().map { it.proxyId },
+                selectedProxyId = router.selectedProxyId,
+                id = router.id,
+                name = router.name,
+                filter = RouterFilterConfig.fromJson(router.matchConfig),
+            )
+        }
         val routerOutbounds = buildRouterOutbounds(
-            routerGroups.map { router ->
-                RouterRuntimeGroup(
-                    stableTag = router.stableTag,
-                    mode = if (router.mode == RouterGroup.MODE_URL_TEST) {
-                        RouterRuntimeMode.URL_TEST
-                    } else {
-                        RouterRuntimeMode.SELECTOR
-                    },
-                    memberProxyIds = routerMembers[router.id].orEmpty().map { it.proxyId },
-                    selectedProxyId = router.selectedProxyId,
-                    id = router.id,
-                    name = router.name,
-                    filter = RouterFilterConfig.fromJson(router.matchConfig),
-                )
-            },
+            runtimeRouterGroups,
             tagMap,
             reservedTags = routerReservedTags(outbounds),
             includeRouterGroups = includeRouterGroups
@@ -760,7 +761,13 @@ fun buildConfig(
             router.stableTag to routerMembers[router.id].orEmpty().map { it.proxyId }.toSet()
         }.filterKeys(routerSelectorTags::containsKey)
 
-        val mainProxyTag = (if (buildSelector) TAG_PROXY else tagMap[proxy.id]) ?: TAG_PROXY
+        val mainProxyTag = if (buildSelector) {
+            RouterRuntime.findUrlTestGroupForProxy(runtimeRouterGroups, proxy.id)
+                ?.takeIf { it in builtRouterTags }
+                ?: TAG_PROXY
+        } else {
+            tagMap[proxy.id] ?: TAG_PROXY
+        }
 
         // 在应用用户规则之前检查全局模式
         if (!forTest && DataStore.globalMode) {

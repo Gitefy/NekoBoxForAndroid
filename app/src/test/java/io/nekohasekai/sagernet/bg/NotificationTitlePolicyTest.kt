@@ -2,10 +2,21 @@ package io.nekohasekai.sagernet.bg
 
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.fmt.http.HttpBean
+import android.app.Notification
+import android.app.NotificationManager
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class NotificationTitlePolicyTest {
+
+    @Test
+    fun vpnNotificationIsHiddenFromLockScreen() {
+        val policy = ServiceNotification.vpnNotificationChannelPolicy()
+
+        assertEquals("service-vpn-hidden", ServiceNotification.vpnNotificationChannel)
+        assertEquals(NotificationManager.IMPORTANCE_MIN, policy.importance)
+        assertEquals(Notification.VISIBILITY_SECRET, policy.lockscreenVisibility)
+    }
 
     @Test
     fun returnsAppNameWhenShowProfileIsDisabled() {

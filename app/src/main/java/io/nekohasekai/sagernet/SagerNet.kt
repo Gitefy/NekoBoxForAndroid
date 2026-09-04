@@ -18,6 +18,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.getSystemService
 import go.Seq
 import io.nekohasekai.sagernet.bg.SagerConnection
+import io.nekohasekai.sagernet.bg.ServiceNotification
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.isOss
@@ -165,14 +166,17 @@ class SagerNet : Application(),
 
         fun updateNotificationChannels() {
             if (Build.VERSION.SDK_INT >= 26) @RequiresApi(26) {
+                val vpnNotificationPolicy = ServiceNotification.vpnNotificationChannelPolicy()
                 notification.createNotificationChannels(
                     listOf(
                         NotificationChannel(
-                            "service-vpn",
+                            ServiceNotification.vpnNotificationChannel,
                             application.getText(R.string.service_vpn),
-                            if (Build.VERSION.SDK_INT >= 28) NotificationManager.IMPORTANCE_MIN
+                            if (Build.VERSION.SDK_INT >= 28) vpnNotificationPolicy.importance
                             else NotificationManager.IMPORTANCE_LOW
-                        ),   // #1355
+                        ).apply {
+                            setLockscreenVisibility(vpnNotificationPolicy.lockscreenVisibility)
+                        },   // #1355
                         NotificationChannel(
                             "service-proxy",
                             application.getText(R.string.service_proxy),

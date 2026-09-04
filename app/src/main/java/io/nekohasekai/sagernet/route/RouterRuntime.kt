@@ -45,6 +45,15 @@ class RouterRuntimeException(
  * invalidate references to a Router group.
  */
 object RouterRuntime {
+    fun findUrlTestGroupForProxy(
+        groups: Iterable<RouterRuntimeGroup>,
+        selectedProxyId: Long,
+    ): String? = groups.firstOrNull {
+        it.mode == RouterRuntimeMode.URL_TEST &&
+            it.stableTag.isNotBlank() &&
+            selectedProxyId in it.memberProxyIds
+    }?.stableTag
+
     fun build(
         groups: Iterable<RouterRuntimeGroup>,
         proxyTags: Map<Long, String>,

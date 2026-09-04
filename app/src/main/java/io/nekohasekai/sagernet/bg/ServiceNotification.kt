@@ -1,5 +1,7 @@
 package io.nekohasekai.sagernet.bg
 
+import android.app.Notification
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
@@ -43,8 +45,19 @@ class ServiceNotification(
 ) : BroadcastReceiver() {
     companion object {
         const val notificationId = 1
+        const val vpnNotificationChannel = "service-vpn-hidden"
         val flags =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+
+        data class NotificationChannelPolicy(
+            val importance: Int,
+            val lockscreenVisibility: Int,
+        )
+
+        fun vpnNotificationChannelPolicy() = NotificationChannelPolicy(
+            importance = NotificationManager.IMPORTANCE_MIN,
+            lockscreenVisibility = Notification.VISIBILITY_SECRET,
+        )
 
         fun genTitle(
             ent: ProxyEntity?,
@@ -128,6 +141,7 @@ class ServiceNotification(
         .setContentIntent(SagerNet.configureIntent(service))
         .setSmallIcon(R.drawable.ic_service_active)
         .setCategory(NotificationCompat.CATEGORY_SERVICE)
+        .setVisibility(if (visible) NotificationCompat.VISIBILITY_PRIVATE else NotificationCompat.VISIBILITY_SECRET)
         .setPriority(if (visible) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_MIN)
 
     private val buildLock = Mutex()
