@@ -2,9 +2,25 @@ package io.nekohasekai.sagernet.database
 
 import io.nekohasekai.sagernet.GroupType
 import io.nekohasekai.sagernet.bg.SubscriptionUpdater
+import io.nekohasekai.sagernet.fmt.AbstractBean
+import io.nekohasekai.sagernet.fmt.toUniversalLink
 import io.nekohasekai.sagernet.ktx.applyDefaultValues
+import io.nekohasekai.sagernet.ktx.Logs
+import io.nekohasekai.sagernet.route.RouterFilterConfig
+import io.nekohasekai.sagernet.route.RouterMembership
+import io.nekohasekai.sagernet.route.RouterMemberSnapshot
+import io.nekohasekai.sagernet.route.RouterNodeSnapshot
+import io.nekohasekai.sagernet.route.RouterReconcileGroup
+import io.nekohasekai.sagernet.route.RouterReconciler
+import io.nekohasekai.sagernet.route.danglingRouterMemberProxyIds
+import io.nekohasekai.sagernet.route.routerStableIdOrFallback
+import io.nekohasekai.sagernet.route.routerNodeKey
 
 object GroupManager {
+
+    data class RouterRefreshSnapshot(
+        val membersByRouterId: Map<Long, List<RouterMemberSnapshot>>
+    )
 
     interface Listener {
         suspend fun groupAdd(group: ProxyGroup)
@@ -56,6 +72,7 @@ object GroupManager {
     suspend fun clearGroup(groupId: Long) {
         DataStore.selectedProxy = 0L
         SagerDatabase.proxyDao.deleteAll(groupId)
+        cleanupDanglingRouterMembers()
         iterator { groupUpdated(groupId) }
     }
 
@@ -79,6 +96,156 @@ object GroupManager {
         iterator { groupUpdated(groupId) }
     }
 
+    fun replaceRouterMembers(
+        router: RouterGroup,
+        availableProxyIds: List<Long>,
+        requestedProxyIds: Iterable<Long>,
+    ) {
+        val plan = RouterMembership.plan(
+            availableProxyIds = availableProxyIds,
+            requestedProxyIds = requestedProxyIds,
+            currentSelectedProxyId = router.selectedProxyId
+                .takeIf { it != RouterGroup.NO_SELECTION },
+        )
+        SagerDatabase.instance.runInTransaction {
+            SagerDatabase.routerMemberDao.replaceMembers(
+                router.id,
+                plan.memberProxyIds.mapIndexed { index, proxyId ->
+                    RouterMember(
+                        routerId = router.id,
+                        proxyId = proxyId,
+                        userOrder = index.toLong(),
+                    )
+                },
+            )
+            SagerDatabase.routerGroupDao.update(
+                router.copy(selectedProxyId = plan.selectedProxyId ?: RouterGroup.NO_SELECTION),
+            )
+        }
+    }
+
+    fun snapshotRouterMembers(): RouterRefreshSnapshot {
+        val proxies = SagerDatabase.proxyDao.getAll().associateBy { it.id }
+        val sourceGroups = SagerDatabase.groupDao.allGroups().associateBy { it.id }
+        val members = SagerDatabase.routerGroupDao.all().associate { router ->
+            router.id to SagerDatabase.routerMemberDao.getByRouter(router.id).mapNotNull { member ->
+                proxies[member.proxyId]?.let { proxy ->
+                    RouterMemberSnapshot(
+                        proxyId = proxy.id,
+                        stableId = proxy.routerStableId(),
+                        sourceGroupId = sourceGroups[proxy.groupId]
+                            ?.takeIf { it.type == GroupType.SUBSCRIPTION }
+                            ?.id,
+                        userOrder = member.userOrder
+                    )
+                }
+            }
+        }
+        return RouterRefreshSnapshot(members)
+    }
+
+    suspend fun reconcileRouterMembers(previous: RouterRefreshSnapshot) {
+        cleanupDanglingRouterMembers()
+        val routers = SagerDatabase.routerGroupDao.all()
+            .filter { it.enabled && it.stableTag.isNotBlank() }
+        if (routers.isEmpty()) return
+
+        val groups = routers.mapNotNull { router ->
+            runCatching {
+                RouterReconcileGroup(
+                    routerId = router.id,
+                    stableTag = router.stableTag,
+                    sourceGroupIds = SagerDatabase.routerGroupSourceDao.sourcesFor(router.id)
+                        .map { it.sourceGroupId },
+                    filter = RouterFilterConfig.fromJson(router.matchConfig).validate(),
+                    selectedProxyId = router.selectedProxyId.takeIf { it != RouterGroup.NO_SELECTION }
+                )
+            }.onFailure { error ->
+                Logs.e("Router ${router.stableTag} match configuration is invalid", error)
+            }.getOrNull()
+        }
+        if (groups.size != routers.size) return
+
+        val sourceGroups = SagerDatabase.groupDao.allGroups().associateBy { it.id }
+        val nodes = SagerDatabase.proxyDao.getAll().mapNotNull { proxy ->
+            runCatching {
+                RouterNodeSnapshot(
+                    id = proxy.id,
+                    stableId = proxy.routerStableId(),
+                    name = proxy.displayName(),
+                    subscriptionId = sourceGroups[proxy.groupId]
+                        ?.takeIf { it.type == GroupType.SUBSCRIPTION }
+                        ?.id,
+                    available = proxy.error == null
+                )
+            }.getOrNull()
+        }
+
+        val result = RouterReconciler.reconcile(nodes, groups, previous.membersByRouterId)
+        if (result.error != null) {
+            Logs.e("Router reconciliation preserved existing members: ${result.error}")
+            routers.forEach { router ->
+                SagerDatabase.routerGroupDao.update(router.copy(lastError = result.error))
+            }
+            return
+        }
+
+        val matchedAt = System.currentTimeMillis()
+        result.membersByRouterId.forEach { (routerId, members) ->
+            SagerDatabase.routerMemberDao.replaceMembers(
+                routerId,
+                members.map { member ->
+                    RouterMember(
+                        routerId = routerId,
+                        proxyId = member.proxyId,
+                        userOrder = member.userOrder,
+                        lastMatchedAt = matchedAt
+                    )
+                }
+            )
+            routers.firstOrNull { it.id == routerId }?.let { router ->
+                val selectedProxyId = result.selectedProxyIdsByRouterId[routerId]
+                    ?: RouterGroup.NO_SELECTION
+                val selectedNodeKey = members.firstOrNull { it.proxyId == selectedProxyId }
+                    ?.let { routerNodeKey(it.sourceGroupId, it.stableId) }
+                    .orEmpty()
+                val lastError = if (members.isEmpty()) "No nodes match ${router.name}" else ""
+                SagerDatabase.routerGroupDao.update(
+                    router.copy(
+                        selectedProxyId = selectedProxyId,
+                        selectedNodeKey = selectedNodeKey,
+                        lastError = lastError,
+                    )
+                )
+            }
+        }
+    }
+
+    fun markRouterRefreshFailed(sourceGroupId: Long, message: String) {
+        val error = message.ifBlank { "Subscription refresh failed" }
+        SagerDatabase.routerGroupSourceDao.routersForSource(sourceGroupId)
+            .mapNotNull { SagerDatabase.routerGroupDao.getById(it.routerId) }
+            .forEach { router ->
+                SagerDatabase.routerGroupDao.update(router.copy(lastError = error))
+            }
+    }
+
+    fun cleanupDanglingRouterMembers() {
+        runCatching {
+            val currentProxyIds = SagerDatabase.proxyDao.getAll().map { it.id }.toSet()
+            val members = SagerDatabase.routerGroupDao.all().flatMap { router ->
+                SagerDatabase.routerMemberDao.getByRouter(router.id)
+            }
+            danglingRouterMemberProxyIds(members.map { member ->
+                RouterMemberSnapshot(member.proxyId, "proxy:${member.proxyId}")
+            }, currentProxyIds).forEach { proxyId ->
+                SagerDatabase.routerMemberDao.deleteByProxy(proxyId)
+            }
+        }.onFailure { error ->
+            Logs.e("Unable to clean dangling router members", error)
+        }
+    }
+
     suspend fun createGroup(group: ProxyGroup): ProxyGroup {
         group.userOrder = SagerDatabase.groupDao.nextOrder() ?: 1
         group.id = SagerDatabase.groupDao.createGroup(group.applyDefaultValues())
@@ -98,17 +265,39 @@ object GroupManager {
     }
 
     suspend fun deleteGroup(groupId: Long) {
+        val routerSnapshot = snapshotRouterMembers()
+        SagerDatabase.routerGroupSourceDao.deleteBySource(groupId)
         SagerDatabase.groupDao.deleteById(groupId)
         SagerDatabase.proxyDao.deleteByGroup(groupId)
+        reconcileRouterMembers(routerSnapshot)
         iterator { groupRemoved(groupId) }
         SubscriptionUpdater.reconfigureUpdater()
     }
 
     suspend fun deleteGroup(group: List<ProxyGroup>) {
+        val routerSnapshot = snapshotRouterMembers()
+        group.forEach { SagerDatabase.routerGroupSourceDao.deleteBySource(it.id) }
         SagerDatabase.groupDao.deleteGroup(group)
         SagerDatabase.proxyDao.deleteByGroup(group.map { it.id }.toLongArray())
+        reconcileRouterMembers(routerSnapshot)
         for (proxyGroup in group) iterator { groupRemoved(proxyGroup.id) }
         SubscriptionUpdater.reconfigureUpdater()
     }
 
+}
+
+private fun ProxyEntity.routerStableId(): String {
+    return routerStableIdOrFallback(
+        uuid.takeIf { it.isNotBlank() }
+            ?: runCatching { requireBean().routerStableIdentity() }.getOrNull(),
+        id
+    )
+}
+
+internal fun AbstractBean.routerStableIdentity(): String {
+    return clone().apply {
+        name = ""
+        customOutboundJson = ""
+        customConfigJson = ""
+    }.toUniversalLink()
 }

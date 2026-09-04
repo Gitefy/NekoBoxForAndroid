@@ -37,6 +37,7 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group),
 
     lateinit var activity: MainActivity
     lateinit var groupListView: RecyclerView
+    lateinit var routerSection: LinearLayout
     lateinit var layoutManager: LinearLayoutManager
     lateinit var groupAdapter: GroupAdapter
     lateinit var undoManager: UndoSnackbarManager<ProxyGroup>
@@ -51,6 +52,11 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group),
         toolbar.setOnMenuItemClickListener(this)
 
         groupListView = view.findViewById(R.id.group_list)
+        routerSection = view.findViewById(R.id.router_section)
+        routerSection.isVisible = true
+        routerSection.setOnClickListener {
+            startActivity(Intent(requireContext(), RouterGroupListActivity::class.java))
+        }
         layoutManager = FixedLinearLayoutManager(groupListView)
         groupListView.layoutManager = layoutManager
         groupAdapter = GroupAdapter()

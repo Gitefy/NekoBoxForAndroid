@@ -279,6 +279,7 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     var routeRuleset by profileCacheStore.string(Key.ROUTE_RULESET)
     var routeOutbound by profileCacheStore.stringToInt(Key.ROUTE_OUTBOUND)
     var routeOutboundRule by profileCacheStore.long(Key.ROUTE_OUTBOUND + "Long")
+    var routeOutboundRouter by profileCacheStore.long(Key.ROUTE_OUTBOUND_ROUTER)
     var routePackages by profileCacheStore.string(Key.ROUTE_PACKAGES)
 
     var frontProxy by profileCacheStore.long(Key.GROUP_FRONT_PROXY + "Long")

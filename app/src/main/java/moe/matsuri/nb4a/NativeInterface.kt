@@ -14,6 +14,8 @@ import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.app
 import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
 import io.nekohasekai.sagernet.utils.PackageCache
+import io.nekohasekai.sagernet.route.routerNodeKey
+import io.nekohasekai.sagernet.route.routerStableIdOrFallback
 import libcore.BoxPlatformInterface
 import libcore.Libcore
 import libcore.NB4AInterface
@@ -82,26 +84,50 @@ class NativeInterface : BoxPlatformInterface, NB4AInterface {
     }
 
     override fun selector_OnProxySelected(selectorTag: String, tag: String) {
+        val service = DataStore.baseService
+        val proxy = service?.data?.proxy
+        val routerTag = proxy?.config?.routerSelectorTags?.entries
+            ?.firstOrNull { it.value == selectorTag }?.key
+        if (routerTag != null && service != null && proxy != null) {
+            val id = proxy.config.profileTagMap
+                .filterValues { it == tag }.keys.firstOrNull() ?: return
+            runOnDefaultDispatcher {
+                if (DataStore.baseService !== service || service.data.proxy !== proxy) return@runOnDefaultDispatcher
+                val selected = SagerDatabase.proxyDao.getById(id) ?: return@runOnDefaultDispatcher
+                SagerDatabase.routerGroupDao.getByStableTag(routerTag)?.let { router ->
+                    SagerDatabase.routerGroupDao.update(
+                        router.copy(
+                            selectedProxyId = id,
+                            selectedNodeKey = routerNodeKey(
+                                selected.groupId,
+                                routerStableIdOrFallback(selected.uuid, selected.id),
+                            ),
+                        )
+                    )
+                }
+            }
+            return
+        }
         if (selectorTag != "proxy") {
             Logs.d("other selector: $selectorTag")
             return
         }
         Libcore.resetAllConnections(true)
-        DataStore.baseService?.apply {
-            runOnDefaultDispatcher {
-                val id = data.proxy!!.config.profileTagMap
-                    .filterValues { it == tag }.keys.firstOrNull() ?: -1
-                val ent = SagerDatabase.proxyDao.getById(id) ?: return@runOnDefaultDispatcher
-                // traffic & title
-                data.proxy?.apply {
-                    looper?.selectMain(id)
-                    displayProfileName = ServiceNotification.genTitle(ent)
-                    data.notification?.postNotificationTitle(displayProfileName)
-                }
-                // post binder
-                data.binder.broadcast { b ->
-                    b.cbSelectorUpdate(id)
-                }
+        if (service == null || proxy == null) return
+        runOnDefaultDispatcher {
+            if (DataStore.baseService !== service || service.data.proxy !== proxy) return@runOnDefaultDispatcher
+            val id = proxy.config.profileTagMap
+                .filterValues { it == tag }.keys.firstOrNull() ?: -1
+            val ent = SagerDatabase.proxyDao.getById(id) ?: return@runOnDefaultDispatcher
+            // traffic & title
+            proxy.apply {
+                looper?.selectMain(id)
+                displayProfileName = ServiceNotification.genTitle(ent)
+                service.data.notification?.postNotificationTitle(displayProfileName)
+            }
+            // post binder
+            service.data.binder.broadcast { b ->
+                b.cbSelectorUpdate(id)
             }
         }
     }

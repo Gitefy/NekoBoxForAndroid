@@ -195,8 +195,18 @@ class SagerNet : Application(),
             application, Intent(application, SagerConnection.serviceClass)
         )
 
-        fun reloadService() =
-            application.sendBroadcast(Intent(Action.RELOAD).setPackage(application.packageName))
+        fun reloadService(routerTag: String? = null, routerProxyId: Long? = null) =
+            application.sendBroadcast(Intent(Action.RELOAD).setPackage(application.packageName).apply {
+                if (routerTag != null && routerProxyId != null) {
+                    putExtra(Action.EXTRA_ROUTER_TAG, routerTag)
+                    putExtra(Action.EXTRA_ROUTER_PROXY_ID, routerProxyId)
+                }
+            })
+
+        fun reloadServiceFully() =
+            application.sendBroadcast(Intent(Action.RELOAD).setPackage(application.packageName).apply {
+                putExtra(Action.EXTRA_FORCE_FULL_RELOAD, true)
+            })
 
         fun stopService() =
             application.sendBroadcast(Intent(Action.CLOSE).setPackage(application.packageName))

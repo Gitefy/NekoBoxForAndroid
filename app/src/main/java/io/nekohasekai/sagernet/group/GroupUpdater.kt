@@ -148,13 +148,18 @@ abstract class GroupUpdater {
                 }
 
                 try {
+                    val routerSnapshot = GroupManager.snapshotRouterMembers()
                     RawUpdater.doUpdate(proxyGroup, subscription, userInterface, byUser)
+                    GroupManager.reconcileRouterMembers(routerSnapshot)
                     true
                 } catch (e: Throwable) {
                     Logs.w(e)
+                    GroupManager.markRouterRefreshFailed(proxyGroup.id, e.readableMessage)
                     userInterface?.onUpdateFailure(proxyGroup, e.readableMessage)
                     finishUpdate(proxyGroup)
                     false
+                } finally {
+                    GroupManager.cleanupDanglingRouterMembers()
                 }
             }
         }

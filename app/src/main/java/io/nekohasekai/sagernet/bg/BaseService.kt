@@ -15,9 +15,16 @@ import io.nekohasekai.sagernet.aidl.ISagerNetService
 import io.nekohasekai.sagernet.aidl.ISagerNetServiceCallback
 import io.nekohasekai.sagernet.bg.proto.ProxyInstance
 import io.nekohasekai.sagernet.database.DataStore
+import io.nekohasekai.sagernet.database.RouterGroup
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.ktx.*
 import io.nekohasekai.sagernet.plugin.PluginManager
+import io.nekohasekai.sagernet.route.RouterRuntimeMode
+import io.nekohasekai.sagernet.route.RouterSelection
+import io.nekohasekai.sagernet.route.RouterSelectionPlan
+import io.nekohasekai.sagernet.route.RouterSelectionRequest
+import io.nekohasekai.sagernet.route.routerNodeKey
+import io.nekohasekai.sagernet.route.routerStableIdOrFallback
 import io.nekohasekai.sagernet.utils.DefaultNetworkListener
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
@@ -50,7 +57,11 @@ class BaseService {
         val receiver = broadcastReceiver { ctx, intent ->
             when (intent.action) {
                 Intent.ACTION_SHUTDOWN -> service.persistStats()
-                Action.RELOAD -> service.reload()
+                Action.RELOAD -> service.reload(
+                    intent.getStringExtra(Action.EXTRA_ROUTER_TAG),
+                    intent.getLongExtra(Action.EXTRA_ROUTER_PROXY_ID, 0L).takeIf { it > 0L },
+                    intent.getBooleanExtra(Action.EXTRA_FORCE_FULL_RELOAD, false),
+                )
                 // Action.SWITCH_WAKE_LOCK -> runOnDefaultDispatcher { service.switchWakeLock() }
                 PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -184,11 +195,17 @@ class BaseService {
         fun onBind(intent: Intent): IBinder? =
             if (intent.action == Action.SERVICE) data.binder else null
 
-        fun reload() {
+        fun reload(
+            routerTag: String? = null,
+            routerProxyId: Long? = null,
+            forceFullReload: Boolean = false,
+        ) {
             if (DataStore.selectedProxy == 0L) {
                 stopRunner(false, (this as Context).getString(R.string.profile_empty))
             }
-            if (canReloadSelector()) {
+            val routerReloadRequested = routerTag != null && routerProxyId != null
+            if (routerReloadRequested && trySelectRouter(routerTag!!, routerProxyId!!)) return
+            if (!forceFullReload && !routerReloadRequested && canReloadSelector()) {
                 val ent = SagerDatabase.proxyDao.getById(DataStore.selectedProxy)
                 val tag = data.proxy!!.config.profileTagMap[ent?.id] ?: ""
                 if (tag.isNotBlank() && ent != null) {
@@ -205,6 +222,46 @@ class BaseService {
                 s.canStop -> stopRunner(true)
                 else -> Logs.w("Illegal state $s when invoking use")
             }
+        }
+
+        private fun trySelectRouter(routerTag: String, proxyId: Long): Boolean {
+            val runningProxy = data.proxy ?: return false
+            if (routerTag.isBlank()) return false
+            val router = SagerDatabase.routerGroupDao.getByStableTag(routerTag)
+                ?.takeIf { it.enabled && it.stableTag.isNotBlank() && it.stableTag == routerTag }
+                ?: return false
+            if (runningProxy.config.routerSelectorTags[routerTag].isNullOrBlank()) return false
+            val plan = RouterSelection.plan(
+                request = RouterSelectionRequest(
+                    routerTag = routerTag,
+                    proxyId = proxyId,
+                    mode = if (router.mode == RouterGroup.MODE_URL_TEST) {
+                        RouterRuntimeMode.URL_TEST
+                    } else {
+                        RouterRuntimeMode.SELECTOR
+                    },
+                    routerEnabled = router.enabled,
+                ),
+                routerSelectorTags = runningProxy.config.routerSelectorTags,
+                routerMemberIds = runningProxy.config.routerMemberIds,
+                profileTags = runningProxy.config.profileTagMap,
+                selectorGroupId = runningProxy.config.selectorGroupId,
+            )
+            if (plan !is RouterSelectionPlan.HotSwitch) return false
+            if (!runningProxy.isInitialized() || !runningProxy.box.selectOutboundFor(plan.selectorTag, plan.targetTag)) {
+                return false
+            }
+            val selected = SagerDatabase.proxyDao.getById(proxyId) ?: return false
+            SagerDatabase.routerGroupDao.update(
+                router.copy(
+                    selectedProxyId = proxyId,
+                    selectedNodeKey = routerNodeKey(
+                        selected.groupId,
+                        routerStableIdOrFallback(selected.uuid, selected.id),
+                    ),
+                )
+            )
+            return true
         }
 
         fun canReloadSelector(): Boolean {

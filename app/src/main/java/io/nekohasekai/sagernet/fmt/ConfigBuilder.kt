@@ -7,6 +7,8 @@ import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.ProxyEntity.Companion.TYPE_CONFIG
 import io.nekohasekai.sagernet.database.ProxyGroup
+import io.nekohasekai.sagernet.database.RouterGroup
+import io.nekohasekai.sagernet.database.RuleEntity
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.fmt.ConfigBuildResult.IndexEntity
 import io.nekohasekai.sagernet.fmt.hysteria.HysteriaBean
@@ -32,6 +34,11 @@ import io.nekohasekai.sagernet.fmt.wireguard.WireGuardBean
 import io.nekohasekai.sagernet.fmt.wireguard.buildSingBoxOutboundWireguardBean
 import io.nekohasekai.sagernet.ktx.isIpAddress
 import io.nekohasekai.sagernet.ktx.mkPort
+import io.nekohasekai.sagernet.route.RouterRuntime
+import io.nekohasekai.sagernet.route.RouterFilterConfig
+import io.nekohasekai.sagernet.route.RouterRuntimeGroup
+import io.nekohasekai.sagernet.route.RouterRuntimeException
+import io.nekohasekai.sagernet.route.RouterRuntimeMode
 import io.nekohasekai.sagernet.utils.PackageCache
 import moe.matsuri.nb4a.*
 import moe.matsuri.nb4a.SingBoxOptions.*
@@ -57,6 +64,91 @@ const val TAG_DNS_HOSTS = "dns-hosts"
 
 const val LOCALHOST = "127.0.0.1"
 
+private val routerSystemReservedTags = setOf(
+    TAG_DIRECT,
+    TAG_BYPASS,
+    TAG_BLOCK,
+    TAG_PROXY,
+    TAG_FRAGMENT,
+    TAG_MIXED,
+    TAG_DNS_HOSTS
+)
+
+internal fun resolveRouteOutbound(
+    rule: RuleEntity,
+    mainProxyTag: String,
+    proxyTags: Map<Long, String>,
+    routerTagsById: Map<Long, String>,
+    primaryProxyId: Long = Long.MIN_VALUE
+): String {
+    if (rule.routerGroupId > 0L) {
+        return routerTagsById[rule.routerGroupId]
+            ?: throw RouterRuntimeException(
+                rule.routerGroupId,
+                "",
+                RouterRuntimeException.Reason.MISSING,
+            )
+    }
+    return when (val outId = rule.outbound) {
+        0L -> mainProxyTag
+        -1L -> TAG_BYPASS
+        -2L -> TAG_BLOCK
+        else -> if (outId == primaryProxyId) mainProxyTag else proxyTags[outId] ?: ""
+    }
+}
+
+internal fun validateRouterReferences(
+    rules: Iterable<RuleEntity>,
+    groups: Iterable<RouterGroup>,
+    builtRouterIds: Set<Long>,
+) {
+    val groupsById = groups.associateBy { it.id }
+    rules.asSequence().map { it.routerGroupId }.filter { it > 0 }.distinct().forEach { id ->
+        val group = groupsById[id]
+            ?: throw RouterRuntimeException(id, "", RouterRuntimeException.Reason.MISSING)
+        if (!group.enabled) {
+            throw RouterRuntimeException(id, group.name, RouterRuntimeException.Reason.DISABLED)
+        }
+        if (id !in builtRouterIds) {
+            throw RouterRuntimeException(id, group.name, RouterRuntimeException.Reason.EMPTY)
+        }
+    }
+}
+
+internal fun routerReservedTags(outbounds: Iterable<SingBoxOption>): Set<String> =
+    outbounds.flatMap { outbound ->
+        listOfNotNull(outbound.asMap()["tag"] as? String, (outbound as? Outbound)?.tag)
+    }.toSet() + routerSystemReservedTags
+
+internal fun buildRouterOutbounds(
+    groups: Iterable<RouterRuntimeGroup>,
+    proxyTags: Map<Long, String>,
+    reservedTags: Set<String> = emptySet(),
+    includeRouterGroups: Boolean = true
+): List<Outbound> {
+    if (!includeRouterGroups) return emptyList()
+
+    return RouterRuntime.build(groups, proxyTags, reservedTags).map { router ->
+        when (router.mode) {
+            RouterRuntimeMode.SELECTOR -> Outbound_SelectorOptions().apply {
+                type = "selector"
+                tag = router.tag
+                outbounds = router.outbounds
+                default_ = router.defaultTag
+            }
+
+            RouterRuntimeMode.URL_TEST -> Outbound_URLTestOptions().apply {
+                type = "urltest"
+                tag = router.tag
+                outbounds = router.outbounds
+                url = router.filter.testUrl
+                interval = router.filter.intervalSeconds * 1_000_000_000L
+                tolerance = router.filter.toleranceMs
+            }
+        }
+    }
+}
+
 class ConfigBuildResult(
     var config: String,
     var externalIndex: List<IndexEntity>,
@@ -64,6 +156,8 @@ class ConfigBuildResult(
     var trafficMap: Map<String, List<ProxyEntity>>,
     var profileTagMap: Map<Long, String>,
     val selectorGroupId: Long,
+    val routerSelectorTags: Map<String, String> = emptyMap(),
+    val routerMemberIds: Map<String, Set<Long>> = emptyMap(),
 ) {
     data class IndexEntity(var chain: LinkedHashMap<Int, ProxyEntity>)
 }
@@ -165,10 +259,28 @@ fun buildConfig(
     }
 
     val extraRules = if (forTest) listOf() else SagerDatabase.rulesDao.enabledRules()
+    val includeRouterGroups = !forTest && !forExport
+    val allRouterGroups = if (!includeRouterGroups) {
+        listOf()
+    } else {
+        SagerDatabase.routerGroupDao.all()
+    }
+    val routerGroups = allRouterGroups.filter { it.enabled && it.stableTag.isNotBlank() }
+    val routerMembers = if (!includeRouterGroups) {
+        mapOf()
+    } else {
+        routerGroups.associate { router ->
+            router.id to SagerDatabase.routerMemberDao.getByRouter(router.id)
+        }
+    }
+    val extraProxyIds = extraRules.mapNotNull { rule ->
+        rule.outbound.takeIf { it > 0 && it != proxy.id }
+    }.toMutableSet().apply {
+        addAll(routerMembers.values.flatten().map { it.proxyId }.filter { it != proxy.id })
+    }
     val extraProxies =
-        if (forTest) mapOf() else SagerDatabase.proxyDao.getEntities(extraRules.mapNotNull { rule ->
-            rule.outbound.takeIf { it > 0 && it != proxy.id }
-        }.toHashSet().toList()).associateBy { it.id }
+        if (forTest) mapOf() else SagerDatabase.proxyDao.getEntities(extraProxyIds.toList())
+            .associateBy { it.id }
     val buildSelector = !forTest && group?.isSelector == true && !forExport
     val userDNSRuleList = mutableListOf<DNSRule_DefaultOptions>()
     val domainListDNSDirectForce = mutableListOf<String>()
@@ -202,6 +314,9 @@ fun buildConfig(
             else -> "prefer_ipv4"
         }
     }
+
+    var routerSelectorTags: Map<String, String> = emptyMap()
+    var routerMemberIds: Map<String, Set<Long>> = emptyMap()
 
     return MyOptions().apply {
 	if (!forTest) {
@@ -607,6 +722,43 @@ fun buildConfig(
         extraProxies.forEach { (key, p) ->
             tagMap[key] = buildChain(key, p)
         }
+        val routerOutbounds = buildRouterOutbounds(
+            routerGroups.map { router ->
+                RouterRuntimeGroup(
+                    stableTag = router.stableTag,
+                    mode = if (router.mode == RouterGroup.MODE_URL_TEST) {
+                        RouterRuntimeMode.URL_TEST
+                    } else {
+                        RouterRuntimeMode.SELECTOR
+                    },
+                    memberProxyIds = routerMembers[router.id].orEmpty().map { it.proxyId },
+                    selectedProxyId = router.selectedProxyId,
+                    id = router.id,
+                    name = router.name,
+                    filter = RouterFilterConfig.fromJson(router.matchConfig),
+                )
+            },
+            tagMap,
+            reservedTags = routerReservedTags(outbounds),
+            includeRouterGroups = includeRouterGroups
+        )
+        outbounds.addAll(routerOutbounds)
+        val builtRouterTags = routerOutbounds.mapNotNull { outbound ->
+            (outbound.asMap()["tag"] as? String) ?: outbound.tag
+        }.toSet()
+        val routerTagsById = routerGroups.mapNotNull { router ->
+            router.stableTag.takeIf(builtRouterTags::contains)?.let { router.id to it }
+        }.toMap()
+        validateRouterReferences(extraRules, allRouterGroups, routerTagsById.keys)
+        routerSelectorTags = routerOutbounds
+            .filterIsInstance<Outbound_SelectorOptions>()
+            .mapNotNull { outbound ->
+                outbound.tag?.takeIf { it.isNotBlank() }?.let { it to it }
+            }
+            .toMap()
+        routerMemberIds = routerGroups.associate { router ->
+            router.stableTag to routerMembers[router.id].orEmpty().map { it.proxyId }.toSet()
+        }.filterKeys(routerSelectorTags::containsKey)
 
         val mainProxyTag = (if (buildSelector) TAG_PROXY else tagMap[proxy.id]) ?: TAG_PROXY
 
@@ -829,12 +981,7 @@ fun buildConfig(
                         }
                     }
 
-                    outbound = when (val outId = rule.outbound) {
-                        0L -> mainProxyTag
-                        -1L -> TAG_BYPASS
-                        -2L -> TAG_BLOCK
-                        else -> if (outId == proxy.id) mainProxyTag else tagMap[outId] ?: ""
-                    }
+                    outbound = resolveRouteOutbound(rule, mainProxyTag, tagMap, routerTagsById, proxy.id)
 
                     _hack_custom_config = rule.config
                 }
@@ -1057,7 +1204,9 @@ fun buildConfig(
             proxy.id,
             trafficMap,
             tagMap,
-            if (buildSelector) group.id else -1L
+            if (buildSelector) group.id else -1L,
+            routerSelectorTags,
+            routerMemberIds,
         )
     }
 

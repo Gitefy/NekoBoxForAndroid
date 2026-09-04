@@ -3,8 +3,6 @@ package io.nekohasekai.sagernet.ui
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.os.Parcel
-import android.os.Parcelable
 import android.provider.OpenableColumns
 import android.view.View
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,8 +23,7 @@ import io.nekohasekai.sagernet.databinding.LayoutImportBinding
 import io.nekohasekai.sagernet.databinding.LayoutProgressBinding
 import io.nekohasekai.sagernet.ktx.*
 import kotlinx.coroutines.delay
-import moe.matsuri.nb4a.utils.Util
-import org.json.JSONArray
+import io.nekohasekai.sagernet.fmt.BackupSerializer
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -521,49 +518,27 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
         }
     }
 
-    fun Parcelable.toBase64Str(): String {
-        val parcel = Parcel.obtain()
-        writeToParcel(parcel, 0)
-        try {
-            return Util.b64EncodeUrlSafe(parcel.marshall())
-        } finally {
-            parcel.recycle()
-        }
-    }
-
     private fun doBackup(
         profile: Boolean,
         rule: Boolean,
         setting: Boolean
     ): ByteArray {
         val out = JSONObject().apply {
-            put("version", 1)
+            put("version", BackupSerializer.BACKUP_VERSION)
             if (profile) {
-                put("profiles", JSONArray().apply {
-                    SagerDatabase.proxyDao.getAll().forEach {
-                        put(it.toBase64Str())
-                    }
-                })
-
-                put("groups", JSONArray().apply {
-                    SagerDatabase.groupDao.allGroups().forEach {
-                        put(it.toBase64Str())
-                    }
-                })
+                BackupSerializer.putParcelableArray(this, "profiles", SagerDatabase.proxyDao.getAll())
+                BackupSerializer.putParcelableArray(this, "groups", SagerDatabase.groupDao.allGroups())
+                BackupSerializer.putParcelableArray(this, "routerGroups", SagerDatabase.routerGroupDao.all())
+                BackupSerializer.putParcelableArray(this, "routerMembers", SagerDatabase.routerMemberDao.all())
+                BackupSerializer.putParcelableArray(this, "routerSources", SagerDatabase.routerGroupSourceDao.all())
             }
             if (rule) {
-                put("rules", JSONArray().apply {
-                    SagerDatabase.rulesDao.allRules().forEach {
-                        put(it.toBase64Str())
-                    }
-                })
+                val rules = SagerDatabase.rulesDao.allRules()
+                BackupSerializer.putParcelableArray(this, "rules", rules)
+                BackupSerializer.putRouterRuleReferences(this, rules)
             }
             if (setting) {
-                put("settings", JSONArray().apply {
-                    PublicDatabase.kvPairDao.all().forEach {
-                        put(it.toBase64Str())
-                    }
-                })
+                BackupSerializer.putParcelableArray(this, "settings", PublicDatabase.kvPairDao.all())
             }
         }
 
@@ -692,58 +667,46 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
     fun finishImport(
         content: JSONObject, profile: Boolean, rule: Boolean, setting: Boolean
     ) {
-        if (profile && content.has("profiles")) {
-            val profiles = mutableListOf<ProxyEntity>()
-            val jsonProfiles = content.getJSONArray("profiles")
-            for (i in 0 until jsonProfiles.length()) {
-                val data = Util.b64Decode(jsonProfiles[i] as String)
-                val parcel = Parcel.obtain()
-                parcel.unmarshall(data, 0, data.size)
-                parcel.setDataPosition(0)
-                profiles.add(ProxyEntity.CREATOR.createFromParcel(parcel))
-                parcel.recycle()
-            }
-            SagerDatabase.proxyDao.reset()
-            SagerDatabase.proxyDao.insert(profiles)
+        SagerDatabase.instance.runInTransaction {
+            if (profile && content.has("profiles")) {
+                val profiles = BackupSerializer.getParcelableArray(content, "profiles", ProxyEntity.CREATOR)
+                val groups = BackupSerializer.getParcelableArray(content, "groups", ProxyGroup.CREATOR)
+                val routerGroups = BackupSerializer.getParcelableArray(content, "routerGroups", RouterGroup.CREATOR)
+                val routerMembers = BackupSerializer.getParcelableArray(content, "routerMembers", RouterMember.CREATOR)
+                val routerSources = BackupSerializer.getParcelableArray(content, "routerSources", RouterGroupSource.CREATOR)
 
-            val groups = mutableListOf<ProxyGroup>()
-            val jsonGroups = content.getJSONArray("groups")
-            for (i in 0 until jsonGroups.length()) {
-                val data = Util.b64Decode(jsonGroups[i] as String)
-                val parcel = Parcel.obtain()
-                parcel.unmarshall(data, 0, data.size)
-                parcel.setDataPosition(0)
-                groups.add(ProxyGroup.CREATOR.createFromParcel(parcel))
-                parcel.recycle()
+                SagerDatabase.routerGroupSourceDao.reset()
+                SagerDatabase.routerMemberDao.reset()
+                SagerDatabase.routerGroupDao.reset()
+                SagerDatabase.proxyDao.reset()
+                SagerDatabase.groupDao.reset()
+
+                SagerDatabase.groupDao.insert(groups)
+                SagerDatabase.proxyDao.insert(profiles)
+                if (routerGroups.isNotEmpty()) SagerDatabase.routerGroupDao.insert(routerGroups)
+                val validRouterIds = SagerDatabase.routerGroupDao.all().mapTo(hashSetOf()) { it.id }
+                val validGroupIds = SagerDatabase.groupDao.allGroups().mapTo(hashSetOf()) { it.id }
+                val validProxyIds = SagerDatabase.proxyDao.getAll().mapTo(hashSetOf()) { it.id }
+                val validMembers = routerMembers.filter { it.routerId in validRouterIds && it.proxyId in validProxyIds }
+                val validSources = routerSources.filter { it.routerId in validRouterIds && it.sourceGroupId in validGroupIds }
+                if (validMembers.isNotEmpty()) SagerDatabase.routerMemberDao.insert(validMembers)
+                if (validSources.isNotEmpty()) SagerDatabase.routerGroupSourceDao.insert(validSources)
             }
-            SagerDatabase.groupDao.reset()
-            SagerDatabase.groupDao.insert(groups)
-        }
-        if (rule && content.has("rules")) {
-            val rules = mutableListOf<RuleEntity>()
-            val jsonRules = content.getJSONArray("rules")
-            for (i in 0 until jsonRules.length()) {
-                val data = Util.b64Decode(jsonRules[i] as String)
-                val parcel = Parcel.obtain()
-                parcel.unmarshall(data, 0, data.size)
-                parcel.setDataPosition(0)
-                rules.add(ParcelizeBridge.createRule(parcel))
-                parcel.recycle()
+
+            if (rule && content.has("rules")) {
+                val routerReferences = BackupSerializer.getRouterRuleReferences(content)
+                val rules = BackupSerializer.getParcelableArray(content, "rules") {
+                    ParcelizeBridge.createRule(it)
+                }.map { imported ->
+                    val routerGroupId = routerReferences[imported.id] ?: 0L
+                    imported.copy(routerGroupId = routerGroupId)
+                }
+                SagerDatabase.rulesDao.reset()
+                SagerDatabase.rulesDao.insert(rules)
             }
-            SagerDatabase.rulesDao.reset()
-            SagerDatabase.rulesDao.insert(rules)
         }
         if (setting && content.has("settings")) {
-            val settings = mutableListOf<KeyValuePair>()
-            val jsonSettings = content.getJSONArray("settings")
-            for (i in 0 until jsonSettings.length()) {
-                val data = Util.b64Decode(jsonSettings[i] as String)
-                val parcel = Parcel.obtain()
-                parcel.unmarshall(data, 0, data.size)
-                parcel.setDataPosition(0)
-                settings.add(KeyValuePair.CREATOR.createFromParcel(parcel))
-                parcel.recycle()
-            }
+            val settings = BackupSerializer.getParcelableArray(content, "settings", KeyValuePair.CREATOR)
             PublicDatabase.kvPairDao.reset()
             PublicDatabase.kvPairDao.insert(settings)
         }

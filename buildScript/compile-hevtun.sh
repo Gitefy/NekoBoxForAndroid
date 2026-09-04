@@ -47,17 +47,48 @@ fi
 
 # Persistent obj/libs dirs so ndk-build stays incremental between runs.
 mkdir -p "$BUILD_DIR"
+
+# Git for Windows can check out repository symlinks as small text files when
+# Developer Mode is unavailable. Build from a disposable mirror and replace
+# those link placeholders with the contents of their targets, leaving the
+# submodule checkout untouched.
+BUILD_SRC="$BUILD_DIR/source"
+rm -rf "$BUILD_SRC"
+mkdir -p "$BUILD_SRC"
+cp -a "$HEV_SRC/." "$BUILD_SRC/"
+
+materialize_git_links() {
+    local source_repo="$1"
+    local build_repo="$2"
+    git -c safe.directory="$source_repo" -C "$source_repo" ls-files -s |
+        awk '$1 == "120000" { print $4 }' |
+        while IFS= read -r relative_path; do
+            local link_file="$build_repo/$relative_path"
+            local target
+            target="$(tr -d '\r\n' < "$source_repo/$relative_path")"
+            cp -f "$(dirname "$link_file")/$target" "$link_file"
+        done
+}
+
+materialize_git_links "$HEV_SRC" "$BUILD_SRC"
+materialize_git_links "$HEV_SRC/src/core" "$BUILD_SRC/src/core"
+materialize_git_links "$HEV_SRC/third-part/hev-task-system" \
+    "$BUILD_SRC/third-part/hev-task-system"
+materialize_git_links "$HEV_SRC/third-part/yaml" "$BUILD_SRC/third-part/yaml"
+HEV_REV="$(git -c safe.directory="$HEV_SRC" -C "$HEV_SRC" \
+    rev-parse --short HEAD 2>/dev/null || printf unknown)"
+
 pushd "$BUILD_DIR" > /dev/null
 
-if [ ! -e jni/hev-socks5-tunnel ]; then
-    mkdir -p jni
-    ln -sfn "$HEV_SRC" jni/hev-socks5-tunnel
-    echo 'include $(call all-subdir-makefiles)' > jni/Android.mk
+NDK_BUILD="$ANDROID_NDK_HOME/ndk-build"
+if [ ! -f "$NDK_BUILD" ] && [ -f "$NDK_BUILD.cmd" ]; then
+    NDK_BUILD="$NDK_BUILD.cmd"
 fi
 
-"$ANDROID_NDK_HOME/ndk-build" \
+"$NDK_BUILD" \
     NDK_PROJECT_PATH=. \
-    APP_BUILD_SCRIPT=jni/Android.mk \
+    APP_BUILD_SCRIPT="$BUILD_SRC/Android.mk" \
+    "REV_ID=$HEV_REV" \
     "APP_ABI=$ABIS" \
     APP_PLATFORM=android-21 \
     "APP_CFLAGS=-O3 -DPKGNAME=moe/matsuri/nb4a/hevtun -DCLSNAME=HevTunNative" \

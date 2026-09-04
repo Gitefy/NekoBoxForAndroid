@@ -213,6 +213,18 @@ func (b *BoxInstance) SelectOutbound(tag string) bool {
 	return false
 }
 
+func (b *BoxInstance) SelectOutboundFor(selectorTag, tag string) bool {
+	proxy, ok := b.Outbound().Outbound(selectorTag)
+	if !ok {
+		return false
+	}
+	selector, ok := proxy.(*group.Selector)
+	if !ok {
+		return false
+	}
+	return selector.SelectOutbound(tag)
+}
+
 func UrlTest(i *BoxInstance, link string, timeout int32) (latency int32, err error) {
 	defer device.DeferPanicToError("box.UrlTest", func(err_ error) { err = err_ })
 	var connectionTracker adapter.ConnectionTracker

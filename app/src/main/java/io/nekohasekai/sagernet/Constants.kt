@@ -155,6 +155,7 @@ object Key {
     const val ROUTE_PROTOCOL = "routeProtocol"
     const val ROUTE_RULESET = "routeRuleset"
     const val ROUTE_OUTBOUND = "routeOutbound"
+    const val ROUTE_OUTBOUND_ROUTER = "routeOutboundRouter"
     const val ROUTE_PACKAGES = "routePackages"
 
     const val GROUP_NAME = "groupName"
@@ -232,4 +233,8 @@ object Action {
 
     // const val SWITCH_WAKE_LOCK = "io.nekohasekai.sagernet.SWITCH_WAKELOCK"
     const val RESET_UPSTREAM_CONNECTIONS = "moe.nb4a.RESET_UPSTREAM_CONNECTIONS"
+
+    const val EXTRA_ROUTER_TAG = "routerTag"
+    const val EXTRA_ROUTER_PROXY_ID = "routerProxyId"
+    const val EXTRA_FORCE_FULL_RELOAD = "forceFullReload"
 }
