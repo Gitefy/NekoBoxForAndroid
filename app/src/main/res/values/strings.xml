@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name" translatable="false">NekoBoxF</string>
-    <string name="app_name_long" translatable="false">NekoBoxF for Android</string>
+    <string name="app_name" translatable="false">NekoBox</string>
+    <string name="app_name_long" translatable="false">NekoBox for Android</string>
     <string name="app_desc">The universal proxy toolchain for Android, written in Kotlin.</string>
     <string name="project">Project</string>
     <string name="github">Source code</string>
@@ -79,6 +79,11 @@
     <string name="router_group_validation_field">%1$s: %2$s</string>
     <string name="route_proxy_group">Proxy group</string>
     <string name="router_reference_invalid">Invalid proxy group reference</string>
+    <string name="router_groups_card_title">Proxy groups (Policy groups)</string>
+    <string name="router_groups_card_summary">Manage URL-Test automatic latency &amp; manual node groups</string>
+    <string name="router_groups_card_summary_with_count">%d groups configured • URL-Test &amp; Manual</string>
+    <string name="router_groups_nav_title">Proxy groups</string>
+    <string name="router_no_sources_selected">No subscriptions selected</string>
     <string name="group_no_difference">%s: No difference</string>
     <string name="group_updated">%s: Updated %d proxies</string>
     <string name="group_show_diff">Diff</string>

@@ -19,3 +19,8 @@ jniLibs/
 # submodules
 /external
 .hev-build/
+
+# Local logs and test dumps
+*.log
+/nekobox_*.json
+.superpowers/

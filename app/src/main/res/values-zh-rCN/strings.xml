@@ -634,4 +634,9 @@
     <string name="router_group_validation_field">%1$s：%2$s</string>
     <string name="route_proxy_group">代理组</string>
     <string name="router_reference_invalid">代理组引用无效</string>
+    <string name="router_groups_card_title">路由代理组 / 策略组</string>
+    <string name="router_groups_card_summary">管理 URL-Test 自动优选与手动选择节点组</string>
+    <string name="router_groups_card_summary_with_count">已配置 %d 个代理组 • 自动测速与手动切换</string>
+    <string name="router_groups_nav_title">代理组 (策略组)</string>
+    <string name="router_no_sources_selected">未选择任何订阅</string>
 </resources>

@@ -8,6 +8,7 @@ import io.nekohasekai.sagernet.route.RouterMatcher
 import io.nekohasekai.sagernet.route.RouterNodeSnapshot
 import io.nekohasekai.sagernet.route.routerNodeKey
 import io.nekohasekai.sagernet.route.routerStableIdOrFallback
+import io.nekohasekai.sagernet.ktx.Logs
 import java.net.URI
 import java.util.UUID
 
@@ -101,19 +102,29 @@ object RouterGroupRepository {
                 runCatching {
                     RouterNodeSnapshot(
                         id = proxy.id,
-                        stableId = proxy.uuid.takeIf(String::isNotBlank),
-                        name = proxy.displayName(),
+                        stableId = proxy.routerStableId(),
+                        name = proxy.displayNameOrFallback(),
                         subscriptionId = sourceId,
-                        available = proxy.error == null,
+                        enabled = true,
+                        available = true,
                     )
+                }.onFailure { error ->
+                    Logs.e("Failed to snapshot proxy ${proxy.id}", error)
                 }.getOrNull()
             }
         }
+        val subNames = runCatching { SagerDatabase.groupDao.allGroups().associate { it.id to it.displayName() } }.getOrDefault(emptyMap())
         val ids = RouterMatcher.match(
             nodes,
             listOf(RouterMatchRequest(draft.id, sourceIds, draft.filter.validate())),
         )[draft.id].orEmpty()
-        val names = nodes.associateBy { it.id }.let { byId -> ids.mapNotNull { byId[it]?.name } }
+        val byId = nodes.associateBy { it.id }
+        val names = ids.mapNotNull { id ->
+            byId[id]?.let { node ->
+                val subName = node.subscriptionId?.let { subNames[it] }
+                if (!subName.isNullOrBlank()) "[${subName}] ${node.name.trim()}" else node.name.trim()
+            }
+        }
         return RouterGroupPreview(ids, names)
     }
 
@@ -168,7 +179,7 @@ object RouterGroupRepository {
         }
         val proxy = SagerDatabase.proxyDao.getById(proxyId)
             ?: throw IllegalArgumentException("Selected node does not exist")
-        val stableId = routerStableIdOrFallback(proxy.uuid, proxy.id)
+        val stableId = proxy.routerStableId()
         val updated = group.copy(
             selectedProxyId = proxyId,
             selectedNodeKey = routerNodeKey(proxy.groupId, stableId),

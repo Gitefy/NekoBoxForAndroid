@@ -2,13 +2,18 @@ package io.nekohasekai.sagernet.ui
 
 import android.content.Intent
 import android.os.Bundle
+import androidx.lifecycle.lifecycleScope
 import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceFragmentCompat
 import io.nekohasekai.sagernet.R
+import io.nekohasekai.sagernet.database.GroupManager
 import io.nekohasekai.sagernet.database.RouterGroup
 import io.nekohasekai.sagernet.database.RouterGroupRepository
 import io.nekohasekai.sagernet.database.SagerDatabase
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class RouterGroupListFragment : PreferenceFragmentCompat() {
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) = rebuild()
@@ -16,6 +21,14 @@ class RouterGroupListFragment : PreferenceFragmentCompat() {
     override fun onResume() {
         super.onResume()
         rebuild()
+        viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                GroupManager.reconcileRouterMembers(GroupManager.snapshotRouterMembers())
+            }
+            withContext(Dispatchers.Main) {
+                if (isAdded) rebuild()
+            }
+        }
     }
 
     private fun rebuild() {

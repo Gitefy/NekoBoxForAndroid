@@ -7,6 +7,7 @@ import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.widget.PopupMenu
 import androidx.appcompat.widget.Toolbar
@@ -37,7 +38,7 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group),
 
     lateinit var activity: MainActivity
     lateinit var groupListView: RecyclerView
-    lateinit var routerSection: LinearLayout
+    lateinit var routerSection: View
     lateinit var layoutManager: LinearLayoutManager
     lateinit var groupAdapter: GroupAdapter
     lateinit var undoManager: UndoSnackbarManager<ProxyGroup>
@@ -57,6 +58,7 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group),
         routerSection.setOnClickListener {
             startActivity(Intent(requireContext(), RouterGroupListActivity::class.java))
         }
+        updateRouterSection()
         layoutManager = FixedLinearLayoutManager(groupListView)
         groupListView.layoutManager = layoutManager
         groupAdapter = GroupAdapter()
@@ -547,6 +549,25 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group),
 
             }
 
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updateRouterSection()
+    }
+
+    private fun updateRouterSection() {
+        val routerSubtitle = view?.findViewById<TextView>(R.id.router_subtitle) ?: return
+        runOnDefaultDispatcher {
+            val count = runCatching { SagerDatabase.routerGroupDao.all().size }.getOrDefault(0)
+            onMainDispatcher {
+                if (count > 0) {
+                    routerSubtitle.text = getString(R.string.router_groups_card_summary_with_count, count)
+                } else {
+                    routerSubtitle.text = getString(R.string.router_groups_card_summary)
+                }
+            }
         }
     }
 

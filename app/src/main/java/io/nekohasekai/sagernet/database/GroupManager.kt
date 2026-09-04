@@ -172,12 +172,15 @@ object GroupManager {
                 RouterNodeSnapshot(
                     id = proxy.id,
                     stableId = proxy.routerStableId(),
-                    name = proxy.displayName(),
+                    name = proxy.displayNameOrFallback(),
                     subscriptionId = sourceGroups[proxy.groupId]
                         ?.takeIf { it.type == GroupType.SUBSCRIPTION }
                         ?.id,
-                    available = proxy.error == null
+                    enabled = true,
+                    available = true,
                 )
+            }.onFailure { error ->
+                Logs.e("Failed to snapshot proxy ${proxy.id}", error)
             }.getOrNull()
         }
 
@@ -286,13 +289,20 @@ object GroupManager {
 
 }
 
-private fun ProxyEntity.routerStableId(): String {
+internal fun ProxyEntity.routerStableId(): String {
     return routerStableIdOrFallback(
         uuid.takeIf { it.isNotBlank() }
             ?: runCatching { requireBean().routerStableIdentity() }.getOrNull(),
         id
     )
 }
+
+internal fun ProxyEntity.displayNameOrFallback(): String =
+    runCatching { displayName() }.getOrNull()
+        ?.takeIf { it.isNotBlank() }
+        ?: runCatching { displayAddress() }.getOrNull()?.takeIf { it.isNotBlank() }
+        ?: uuid.takeIf { it.isNotBlank() }
+        ?: "Proxy $id"
 
 internal fun AbstractBean.routerStableIdentity(): String {
     return clone().apply {

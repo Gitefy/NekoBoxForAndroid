@@ -361,6 +361,11 @@ class MainActivity : ThemedActivity(),
     }
 
     override fun onNavigationItemSelected(item: MenuItem): Boolean {
+        if (item.itemId == R.id.nav_router_group) {
+            binding.drawerLayout.closeDrawers()
+            startActivity(Intent(this, RouterGroupListActivity::class.java))
+            return false
+        }
         if (item.isChecked) binding.drawerLayout.closeDrawers() else {
             return displayFragmentWithId(item.itemId)
         }
