@@ -78,6 +78,11 @@
             app:title="@string/show_direct_speed"
             app:useSimpleSummaryProvider="true" />
         <SwitchPreference
+            app:defaultValue="true"
+            app:key="showProfileInNotification"
+            app:summary="@string/show_profile_in_notification_summary"
+            app:title="@string/show_profile_in_notification" />
+        <SwitchPreference
             app:key="showGroupInNotification"
             app:title="@string/show_group_in_notification" />
         <SwitchPreference

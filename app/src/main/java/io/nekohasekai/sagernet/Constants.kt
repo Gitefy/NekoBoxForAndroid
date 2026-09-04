@@ -47,6 +47,8 @@ object Key {
     const val ALLOW_ACCESS = "allowAccess"
     const val SPEED_INTERVAL = "speedInterval"
     const val SHOW_DIRECT_SPEED = "showDirectSpeed"
+    const val SHOW_PROFILE_IN_NOTIFICATION = "showProfileInNotification"
+    const val VIEW_MODE_ROUTER_GROUPS = "viewModeRouterGroups"
 
     const val APPEND_HTTP_PROXY = "appendHttpProxy"
     const val HTTP_PROXY_BYPASS = "httpProxyBypass"

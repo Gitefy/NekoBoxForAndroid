@@ -361,11 +361,6 @@ class MainActivity : ThemedActivity(),
     }
 
     override fun onNavigationItemSelected(item: MenuItem): Boolean {
-        if (item.itemId == R.id.nav_router_group) {
-            binding.drawerLayout.closeDrawers()
-            startActivity(Intent(this, RouterGroupListActivity::class.java))
-            return false
-        }
         if (item.isChecked) binding.drawerLayout.closeDrawers() else {
             return displayFragmentWithId(item.itemId)
         }
@@ -424,6 +419,13 @@ class MainActivity : ThemedActivity(),
 
     fun displayFragmentWithId(@IdRes id: Int): Boolean {
         when (id) {
+            R.id.nav_router_group -> {
+                // Open the router group manager as an Activity
+                binding.drawerLayout.closeDrawers()
+                startActivity(Intent(this, RouterGroupListActivity::class.java))
+                return true
+            }
+
             R.id.nav_configuration -> {
                 displayFragment(ConfigurationFragment())
             }
@@ -443,7 +445,7 @@ class MainActivity : ThemedActivity(),
 
             else -> return false
         }
-        navigation.menu.findItem(id).isChecked = true
+        navigation.menu.findItem(id)?.isChecked = true
         return true
     }
 
@@ -525,6 +527,11 @@ class MainActivity : ThemedActivity(),
                 showWhenConnected = DataStore.showBottomBar,
                 animate = true,
             )
+            Key.SHOW_PROFILE_IN_NOTIFICATION -> {
+                if (DataStore.serviceState.canStop) {
+                    SagerNet.reloadService()
+                }
+            }
             Key.PROXY_APPS, Key.BYPASS_MODE, Key.INDIVIDUAL -> {
                 if (DataStore.serviceState.canStop) {
                     snackbar(getString(R.string.need_reload)).setAction(R.string.apply) {

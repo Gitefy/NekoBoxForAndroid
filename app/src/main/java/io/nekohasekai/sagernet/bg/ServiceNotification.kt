@@ -46,10 +46,18 @@ class ServiceNotification(
         val flags =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
 
-        fun genTitle(ent: ProxyEntity): String {
-            val gn = if (DataStore.showGroupInNotification)
-                SagerDatabase.groupDao.getById(ent.groupId)?.displayName() else null
-            return if (gn == null) ent.displayName() else "[$gn] ${ent.displayName()}"
+        fun genTitle(
+            ent: ProxyEntity?,
+            showProfileInNotification: Boolean = DataStore.showProfileInNotification,
+            showGroupInNotification: Boolean = DataStore.showGroupInNotification,
+            groupNameProvider: (Long) -> String? = { SagerDatabase.groupDao.getById(it)?.displayName() },
+            fallbackAppName: String = SagerNet.application.getString(R.string.app_name),
+        ): String {
+            if (ent == null || !showProfileInNotification) {
+                return fallbackAppName
+            }
+            val gn = if (showGroupInNotification) groupNameProvider(ent.groupId) else null
+            return if (gn.isNullOrBlank()) ent.displayName() else "[$gn] ${ent.displayName()}"
         }
     }
 

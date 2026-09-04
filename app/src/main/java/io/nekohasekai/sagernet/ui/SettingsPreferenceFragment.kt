@@ -238,6 +238,7 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
         }
 
         enableTLSFragment.onPreferenceChangeListener = reloadListener
+        findPreference<SwitchPreference>(Key.SHOW_PROFILE_IN_NOTIFICATION)?.onPreferenceChangeListener = reloadListener
 
         // 恢复默认设置功能
         val resetSettings = findPreference<Preference>("resetSettings")!!

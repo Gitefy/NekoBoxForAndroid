@@ -139,6 +139,8 @@ import java.util.zip.ZipInputStream
 import kotlin.collections.set
 import androidx.appcompat.app.AlertDialog
 import io.nekohasekai.sagernet.database.SubscriptionBean
+import io.nekohasekai.sagernet.database.RouterGroup
+import io.nekohasekai.sagernet.database.RouterGroupRepository
 import kotlin.math.abs
 
 class ConfigurationFragment @JvmOverloads constructor(
@@ -260,6 +262,38 @@ class ConfigurationFragment @JvmOverloads constructor(
 
     private fun isSelectedProfile(profileId: Long) = selectedProxySnapshot == profileId
 
+    /**
+     * In router-group view mode each tab has its own selected proxy. We cache routerId->selectedProxyId
+     * so that [ConfigurationHolder.bindProfileState] can determine selection without a DB call.
+     */
+    @Volatile
+    private var routerGroupSelectionSnapshot: Map<Long, Long> = emptyMap()
+
+    /** Returns true when [profileId] is the selected node inside [routerGroupId]. */
+    fun isSelectedProfileInRouterGroup(routerGroupId: Long, profileId: Long): Boolean {
+        return routerGroupSelectionSnapshot[routerGroupId] == profileId
+    }
+
+    /** Called from [selectProfileInRouterGroup] to refresh the snapshot after a selection change. */
+    private fun updateRouterGroupSelectionSnapshot(routerGroupId: Long, proxyId: Long) {
+        routerGroupSelectionSnapshot = routerGroupSelectionSnapshot + (routerGroupId to proxyId)
+    }
+
+    /** Refreshes the router-group selection snapshot from the DB on the background. */
+    fun refreshRouterGroupSelections() {
+        runOnDefaultDispatcher {
+            val groups = RouterGroupRepository.all()
+            val snapshot = groups.associate { it.id to it.selectedProxyId }
+            onMainDispatcher {
+                routerGroupSelectionSnapshot = snapshot
+                // Trigger a UI refresh for all visible router-group pages
+                adapter.groupFragments.values.forEach { frag ->
+                    frag.adapter?.notifyDataSetChanged()
+                }
+            }
+        }
+    }
+
     private fun isCurrentProfile(profileId: Long) = currentProfileSnapshot == profileId
 
     private fun isCurrentGroupPagerAdapter(candidate: GroupPagerAdapter): Boolean {
@@ -330,6 +364,13 @@ class ConfigurationFragment @JvmOverloads constructor(
         if (!select) {
             toolbar.inflateMenu(R.menu.add_profile_menu)
             toolbar.menu.findItem(R.id.action_global_mode)?.isChecked = DataStore.globalMode
+            // Set initial title to '代理' (Proxy)
+            toolbar.setTitle(R.string.route_proxy)
+            // Set initial label for the view-switch menu item
+            toolbar.menu.findItem(R.id.action_switch_group_view)?.setTitle(
+                if (DataStore.viewModeRouterGroups) R.string.switch_to_subscription_view
+                else R.string.switch_to_router_group_view
+            )
             toolbar.setOnMenuItemClickListener(this)
         } else {
             toolbar.setTitle(titleRes)
@@ -361,8 +402,15 @@ class ConfigurationFragment @JvmOverloads constructor(
         groupPager.offscreenPageLimit = 2
 
         TabLayoutMediator(tabLayout, groupPager) { tab, position ->
-            if (adapter.groupList.size > position) {
-                tab.text = adapter.groupList[position].displayName()
+            val rgMode = adapter.inRouterGroupMode
+            if (rgMode) {
+                if (adapter.routerGroupList.size > position) {
+                    tab.text = adapter.routerGroupList[position].name
+                }
+            } else {
+                if (adapter.groupList.size > position) {
+                    tab.text = adapter.groupList[position].displayName()
+                }
             }
             tab.view.setOnLongClickListener { // clear toast
                 true
@@ -863,6 +911,32 @@ class ConfigurationFragment @JvmOverloads constructor(
                 urlTest()
             }
 
+            R.id.action_switch_group_view -> {
+                // Toggle between router-groups view and subscription groups view
+                val hasRouterGroups = runCatching {
+                    io.nekohasekai.sagernet.database.RouterGroupRepository.all().isNotEmpty()
+                }.getOrDefault(false)
+                if (!hasRouterGroups) {
+                    snackbar(getString(R.string.router_empty_title)).show()
+                } else {
+                    DataStore.viewModeRouterGroups = !DataStore.viewModeRouterGroups
+                    // Update the menu item title to reflect the new state
+                    val newTitle = if (DataStore.viewModeRouterGroups) {
+                        R.string.switch_to_subscription_view
+                    } else {
+                        R.string.switch_to_router_group_view
+                    }
+                    toolbar.menu.findItem(R.id.action_switch_group_view)?.setTitle(newTitle)
+                    adapter.reload(now = true)
+                }
+                return true
+            }
+
+            R.id.action_manage_router_groups -> {
+                startActivity(android.content.Intent(requireContext(), RouterGroupListActivity::class.java))
+                return true
+            }
+
             R.id.action_global_mode -> {
                 item.isChecked = !item.isChecked
                 DataStore.globalMode = item.isChecked
@@ -1211,6 +1285,13 @@ class ConfigurationFragment @JvmOverloads constructor(
 
         var selectedGroupIndex = 0
         var groupList: ArrayList<ProxyGroup> = ArrayList()
+
+        /** Router groups shown when [inRouterGroupMode] is true. */
+        var routerGroupList: ArrayList<RouterGroup> = ArrayList()
+
+        /** True when the user has switched to the router-group view. */
+        var inRouterGroupMode: Boolean = false
+
         var groupFragments: HashMap<Long, GroupFragment> = HashMap()
         private val reloadGeneration = AtomicLong()
 
@@ -1222,58 +1303,107 @@ class ConfigurationFragment @JvmOverloads constructor(
             }
 
             runOnDefaultDispatcher {
-                var newGroupList = ArrayList(SagerDatabase.groupDao.allGroups())
-                if (newGroupList.isEmpty()) {
-                    SagerDatabase.groupDao.createGroup(ProxyGroup(ungrouped = true))
-                    newGroupList = ArrayList(SagerDatabase.groupDao.allGroups())
-                }
-                newGroupList.find { it.ungrouped }?.let {
-                    if (SagerDatabase.proxyDao.countByGroup(it.id) == 0L) {
-                        newGroupList.remove(it)
-                    }
-                }
+                // Determine view mode
+                val wantRouterMode = !select && DataStore.viewModeRouterGroups &&
+                        RouterGroupRepository.all().isNotEmpty()
 
-                if (generation != reloadGeneration.get()) return@runOnDefaultDispatcher
+                if (wantRouterMode) {
+                    // ----- Router-group mode -----
+                    val newRouterList = ArrayList(RouterGroupRepository.all())
 
-                var selectedGroup = selectedItem?.groupId ?: DataStore.currentGroupId()
-                var newSelectedGroupIndex: Int? = null
-                if (selectedGroup > 0L) {
-                    newSelectedGroupIndex = newGroupList.indexOfFirst { it.id == selectedGroup }
-                } else if (groupList.size == 1) {
-                    selectedGroup = groupList[0].id
-                    if (DataStore.selectedGroup != selectedGroup) {
-                        DataStore.selectedGroup = selectedGroup
-                    }
-                }
+                    if (generation != reloadGeneration.get()) return@runOnDefaultDispatcher
 
-                val runFunc = if (now) activity?.let { it::runOnUiThread } else groupPager::post
-                if (runFunc != null) {
-                    val reloadAdapter = this@GroupPagerAdapter
-                    runFunc {
-                        val viewOwner = viewLifecycleOwnerLiveData.value
-                        if (generation == reloadGeneration.get() && viewOwner != null &&
-                            isCurrentGroupPagerAdapter(reloadAdapter)
-                        ) {
-                            viewOwner.lifecycleScope.launch(Dispatchers.Main.immediate) {
-                                profileStateInitialized.await()
-                                if (generation != reloadGeneration.get() ||
-                                    viewLifecycleOwnerLiveData.value !== viewOwner ||
-                                    !isCurrentGroupPagerAdapter(reloadAdapter)
-                                ) {
-                                    return@launch
+                    // Refresh selection snapshot for all router groups
+                    val selectionSnapshot = newRouterList.associate { it.id to it.selectedProxyId }
+
+                    val runFunc = if (now) activity?.let { it::runOnUiThread } else groupPager::post
+                    if (runFunc != null) {
+                        val reloadAdapter = this@GroupPagerAdapter
+                        runFunc {
+                            val viewOwner = viewLifecycleOwnerLiveData.value
+                            if (generation == reloadGeneration.get() && viewOwner != null &&
+                                isCurrentGroupPagerAdapter(reloadAdapter)
+                            ) {
+                                viewOwner.lifecycleScope.launch(Dispatchers.Main.immediate) {
+                                    profileStateInitialized.await()
+                                    if (generation != reloadGeneration.get() ||
+                                        viewLifecycleOwnerLiveData.value !== viewOwner ||
+                                        !isCurrentGroupPagerAdapter(reloadAdapter)
+                                    ) {
+                                        return@launch
+                                    }
+                                    routerGroupSelectionSnapshot = selectionSnapshot
+                                    inRouterGroupMode = true
+                                    routerGroupList = newRouterList
+                                    groupFragments.clear()
+                                    notifyDataSetChanged()
+                                    groupPager.setCurrentItem(0, false)
+                                    val hideTab = routerGroupList.size < 2
+                                    tabLayout.isGone = hideTab
+                                    toolbar.elevation = if (hideTab) 0F else dp2px(4).toFloat()
+                                    // Refresh tab labels
+                                    tabLayout.invalidate()
                                 }
-                                refreshProfileState()
-                                newSelectedGroupIndex?.let { selectedGroupIndex = it }
-                                groupList = newGroupList
-                                notifyDataSetChanged()
-                                if (newSelectedGroupIndex != null) {
-                                    groupPager.setCurrentItem(selectedGroupIndex, false)
-                                }
-                                val hideTab = groupList.size < 2
-                                tabLayout.isGone = hideTab
-                                toolbar.elevation = if (hideTab) 0F else dp2px(4).toFloat()
-                                if (!select) {
-                                    groupPager.registerOnPageChangeCallback(updateSelectedCallback)
+                            }
+                        }
+                    }
+                } else {
+                    // ----- Normal proxy-group mode -----
+                    var newGroupList = ArrayList(SagerDatabase.groupDao.allGroups())
+                    if (newGroupList.isEmpty()) {
+                        SagerDatabase.groupDao.createGroup(ProxyGroup(ungrouped = true))
+                        newGroupList = ArrayList(SagerDatabase.groupDao.allGroups())
+                    }
+                    newGroupList.find { it.ungrouped }?.let {
+                        if (SagerDatabase.proxyDao.countByGroup(it.id) == 0L) {
+                            newGroupList.remove(it)
+                        }
+                    }
+
+                    if (generation != reloadGeneration.get()) return@runOnDefaultDispatcher
+
+                    var selectedGroup = selectedItem?.groupId ?: DataStore.currentGroupId()
+                    var newSelectedGroupIndex: Int? = null
+                    if (selectedGroup > 0L) {
+                        newSelectedGroupIndex = newGroupList.indexOfFirst { it.id == selectedGroup }
+                    } else if (groupList.size == 1) {
+                        selectedGroup = groupList[0].id
+                        if (DataStore.selectedGroup != selectedGroup) {
+                            DataStore.selectedGroup = selectedGroup
+                        }
+                    }
+
+                    val runFunc = if (now) activity?.let { it::runOnUiThread } else groupPager::post
+                    if (runFunc != null) {
+                        val reloadAdapter = this@GroupPagerAdapter
+                        runFunc {
+                            val viewOwner = viewLifecycleOwnerLiveData.value
+                            if (generation == reloadGeneration.get() && viewOwner != null &&
+                                isCurrentGroupPagerAdapter(reloadAdapter)
+                            ) {
+                                viewOwner.lifecycleScope.launch(Dispatchers.Main.immediate) {
+                                    profileStateInitialized.await()
+                                    if (generation != reloadGeneration.get() ||
+                                        viewLifecycleOwnerLiveData.value !== viewOwner ||
+                                        !isCurrentGroupPagerAdapter(reloadAdapter)
+                                    ) {
+                                        return@launch
+                                    }
+                                    refreshProfileState()
+                                    inRouterGroupMode = false
+                                    newSelectedGroupIndex?.let { selectedGroupIndex = it }
+                                    groupList = newGroupList
+                                    groupFragments.clear()
+                                    notifyDataSetChanged()
+                                    if (newSelectedGroupIndex != null) {
+                                        groupPager.setCurrentItem(selectedGroupIndex, false)
+                                    }
+                                    val hideTab = groupList.size < 2
+                                    tabLayout.isGone = hideTab
+                                    toolbar.elevation = if (hideTab) 0F else dp2px(4).toFloat()
+                                    if (!select) {
+                                        groupPager.registerOnPageChangeCallback(updateSelectedCallback)
+                                    }
                                 }
                             }
                         }
@@ -1287,28 +1417,48 @@ class ConfigurationFragment @JvmOverloads constructor(
         }
 
         override fun getItemCount(): Int {
-            return groupList.size
+            return if (inRouterGroupMode) routerGroupList.size else groupList.size
         }
 
         override fun createFragment(position: Int): Fragment {
-            return GroupFragment().apply {
-                proxyGroup = groupList[position]
-                groupFragments[proxyGroup.id] = this
-                if (position == selectedGroupIndex) {
-                    selected = true
+            return if (inRouterGroupMode) {
+                GroupFragment().apply {
+                    proxyGroup = ProxyGroup(ungrouped = true) // placeholder – not actually used in router mode
+                    routerGroup = routerGroupList[position]
+                    val key = -(routerGroupList[position].id) // negative to avoid collision with ProxyGroup ids
+                    groupFragments[key] = this
+                    selected = position == selectedGroupIndex
+                }
+            } else {
+                GroupFragment().apply {
+                    proxyGroup = groupList[position]
+                    groupFragments[proxyGroup.id] = this
+                    if (position == selectedGroupIndex) {
+                        selected = true
+                    }
                 }
             }
         }
 
         override fun getItemId(position: Int): Long {
-            return groupList[position].id
+            return if (inRouterGroupMode) {
+                // Use negative IDs for router groups to avoid collision with proxy group IDs
+                -(routerGroupList[position].id)
+            } else {
+                groupList[position].id
+            }
         }
 
         override fun containsItem(itemId: Long): Boolean {
-            return groupList.any { it.id == itemId }
+            return if (inRouterGroupMode) {
+                routerGroupList.any { -(it.id) == itemId }
+            } else {
+                groupList.any { it.id == itemId }
+            }
         }
 
         override suspend fun groupAdd(group: ProxyGroup) {
+            if (inRouterGroupMode) return
             tabLayout.post {
                 groupList.add(group)
 
@@ -1322,6 +1472,7 @@ class ConfigurationFragment @JvmOverloads constructor(
         }
 
         override suspend fun groupRemoved(groupId: Long) {
+            if (inRouterGroupMode) return
             val index = groupList.indexOfFirst { it.id == groupId }
             if (index == -1) return
 
@@ -1332,6 +1483,7 @@ class ConfigurationFragment @JvmOverloads constructor(
         }
 
         override suspend fun groupUpdated(group: ProxyGroup) {
+            if (inRouterGroupMode) return
             val index = groupList.indexOfFirst { it.id == group.id }
             if (index == -1) return
 
@@ -1343,6 +1495,7 @@ class ConfigurationFragment @JvmOverloads constructor(
         override suspend fun groupUpdated(groupId: Long) = Unit
 
         override suspend fun onAdd(profile: ProxyEntity) {
+            if (inRouterGroupMode) return
             if (groupList.find { it.id == profile.groupId } == null) {
                 DataStore.selectedGroup = profile.groupId
                 reload()
@@ -1354,6 +1507,7 @@ class ConfigurationFragment @JvmOverloads constructor(
         override suspend fun onUpdated(profile: ProxyEntity, noTraffic: Boolean) = Unit
 
         override suspend fun onRemoved(groupId: Long, profileId: Long) {
+            if (inRouterGroupMode) return
             val group = groupList.find { it.id == groupId } ?: return
             if (group.ungrouped && SagerDatabase.proxyDao.countByGroup(groupId) == 0L) {
                 reload()
@@ -1364,6 +1518,12 @@ class ConfigurationFragment @JvmOverloads constructor(
     class GroupFragment : Fragment() {
 
         lateinit var proxyGroup: ProxyGroup
+
+        /** Non-null when this fragment represents a tab in router-group view mode. */
+        var routerGroup: RouterGroup? = null
+
+        val inRouterGroupMode get() = routerGroup != null
+
         var selected = false
 
         override fun onCreateView(
@@ -1509,6 +1669,8 @@ class ConfigurationFragment @JvmOverloads constructor(
 
         fun checkOrderMenu() {
             if (select) return
+            // Sort/order menu doesn't apply in router-group mode
+            if (inRouterGroupMode) return
 
             val pf = requireParentFragment() as? ToolbarFragment ?: return
             val menu = pf.toolbar.menu
@@ -2107,17 +2269,28 @@ class ConfigurationFragment @JvmOverloads constructor(
             }
 
             fun reloadProfiles() {
-                var newProfiles = SagerDatabase.proxyDao.getByGroup(proxyGroup.id)
-                when (proxyGroup.order) {
-                    GroupOrder.BY_NAME -> {
-                        newProfiles = newProfiles.sortedBy { it.displayName() }
-
+                val rg = routerGroup
+                val newProfiles: List<ProxyEntity>
+                if (rg != null) {
+                    // Router-group mode: load members from the router group
+                    val memberIds = SagerDatabase.routerMemberDao.getByRouter(rg.id)
+                        .sortedBy { it.userOrder }
+                        .map { it.proxyId }
+                    newProfiles = memberIds.mapNotNull { id ->
+                        SagerDatabase.proxyDao.getById(id)
                     }
-
-                    GroupOrder.BY_DELAY -> {
-                        newProfiles =
-                            newProfiles.sortedBy { if (it.status == 1) it.ping else 114514 }
+                } else {
+                    // Normal proxy-group mode
+                    var list = SagerDatabase.proxyDao.getByGroup(proxyGroup.id)
+                    when (proxyGroup.order) {
+                        GroupOrder.BY_NAME -> {
+                            list = list.sortedBy { it.displayName() }
+                        }
+                        GroupOrder.BY_DELAY -> {
+                            list = list.sortedBy { if (it.status == 1) it.ping else 114514 }
+                        }
                     }
+                    newProfiles = list
                 }
 
                 val newProfileMap = newProfiles.associateBy { it.id }
@@ -2125,7 +2298,10 @@ class ConfigurationFragment @JvmOverloads constructor(
 
                 var selectedProfileIndex = -1
 
-                if (selected) {
+                if (rg != null) {
+                    // In router-group mode, scroll to the currently selected node
+                    selectedProfileIndex = newProfileIds.indexOf(rg.selectedProxyId)
+                } else if (selected) {
                     val selectedProxy = selectedItem?.id ?: DataStore.selectedProxy
                     selectedProfileIndex = newProfileIds.indexOf(selectedProxy)
                 }
@@ -2240,36 +2416,65 @@ class ConfigurationFragment @JvmOverloads constructor(
 
             private fun selectProfile(proxyEntity: ProxyEntity) {
                 val pf = parentFragment as? ConfigurationFragment ?: return
-                runOnDefaultDispatcher {
-                    var update: Boolean
-                    var lastSelected: Long
-                    profileAccess.withLock {
-                        update = DataStore.selectedProxy != proxyEntity.id
-                        lastSelected = DataStore.selectedProxy
-                        DataStore.selectedProxy = proxyEntity.id
-                        onMainDispatcher {
-                            pf.updateSelectedProxySnapshot(proxyEntity.id)
+                val rg = routerGroup
+                if (rg != null) {
+                    // --- Router-group mode: select the node inside this router group ---
+                    if (rg.mode != RouterGroup.MODE_SELECTOR) {
+                        // URL_TEST groups auto-select; don't allow manual selection
+                        return
+                    }
+                    runOnDefaultDispatcher {
+                        try {
+                            val updated = RouterGroupRepository.select(rg.id, proxyEntity.id)
+                            // Update in-memory routerGroup reference
+                            routerGroup = updated
+                            onMainDispatcher {
+                                pf.updateRouterGroupSelectionSnapshot(rg.id, proxyEntity.id)
+                                adapter?.notifyDataSetChanged()
+                            }
+                            if (DataStore.serviceState.canStop) {
+                                SagerNet.reloadService(routerTag = updated.stableTag, routerProxyId = proxyEntity.id)
+                            }
+                        } catch (e: Exception) {
+                            Logs.w(e)
+                            onMainDispatcher {
+                                snackbar(e.readableMessage).show()
+                            }
                         }
                     }
-
-                    if (update) {
-                        ProfileManager.postUpdate(lastSelected, noTraffic = true)
-                        if (DataStore.serviceState.canStop && reloadAccess.tryLock()) {
-                            SagerNet.reloadService()
-                            reloadAccess.unlock()
+                } else {
+                    // --- Normal proxy-group mode ---
+                    runOnDefaultDispatcher {
+                        var update: Boolean
+                        var lastSelected: Long
+                        profileAccess.withLock {
+                            update = DataStore.selectedProxy != proxyEntity.id
+                            lastSelected = DataStore.selectedProxy
+                            DataStore.selectedProxy = proxyEntity.id
+                            onMainDispatcher {
+                                pf.updateSelectedProxySnapshot(proxyEntity.id)
+                            }
                         }
-                    } else if (SagerNet.isTv) {
-                        if (DataStore.serviceState.started) {
-                            SagerNet.stopService()
-                        } else {
-                            SagerNet.startService()
+
+                        if (update) {
+                            ProfileManager.postUpdate(lastSelected, noTraffic = true)
+                            if (DataStore.serviceState.canStop && reloadAccess.tryLock()) {
+                                SagerNet.reloadService()
+                                reloadAccess.unlock()
+                            }
+                        } else if (SagerNet.isTv) {
+                            if (DataStore.serviceState.started) {
+                                SagerNet.stopService()
+                            } else {
+                                SagerNet.startService()
+                            }
                         }
                     }
                 }
             }
 
             private fun removeProfile(proxyEntity: ProxyEntity) {
-                if (select) return
+                if (select || inRouterGroupMode) return
                 val currentAdapter = adapter ?: return
                 val index = currentAdapter.configurationIdList.indexOf(proxyEntity.id)
                 if (index < 0) return
@@ -2422,16 +2627,17 @@ class ConfigurationFragment @JvmOverloads constructor(
 
                 val selectOrChain = select || proxyEntity.type == ProxyEntity.TYPE_CHAIN
                 val isDoubleColumn = layoutManager is FixedGridLayoutManager
-                
+                val isRgMode = inRouterGroupMode
+
                 if (isDoubleColumn) {
                     editButton.isGone = true
                     shareLayout.isGone = true
                     removeButton.isGone = true
-                    doubleColumnMenuButton.isVisible = true
+                    doubleColumnMenuButton.isVisible = !isRgMode
                 } else {
-                    shareLayout.isGone = selectOrChain
-                    editButton.isGone = select
-                    removeButton.isGone = select
+                    shareLayout.isGone = selectOrChain || isRgMode
+                    editButton.isGone = select || isRgMode
+                    removeButton.isGone = select || isRgMode
                     doubleColumnMenuButton.isGone = true
                 }
 
@@ -2441,14 +2647,19 @@ class ConfigurationFragment @JvmOverloads constructor(
                     }
                 }
 
-                val selected = pf.isSelectedProfile(proxyEntity.id)
+                val rg = routerGroup
+                val selected = if (rg != null) {
+                    pf.isSelectedProfileInRouterGroup(rg.id, proxyEntity.id)
+                } else {
+                    pf.isSelectedProfile(proxyEntity.id)
+                }
                 val started =
                     selected && DataStore.serviceState.started && pf.isCurrentProfile(proxyEntity.id)
                 editButton.isEnabled = !started
                 removeButton.isEnabled = !started
                 applySelected(selected)
 
-                if (!(select || proxyEntity.type == ProxyEntity.TYPE_CHAIN)) {
+                if (!(select || proxyEntity.type == ProxyEntity.TYPE_CHAIN || isRgMode)) {
                     shareLayer.setBackgroundColor(Color.TRANSPARENT)
                     shareButton.setImageResource(R.drawable.ic_social_share)
                     shareButton.setColorFilter(Color.GRAY)
@@ -2466,7 +2677,12 @@ class ConfigurationFragment @JvmOverloads constructor(
                     return
                 }
                 val pf = parentFragment as? ConfigurationFragment ?: return
-                val selected = pf.isSelectedProfile(proxyEntity.id)
+                val rg = routerGroup
+                val selected = if (rg != null) {
+                    pf.isSelectedProfileInRouterGroup(rg.id, proxyEntity.id)
+                } else {
+                    pf.isSelectedProfile(proxyEntity.id)
+                }
                 val started = selected && DataStore.serviceState.started &&
                         pf.isCurrentProfile(proxyEntity.id)
                 editButton.isEnabled = !started

@@ -49,7 +49,8 @@
     <string name="router_groups_title">Router groups</string>
     <string name="router_mode_manual">Manual</string>
     <string name="router_mode_automatic">Automatic</string>
-    <string name="router_status">%s | %d nodes</string>
+    <string name="router_status">%1$s | %2$d nodes</string>
+    <string name="refresh">Refresh</string>
     <string name="router_current_node">Current: %s</string>
     <string name="router_no_selection">No current node</string>
     <string name="router_select_node">Select node</string>
@@ -84,6 +85,14 @@
     <string name="router_groups_card_summary_with_count">%d groups configured • URL-Test &amp; Manual</string>
     <string name="router_groups_nav_title">Proxy groups</string>
     <string name="router_no_sources_selected">No subscriptions selected</string>
+    <string name="router_switch_node">Switch node</string>
+    <string name="router_edit_group">Edit group</string>
+    <string name="router_empty_title">No proxy groups</string>
+    <string name="router_empty_summary">Tap + above to create a proxy group, enabling automatic latency testing and policy-based routing.</string>
+    <string name="switch_to_subscription_view">Switch to subscription view</string>
+    <string name="switch_to_router_group_view">Switch to proxy groups view</string>
+    <string name="router_mode_automatic_hint">Automatic URL-test group selects the best node automatically</string>
+    <string name="manage_router_groups">Manage proxy groups</string>
     <string name="group_no_difference">%s: No difference</string>
     <string name="group_updated">%s: Updated %d proxies</string>
     <string name="group_show_diff">Diff</string>
@@ -628,6 +637,8 @@
     <string name="action_shadowtls" translatable="false">ShadowTLS</string>
     <string name="protocol_version">Protocol Version</string>
     <string name="share_subscription">Share Subscription</string>
+    <string name="show_profile_in_notification">Show profile name in notification</string>
+    <string name="show_profile_in_notification_summary">When disabled, the notification only displays the app name, hiding specific node details</string>
     <string name="show_group_in_notification">Show group name in notification</string>
     <string name="reset_connections">Reset Connections</string>
     <string name="remove_duplicate">Remove duplicate servers</string>

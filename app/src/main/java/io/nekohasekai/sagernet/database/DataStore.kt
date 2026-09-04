@@ -118,6 +118,8 @@ object DataStore : OnPreferenceDataStoreChangeListener {
 
     var allowAccess by configurationStore.boolean(Key.ALLOW_ACCESS)
     var speedInterval by configurationStore.stringToInt(Key.SPEED_INTERVAL)
+    var showProfileInNotification by configurationStore.boolean(Key.SHOW_PROFILE_IN_NOTIFICATION) { true }
+    var viewModeRouterGroups by configurationStore.boolean(Key.VIEW_MODE_ROUTER_GROUPS) { true }
     var showGroupInNotification by configurationStore.boolean("showGroupInNotification")
 
     var globalCustomConfig by configurationStore.string(Key.GLOBAL_CUSTOM_CONFIG) { "" }

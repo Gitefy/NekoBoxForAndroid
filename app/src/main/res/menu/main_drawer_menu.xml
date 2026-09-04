@@ -4,8 +4,8 @@
     <group android:checkableBehavior="single">
         <item
             android:id="@+id/nav_configuration"
-            android:icon="@drawable/ic_action_description"
-            android:title="@string/menu_configuration" />
+            android:icon="@drawable/ic_hardware_router"
+            android:title="@string/route_proxy" />
 
         <item
             android:id="@+id/nav_group"
@@ -14,8 +14,8 @@
 
         <item
             android:id="@+id/nav_router_group"
-            android:icon="@drawable/ic_hardware_router"
-            android:title="@string/router_groups_nav_title" />
+            android:icon="@drawable/ic_action_description"
+            android:title="@string/router_groups_title" />
 
         <item
             android:id="@+id/nav_route"

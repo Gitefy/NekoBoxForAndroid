@@ -6,6 +6,7 @@ import androidx.annotation.RequiresApi
 import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.aidl.ISagerNetService
+import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.SagerDatabase
 import android.service.quicksettings.TileService as BaseTileService
 
@@ -32,7 +33,8 @@ class TileService : BaseTileService(), SagerConnection.Callback {
 
     override fun cbSelectorUpdate(id: Long) {
         val profile = SagerDatabase.proxyDao.getById(id) ?: return
-        updateTile(BaseService.State.Connected, profile.displayName())
+        val title = if (DataStore.showProfileInNotification) profile.displayName() else getString(R.string.app_name)
+        updateTile(BaseService.State.Connected, title)
     }
 
     override fun onStartListening() {
@@ -61,7 +63,7 @@ class TileService : BaseTileService(), SagerConnection.Callback {
 
                 BaseService.State.Connected -> {
                     icon = iconConnected
-                    label = profileName
+                    label = if (DataStore.showProfileInNotification) profileName else getString(R.string.app_name)
                     state = Tile.STATE_ACTIVE
                 }
 
