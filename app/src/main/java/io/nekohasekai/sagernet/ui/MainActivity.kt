@@ -431,13 +431,6 @@ class MainActivity : ThemedActivity(),
 
     fun displayFragmentWithId(@IdRes id: Int): Boolean {
         when (id) {
-            R.id.nav_router_group -> {
-                // Open the router group manager as an Activity
-                binding.drawerLayout.closeDrawers()
-                startActivity(Intent(this, RouterGroupListActivity::class.java))
-                return true
-            }
-
             R.id.nav_configuration -> {
                 displayFragment(ConfigurationFragment())
             }

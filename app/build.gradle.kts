@@ -104,7 +104,7 @@ dependencies {
 }
 
 val buildHevTun by tasks.registering {
-    val hevAbis = listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+    val hevAbis = listOf("arm64-v8a")
     val bashExecutable = System.getenv("BASH_EXE")
         ?.takeIf { file(it).isFile }
         ?: listOf(
@@ -132,10 +132,7 @@ val verifyLibcore by tasks.registering {
         }
         val requiredEntries = listOf(
             "classes.jar",
-            "jni/armeabi-v7a/libgojni.so",
-            "jni/arm64-v8a/libgojni.so",
-            "jni/x86/libgojni.so",
-            "jni/x86_64/libgojni.so"
+            "jni/arm64-v8a/libgojni.so"
         )
         ZipFile(libcoreAar).use { archive ->
             val missingEntries = requiredEntries.filter { archive.getEntry(it) == null }

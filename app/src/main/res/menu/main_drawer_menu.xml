@@ -13,11 +13,6 @@
             android:title="@string/menu_group" />
 
         <item
-            android:id="@+id/nav_router_group"
-            android:icon="@drawable/ic_action_description"
-            android:title="@string/router_groups_title" />
-
-        <item
             android:id="@+id/nav_route"
             android:icon="@drawable/ic_maps_directions"
             android:title="@string/menu_route" />
