@@ -308,6 +308,7 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
                 val keys = HashSet<String>(list.size)
                 for (kv in list) {
                     require(keys.add(kv.key)) { "Duplicate setting key in backup: ${kv.key}" }
+                    kv.validate()
                 }
                 list
             } else null
@@ -336,6 +337,13 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
                 val routerMembersList = BackupSerializer.getParcelableArray(content, "routerMembers", RouterMember.CREATOR)
                 val routerSourcesList = BackupSerializer.getParcelableArray(content, "routerSources", RouterGroupSource.CREATOR)
 
+                require(groupsList.all { it.id > 0L && !it.name.isNullOrBlank() }) {
+                    "Backup contains invalid or blank proxy groups"
+                }
+                require(routerGroupsList.all { it.id > 0L && it.stableTag.isNotBlank() }) {
+                    "Backup contains invalid or blank router groups"
+                }
+
                 profilesList.forEach { it.requireBean() }
                 val groupIds = groupsList.mapTo(hashSetOf()) { it.id }
                 require(profilesList.all { it.groupId in groupIds }) {
@@ -350,6 +358,54 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
                 }
                 require(routerSourcesList.all { it.routerId in routerIds && it.sourceGroupId in groupIds }) {
                     "Backup contains router sources referencing missing routers or groups"
+                }
+
+                // R05: Validate frontProxy and landingProxy on groups
+                for (group in groupsList) {
+                    if (group.frontProxy > 0L) {
+                        require(group.frontProxy in proxyIds) {
+                            "Group ${group.id} references missing frontProxy ${group.frontProxy}"
+                        }
+                    }
+                    if (group.landingProxy > 0L) {
+                        require(group.landingProxy in proxyIds) {
+                            "Group ${group.id} references missing landingProxy ${group.landingProxy}"
+                        }
+                    }
+                }
+
+                // R05: Validate ChainBean references and cycles
+                val chainEdges = HashMap<Long, List<Long>>()
+                for (proxy in profilesList) {
+                    val bean = proxy.requireBean()
+                    if (bean is io.nekohasekai.sagernet.fmt.internal.ChainBean) {
+                        require(bean.proxies.isNotEmpty()) {
+                            "Chain proxy ${proxy.id} has empty proxy list"
+                        }
+                        for (targetId in bean.proxies) {
+                            require(targetId in proxyIds) {
+                                "Chain proxy ${proxy.id} references missing proxy $targetId"
+                            }
+                        }
+                        chainEdges[proxy.id] = bean.proxies
+                    }
+                }
+                val visitedChainNodes = HashSet<Long>()
+                val callChainStack = HashSet<Long>()
+                fun checkChainCycle(node: Long) {
+                    if (node in callChainStack) {
+                        throw IllegalArgumentException("Cyclic chain reference detected involving proxy $node")
+                    }
+                    if (node in visitedChainNodes) return
+                    visitedChainNodes.add(node)
+                    callChainStack.add(node)
+                    for (target in chainEdges[node].orEmpty()) {
+                        checkChainCycle(target)
+                    }
+                    callChainStack.remove(node)
+                }
+                for (node in chainEdges.keys) {
+                    checkChainCycle(node)
                 }
 
                 DecodedProfiles(
@@ -369,6 +425,7 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
                     "Backup rules are missing or invalid"
                 }
                 val routerReferences = BackupSerializer.getRouterRuleReferences(content)
+                val routerRuleRefList = BackupSerializer.getRouterRuleReferenceList(content).associateBy { it.ruleId }
                 val rulesList = BackupSerializer.getParcelableArray(content, "rules") {
                     ParcelizeBridge.createRule(it)
                 }.map { imported ->
@@ -376,28 +433,90 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
                     imported.copy(routerGroupId = routerGroupId)
                 }
 
-                val targetRouterIds = if (decodedProfileData != null) {
-                    decodedProfileData.validRouterIds
+                if (decodedProfileData != null) {
+                    BackupSerializer.validateRuleReferences(rulesList, decodedProfileData.validRouterIds, decodedProfileData.validProxyIds)
+                    val backupRouterTags = decodedProfileData.routerGroups.associate { it.id to it.stableTag }
+                    for (ruleItem in rulesList) {
+                        if (ruleItem.routerGroupId > 0L) {
+                            val ref = routerRuleRefList[ruleItem.id]
+                            if (ref?.routerStableTag != null) {
+                                val actualTag = backupRouterTags[ruleItem.routerGroupId]
+                                require(actualTag == ref.routerStableTag) {
+                                    "Rule ${ruleItem.id} references router group ${ruleItem.routerGroupId} with mismatched tag: expected ${ref.routerStableTag}, actual $actualTag"
+                                }
+                            }
+                        }
+                    }
                 } else {
-                    SagerDatabase.routerGroupDao.all().mapTo(hashSetOf()) { it.id }
-                }
-                val targetProxyIds = if (decodedProfileData != null) {
-                    decodedProfileData.validProxyIds
-                } else {
-                    SagerDatabase.proxyDao.getAll().mapTo(hashSetOf()) { it.id }
-                }
+                    // R02: Partial restore "只恢复规则" (Rules only, local database profiles kept)
+                    val localRouters = SagerDatabase.routerGroupDao.all().associate { it.id to it.stableTag }
+                    val localProxies = SagerDatabase.proxyDao.getAll().associate { it.id to it.routerStableId() }
+                    val backupRouters = if (content.has("routerGroups") && !content.isNull("routerGroups")) {
+                        runCatching {
+                            BackupSerializer.getParcelableArray(content, "routerGroups", RouterGroup.CREATOR).associate { it.id to it.stableTag }
+                        }.getOrNull().orEmpty()
+                    } else emptyMap()
+                    val backupProxies = if (content.has("profiles") && !content.isNull("profiles")) {
+                        runCatching {
+                            BackupSerializer.getParcelableArray(content, "profiles", ProxyEntity.CREATOR).associate { it.id to it.routerStableId() }
+                        }.getOrNull().orEmpty()
+                    } else emptyMap()
 
-                BackupSerializer.validateRuleReferences(rulesList, targetRouterIds, targetProxyIds)
+                    for (ruleItem in rulesList) {
+                        if (ruleItem.routerGroupId > 0L) {
+                            val expectedTag = routerRuleRefList[ruleItem.id]?.routerStableTag
+                                ?: backupRouters[ruleItem.routerGroupId]
+                            require(expectedTag != null) {
+                                "Cannot verify stable identity for router group ${ruleItem.routerGroupId} referenced by rule ${ruleItem.id}"
+                            }
+                            val localTag = localRouters[ruleItem.routerGroupId]
+                            require(localTag != null && localTag == expectedTag) {
+                                "Rule ${ruleItem.id} references router group ${ruleItem.routerGroupId} whose identity does not match local router (expected $expectedTag, found $localTag)"
+                            }
+                        } else if (ruleItem.outbound > 0L) {
+                            val expectedStableId = backupProxies[ruleItem.outbound]
+                            require(expectedStableId != null) {
+                                "Cannot verify stable identity for profile ${ruleItem.outbound} referenced by rule ${ruleItem.id}"
+                            }
+                            val localStableId = localProxies[ruleItem.outbound]
+                            require(localStableId != null && localStableId == expectedStableId) {
+                                "Rule ${ruleItem.id} references profile ${ruleItem.outbound} whose identity does not match local profile"
+                            }
+                        }
+                    }
+                }
                 rulesList
             } else null
 
+            // R02: Partial restore "只恢复配置" (Profiles only, local rules kept)
             if (decodedProfileData != null && decodedRules == null) {
                 val existingRules = SagerDatabase.rulesDao.allRules()
-                BackupSerializer.validateRuleReferences(
-                    existingRules,
-                    decodedProfileData.validRouterIds,
-                    decodedProfileData.validProxyIds
-                )
+                val incomingRouterTags = decodedProfileData.routerGroups.associate { it.id to it.stableTag }
+                val incomingProxyTags = decodedProfileData.profiles.associate { it.id to it.routerStableId() }
+                val localRouters = SagerDatabase.routerGroupDao.all().associate { it.id to it.stableTag }
+                val localProxies = SagerDatabase.proxyDao.getAll().associate { it.id to it.routerStableId() }
+
+                for (rule in existingRules) {
+                    if (rule.routerGroupId > 0L) {
+                        val localTag = localRouters[rule.routerGroupId]
+                        require(localTag != null) {
+                            "Existing rule ${rule.id} references missing local router ${rule.routerGroupId}"
+                        }
+                        val incomingTag = incomingRouterTags[rule.routerGroupId]
+                        require(incomingTag != null && incomingTag == localTag) {
+                            "Existing rule ${rule.id} references router ${rule.routerGroupId} whose identity does not match incoming configuration (local: $localTag, incoming: $incomingTag)"
+                        }
+                    } else if (rule.outbound > 0L) {
+                        val localStableId = localProxies[rule.outbound]
+                        require(localStableId != null) {
+                            "Existing rule ${rule.id} references missing local profile ${rule.outbound}"
+                        }
+                        val incomingStableId = incomingProxyTags[rule.outbound]
+                        require(incomingStableId != null && incomingStableId == localStableId) {
+                            "Existing rule ${rule.id} references profile ${rule.outbound} whose identity does not match incoming configuration"
+                        }
+                    }
+                }
             }
 
             SagerDatabase.instance.runInTransaction {

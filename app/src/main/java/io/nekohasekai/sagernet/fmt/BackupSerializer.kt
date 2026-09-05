@@ -2,6 +2,7 @@ package io.nekohasekai.sagernet.fmt
 
 import android.os.Parcel
 import android.os.Parcelable
+import io.nekohasekai.sagernet.database.RouterGroup
 import io.nekohasekai.sagernet.database.RuleEntity
 import io.nekohasekai.sagernet.database.SagerDatabase
 import moe.matsuri.nb4a.utils.Util
@@ -12,6 +13,12 @@ import org.json.JSONObject
 object BackupSerializer {
 
     const val BACKUP_VERSION = 3
+
+    data class RouterRuleReference(
+        val ruleId: Long,
+        val routerGroupId: Long,
+        val routerStableTag: String? = null,
+    )
 
     /** Capture related rows together; exporting must never repair or delete user data. */
     fun exportDatabase(database: SagerDatabase, profiles: Boolean, rules: Boolean): JSONObject {
@@ -28,19 +35,28 @@ object BackupSerializer {
             }
             if (rules) {
                 val allRules = database.rulesDao().allRules()
+                val allRouters = database.routerGroupDao().all()
                 putParcelableArray(json, "rules", allRules)
-                putRouterRuleReferences(json, allRules)
+                putRouterRuleReferences(json, allRules, allRouters)
             }
         }
         return json
     }
 
-    fun putRouterRuleReferences(json: JSONObject, rules: Iterable<RuleEntity>) {
+    fun putRouterRuleReferences(
+        json: JSONObject,
+        rules: Iterable<RuleEntity>,
+        routers: Iterable<RouterGroup> = emptyList(),
+    ) {
+        val routerTagMap = routers.associate { it.id to it.stableTag }
         json.put("routerRuleRefs", JSONArray().apply {
             rules.filter { it.routerGroupId > 0L }.forEach { rule ->
                 put(JSONObject().apply {
                     put("ruleId", rule.id)
                     put("routerGroupId", rule.routerGroupId)
+                    routerTagMap[rule.routerGroupId]?.takeIf { it.isNotBlank() }?.let {
+                        put("routerStableTag", it)
+                    }
                 })
             }
         })
@@ -64,21 +80,28 @@ object BackupSerializer {
         }
     }
 
-    fun getRouterRuleReferences(json: JSONObject): Map<Long, Long> {
+    fun getRouterRuleReferenceList(json: JSONObject): List<RouterRuleReference> {
         if (!json.has("routerRuleRefs")) {
-            return emptyMap()
+            return emptyList()
         }
         require(!json.isNull("routerRuleRefs")) { "Section 'routerRuleRefs' in backup cannot be null" }
         val values = json.optJSONArray("routerRuleRefs")
             ?: throw IllegalArgumentException("Section 'routerRuleRefs' in backup must be a JSON array")
-        return buildMap {
-            for (index in 0 until values.length()) {
-                val value = values.getJSONObject(index)
-                val ruleId = value.getLong("ruleId")
-                val routerGroupId = value.getLong("routerGroupId")
-                if (ruleId > 0L && routerGroupId > 0L) put(ruleId, routerGroupId)
+        val list = ArrayList<RouterRuleReference>(values.length())
+        for (index in 0 until values.length()) {
+            val value = values.getJSONObject(index)
+            val ruleId = value.getLong("ruleId")
+            val routerGroupId = value.getLong("routerGroupId")
+            val routerStableTag = value.optString("routerStableTag").takeIf { it.isNotBlank() }
+            if (ruleId > 0L && routerGroupId > 0L) {
+                list.add(RouterRuleReference(ruleId, routerGroupId, routerStableTag))
             }
         }
+        return list
+    }
+
+    fun getRouterRuleReferences(json: JSONObject): Map<Long, Long> {
+        return getRouterRuleReferenceList(json).associate { it.ruleId to it.routerGroupId }
     }
 
     fun putParcelableArray(

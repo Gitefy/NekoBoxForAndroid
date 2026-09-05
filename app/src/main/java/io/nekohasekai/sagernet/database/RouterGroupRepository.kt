@@ -129,32 +129,37 @@ object RouterGroupRepository {
         return RouterGroupPreview(ids, names)
     }
 
+    internal val routerSyncLock = Any()
+
     suspend fun save(draft: RouterGroupDraft): RouterGroup {
         val subscriptions = SagerDatabase.groupDao.allGroups()
             .filter { it.type == GroupType.SUBSCRIPTION }
             .mapTo(mutableSetOf()) { it.id }
         draft.validate(all(), subscriptions)
         val snapshot = GroupManager.snapshotRouterMembers()
-        val existing = draft.id.takeIf { it > 0 }?.let(SagerDatabase.routerGroupDao::getById)
-        val group = RouterGroup(
-            id = existing?.id ?: 0L,
-            stableTag = existing?.stableTag ?: newStableTag(),
-            name = draft.name.trim(),
-            mode = draft.mode,
-            enabled = draft.enabled,
-            matchConfig = draft.filter.toJson(),
-            selectedProxyId = existing?.selectedProxyId ?: RouterGroup.NO_SELECTION,
-            userOrder = existing?.userOrder ?: (SagerDatabase.routerGroupDao.nextOrder() ?: 1L),
-            selectedNodeKey = existing?.selectedNodeKey.orEmpty(),
-            lastError = existing?.lastError.orEmpty(),
-        )
-        SagerDatabase.instance.runInTransaction {
-            if (existing == null) group.id = SagerDatabase.routerGroupDao.create(group)
-            else SagerDatabase.routerGroupDao.update(group)
-            SagerDatabase.routerGroupSourceDao.replaceSources(group.id, draft.sourceGroupIds)
+        val savedGroup = synchronized(routerSyncLock) {
+            SagerDatabase.instance.runInTransaction<RouterGroup> {
+                val existing = draft.id.takeIf { it > 0 }?.let(SagerDatabase.routerGroupDao::getById)
+                val group = RouterGroup(
+                    id = existing?.id ?: 0L,
+                    stableTag = existing?.stableTag ?: newStableTag(),
+                    name = draft.name.trim(),
+                    mode = draft.mode,
+                    enabled = draft.enabled,
+                    matchConfig = draft.filter.toJson(),
+                    selectedProxyId = existing?.selectedProxyId ?: RouterGroup.NO_SELECTION,
+                    userOrder = existing?.userOrder ?: (SagerDatabase.routerGroupDao.nextOrder() ?: 1L),
+                    selectedNodeKey = existing?.selectedNodeKey.orEmpty(),
+                    lastError = existing?.lastError.orEmpty(),
+                )
+                if (existing == null) group.id = SagerDatabase.routerGroupDao.create(group)
+                else SagerDatabase.routerGroupDao.update(group)
+                SagerDatabase.routerGroupSourceDao.replaceSources(group.id, draft.sourceGroupIds)
+                group
+            }
         }
         GroupManager.reconcileRouterMembers(snapshot)
-        return SagerDatabase.routerGroupDao.getById(group.id) ?: group
+        return SagerDatabase.routerGroupDao.getById(savedGroup.id) ?: savedGroup
     }
 
     fun delete(routerId: Long): RouterDeleteResult {
@@ -169,25 +174,27 @@ object RouterGroupRepository {
         return RouterDeleteResult.Deleted
     }
 
-    fun select(routerId: Long, proxyId: Long): RouterGroup = SagerDatabase.instance.runInTransaction<RouterGroup> {
-        val group = SagerDatabase.routerGroupDao.getById(routerId)
-            ?: throw IllegalArgumentException("Proxy group does not exist")
-        check(group.enabled && group.mode == RouterGroup.MODE_SELECTOR) {
-            "Only an enabled selector group accepts a manual selection"
+    fun select(routerId: Long, proxyId: Long): RouterGroup = synchronized(routerSyncLock) {
+        SagerDatabase.instance.runInTransaction<RouterGroup> {
+            val group = SagerDatabase.routerGroupDao.getById(routerId)
+                ?: throw IllegalArgumentException("Proxy group does not exist")
+            check(group.enabled && group.mode == RouterGroup.MODE_SELECTOR) {
+                "Only an enabled selector group accepts a manual selection"
+            }
+            check(SagerDatabase.routerMemberDao.getByRouter(routerId).any { it.proxyId == proxyId }) {
+                "Selected node is not a member of ${group.name}"
+            }
+            val proxy = SagerDatabase.proxyDao.getById(proxyId)
+                ?: throw IllegalArgumentException("Selected node does not exist")
+            proxy.requireBean()
+            val stableId = proxy.routerStableId()
+            val updated = group.copy(
+                selectedProxyId = proxyId,
+                selectedNodeKey = routerNodeKey(proxy.groupId, stableId),
+            )
+            SagerDatabase.routerGroupDao.update(updated)
+            updated
         }
-        check(SagerDatabase.routerMemberDao.getByRouter(routerId).any { it.proxyId == proxyId }) {
-            "Selected node is not a member of ${group.name}"
-        }
-        val proxy = SagerDatabase.proxyDao.getById(proxyId)
-            ?: throw IllegalArgumentException("Selected node does not exist")
-        proxy.requireBean()
-        val stableId = proxy.routerStableId()
-        val updated = group.copy(
-            selectedProxyId = proxyId,
-            selectedNodeKey = routerNodeKey(proxy.groupId, stableId),
-        )
-        SagerDatabase.routerGroupDao.update(updated)
-        updated
     }
 
     private fun newStableTag(): String =

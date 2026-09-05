@@ -206,35 +206,43 @@ object GroupManager {
         }
 
         val matchedAt = System.currentTimeMillis()
-        result.membersByRouterId.forEach { (routerId, members) ->
-            SagerDatabase.routerMemberDao.replaceMembers(
-                routerId,
-                members.map { member ->
-                    RouterMember(
-                        routerId = routerId,
-                        proxyId = member.proxyId,
-                        userOrder = member.userOrder,
-                        lastMatchedAt = matchedAt
+        synchronized(RouterGroupRepository.routerSyncLock) {
+            SagerDatabase.instance.runInTransaction {
+                result.membersByRouterId.forEach { (routerId, members) ->
+                    SagerDatabase.routerMemberDao.replaceMembers(
+                        routerId,
+                        members.map { member ->
+                            RouterMember(
+                                routerId = routerId,
+                                proxyId = member.proxyId,
+                                userOrder = member.userOrder,
+                                lastMatchedAt = matchedAt
+                            )
+                        }
+                    )
+                    val freshRouter = SagerDatabase.routerGroupDao.getById(routerId) ?: return@forEach
+                    val selectedProxyId = if (freshRouter.selectedProxyId != RouterGroup.NO_SELECTION &&
+                        members.any { it.proxyId == freshRouter.selectedProxyId }
+                    ) {
+                        freshRouter.selectedProxyId
+                    } else {
+                        result.selectedProxyIdsByRouterId[routerId] ?: RouterGroup.NO_SELECTION
+                    }
+                    val selectedNodeKey = members.firstOrNull { it.proxyId == selectedProxyId }
+                        ?.let { routerNodeKey(it.sourceGroupId, it.stableId) }
+                        .orEmpty()
+                    val lastError = if (members.isEmpty()) "No nodes match ${freshRouter.name}" else ""
+                    SagerDatabase.routerGroupDao.update(
+                        freshRouter.copy(
+                            selectedProxyId = selectedProxyId,
+                            selectedNodeKey = selectedNodeKey,
+                            lastError = lastError,
+                        )
                     )
                 }
-            )
-            routers.firstOrNull { it.id == routerId }?.let { router ->
-                val selectedProxyId = result.selectedProxyIdsByRouterId[routerId]
-                    ?: RouterGroup.NO_SELECTION
-                val selectedNodeKey = members.firstOrNull { it.proxyId == selectedProxyId }
-                    ?.let { routerNodeKey(it.sourceGroupId, it.stableId) }
-                    .orEmpty()
-                val lastError = if (members.isEmpty()) "No nodes match ${router.name}" else ""
-                SagerDatabase.routerGroupDao.update(
-                    router.copy(
-                        selectedProxyId = selectedProxyId,
-                        selectedNodeKey = selectedNodeKey,
-                        lastError = lastError,
-                    )
-                )
+                cleanupDanglingRouterMembers()
             }
         }
-        cleanupDanglingRouterMembers()
         iterator { routerGroupsUpdated() }
     }
 
