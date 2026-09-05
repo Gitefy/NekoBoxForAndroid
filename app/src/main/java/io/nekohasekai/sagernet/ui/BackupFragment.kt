@@ -86,45 +86,58 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
 
         binding.actionExport.setOnClickListener {
             runOnDefaultDispatcher {
-                backupData = doBackup(
-                    binding.backupConfigurations.isChecked,
-                    binding.backupRules.isChecked,
-                    binding.backupSettings.isChecked
-                )
-                onMainDispatcher {
-                    startFilesForResult(
-                        exportSettings, "nekobox_backup_${Date().toLocaleString()}.json"
+                try {
+                    backupData = doBackup(
+                        binding.backupConfigurations.isChecked,
+                        binding.backupRules.isChecked,
+                        binding.backupSettings.isChecked
                     )
+                    onMainDispatcher {
+                        startFilesForResult(
+                            exportSettings, "nekobox_backup_${Date().toLocaleString()}.json"
+                        )
+                    }
+                } catch (e: Exception) {
+                    Logs.w(e)
+                    onMainDispatcher {
+                        snackbar(e.readableMessage).show()
+                    }
                 }
             }
         }
 
         binding.actionShare.setOnClickListener {
             runOnDefaultDispatcher {
-                backupData = doBackup(
-                    binding.backupConfigurations.isChecked,
-                    binding.backupRules.isChecked,
-                    binding.backupSettings.isChecked
-                )
-                app.cacheDir.mkdirs()
-                val cacheFile = File(
-                    app.cacheDir, "nekobox_backup_${Date().toLocaleString()}.json"
-                )
-                cacheFile.writeBytes(backupData)
-                onMainDispatcher {
-                    startActivity(
-                        Intent.createChooser(
-                            Intent(Intent.ACTION_SEND).setType("application/json")
-                                .setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                .putExtra(
-                                    Intent.EXTRA_STREAM, FileProvider.getUriForFile(
-                                        app, BuildConfig.APPLICATION_ID + ".cache", cacheFile
-                                    )
-                                ), app.getString(R.string.abc_shareactionprovider_share_with)
-                        )
+                try {
+                    backupData = doBackup(
+                        binding.backupConfigurations.isChecked,
+                        binding.backupRules.isChecked,
+                        binding.backupSettings.isChecked
                     )
+                    app.cacheDir.mkdirs()
+                    val cacheFile = File(
+                        app.cacheDir, "nekobox_backup_${Date().toLocaleString()}.json"
+                    )
+                    cacheFile.writeBytes(backupData)
+                    onMainDispatcher {
+                        startActivity(
+                            Intent.createChooser(
+                                Intent(Intent.ACTION_SEND).setType("application/json")
+                                    .setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    .putExtra(
+                                        Intent.EXTRA_STREAM, FileProvider.getUriForFile(
+                                            app, BuildConfig.APPLICATION_ID + ".cache", cacheFile
+                                        )
+                                    ), app.getString(R.string.abc_shareactionprovider_share_with)
+                            )
+                        )
+                    }
+                } catch (e: Exception) {
+                    Logs.w(e)
+                    onMainDispatcher {
+                        snackbar(e.readableMessage).show()
+                    }
                 }
-
             }
         }
 
@@ -142,7 +155,15 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
         val out = JSONObject().apply {
             put("version", BackupSerializer.BACKUP_VERSION)
             if (profile) {
-                BackupSerializer.putParcelableArray(this, "profiles", SagerDatabase.proxyDao.getAll())
+                val allProfiles = SagerDatabase.proxyDao.getAll()
+                val (validProfiles, corruptedProfiles) = allProfiles.partition { proxy ->
+                    runCatching { proxy.requireBean() }.isSuccess
+                }
+                if (corruptedProfiles.isNotEmpty()) {
+                    Logs.w("Found ${corruptedProfiles.size} corrupted profiles in database, cleaning up...")
+                    runCatching { SagerDatabase.proxyDao.deleteProxy(corruptedProfiles) }
+                }
+                BackupSerializer.putParcelableArray(this, "profiles", validProfiles)
                 BackupSerializer.putParcelableArray(this, "groups", SagerDatabase.groupDao.allGroups())
                 BackupSerializer.putParcelableArray(this, "routerGroups", SagerDatabase.routerGroupDao.all())
                 BackupSerializer.putParcelableArray(this, "routerMembers", SagerDatabase.routerMemberDao.all())
