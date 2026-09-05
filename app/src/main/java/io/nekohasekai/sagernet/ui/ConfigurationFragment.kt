@@ -114,6 +114,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -571,7 +572,12 @@ class ConfigurationFragment @JvmOverloads constructor(
     suspend fun import(proxies: List<AbstractBean>) {
         val targetId = DataStore.selectedGroupForImport()
         for (proxy in proxies) {
-            ProfileManager.createProfile(targetId, proxy)
+            ProfileManager.createProfile(targetId, proxy, reconcile = false)
+        }
+        if (RouterGroupRepository.all().isNotEmpty()) {
+            runCatching {
+                GroupManager.reconcileRouterMembers(GroupManager.snapshotRouterMembers())
+            }
         }
         onMainDispatcher {
             DataStore.editingGroup = targetId
@@ -1339,6 +1345,11 @@ class ConfigurationFragment @JvmOverloads constructor(
 
                 if (wantRouterMode) {
                     // ----- Router-group mode -----
+                    if (SagerDatabase.routerMemberDao.all().isEmpty() && SagerDatabase.proxyDao.getAll().isNotEmpty()) {
+                        runCatching {
+                            GroupManager.reconcileRouterMembers(GroupManager.snapshotRouterMembers())
+                        }
+                    }
                     val newRouterList = ArrayList(RouterGroupRepository.all())
 
                     if (generation != reloadGeneration.get()) return@runOnDefaultDispatcher
@@ -1524,6 +1535,11 @@ class ConfigurationFragment @JvmOverloads constructor(
 
         override suspend fun groupUpdated(groupId: Long) = Unit
 
+        override suspend fun routerGroupsUpdated() {
+            if (!inRouterGroupMode) return
+            refreshRouterGroupSelections()
+        }
+
         override suspend fun onAdd(profile: ProxyEntity) {
             if (inRouterGroupMode) return
             if (groupList.find { it.id == profile.groupId } == null) {
@@ -1695,7 +1711,7 @@ class ConfigurationFragment @JvmOverloads constructor(
         override fun onResume() {
             super.onResume()
 
-            if (::configurationListView.isInitialized && configurationListView.size == 0) {
+            if (::configurationListView.isInitialized && (adapter?.itemCount ?: 0) == 0) {
                 configurationListView.adapter = adapter
                 runOnDefaultDispatcher {
                     adapter?.reloadProfiles()
@@ -1838,12 +1854,25 @@ class ConfigurationFragment @JvmOverloads constructor(
                 }
             })
 
+            val adapterKey = if (inRouterGroupMode) {
+                routerGroup?.id?.let { -it }
+            } else {
+                proxyGroup.id
+            }
+            if (adapterKey != null) {
+                (parentFragment as? ConfigurationFragment)?.adapter?.groupFragments?.put(adapterKey, this)
+            }
+
             if (!select) {
                 if (!inRouterGroupMode) {
                     undoManager = UndoSnackbarManager(activity as MainActivity, adapter!!)
                 }
                 setupItemTouchHelper()
                 setupBottomBarScrollDriver()
+            }
+
+            runOnDefaultDispatcher {
+                adapter?.reloadProfiles()
             }
         }
 
@@ -1879,6 +1908,15 @@ class ConfigurationFragment @JvmOverloads constructor(
         }
 
         override fun onDestroyView() {
+            val adapterKey = if (inRouterGroupMode) {
+                routerGroup?.id?.let { -it }
+            } else if (::proxyGroup.isInitialized) {
+                proxyGroup.id
+            } else null
+            if (adapterKey != null) {
+                (parentFragment as? ConfigurationFragment)?.adapter?.groupFragments?.remove(adapterKey)
+            }
+
             adapter?.let {
                 ProfileManager.removeListener(it)
                 GroupManager.removeListener(it)
@@ -2252,9 +2290,16 @@ class ConfigurationFragment @JvmOverloads constructor(
             }
 
             override suspend fun onAdd(profile: ProxyEntity) {
-                if (profile.groupId != proxyGroup.id) return
+                if (!inRouterGroupMode) {
+                    if (profile.groupId != proxyGroup.id) return
+                } else {
+                    val rg = routerGroup ?: return
+                    val isMember = SagerDatabase.routerMemberDao.getByRouter(rg.id).any { it.proxyId == profile.id }
+                    if (!isMember) return
+                }
 
-                configurationListView.post {
+                runOnMainDispatcher {
+                    if (!isAdded || !::configurationListView.isInitialized) return@runOnMainDispatcher
                     if (::undoManager.isInitialized) {
                         undoManager.flush()
                     }
@@ -2267,13 +2312,15 @@ class ConfigurationFragment @JvmOverloads constructor(
             }
 
             override suspend fun onUpdated(profile: ProxyEntity, noTraffic: Boolean) {
-                if (profile.groupId != proxyGroup.id) return
+                if (!inRouterGroupMode && profile.groupId != proxyGroup.id) return
+                if (inRouterGroupMode && !configurationList.containsKey(profile.id)) return
                 if (noTraffic) {
                     (parentFragment as? ConfigurationFragment)?.refreshProfileState()
                 }
                 val index = configurationIdList.indexOf(profile.id)
                 if (index < 0) return
-                configurationListView.post {
+                runOnMainDispatcher {
+                    if (!isAdded || !::configurationListView.isInitialized) return@runOnMainDispatcher
                     if (::undoManager.isInitialized) {
                         undoManager.flush()
                     }
@@ -2292,7 +2339,7 @@ class ConfigurationFragment @JvmOverloads constructor(
                             cachedProfile.dirty != updatedProfile.dirty ||
                             cachedProfile.displayName() != updatedProfile.displayName()
                     configurationList[profile.id] = updatedProfile
-                    if (noTraffic && !contentChanged) return@post
+                    if (noTraffic && !contentChanged) return@runOnMainDispatcher
 
                     val newHasMiddleRow = hasMiddleRow(updatedProfile)
                     val holder = layoutManager.findViewByPosition(index)
@@ -2327,11 +2374,13 @@ class ConfigurationFragment @JvmOverloads constructor(
             }
 
             override suspend fun onRemoved(groupId: Long, profileId: Long) {
-                if (groupId != proxyGroup.id) return
+                if (!inRouterGroupMode && groupId != proxyGroup.id) return
+                if (inRouterGroupMode && !configurationList.containsKey(profileId)) return
                 val index = configurationIdList.indexOf(profileId)
                 if (index < 0) return
 
-                configurationListView.post {
+                runOnMainDispatcher {
+                    if (!isAdded || !::configurationListView.isInitialized) return@runOnMainDispatcher
                     configurationIdList.removeAt(index)
                     configurationList.remove(profileId)
                     notifyItemRemoved(index)
@@ -2354,14 +2403,30 @@ class ConfigurationFragment @JvmOverloads constructor(
                 reloadProfiles()
             }
 
+            override suspend fun routerGroupsUpdated() {
+                if (inRouterGroupMode) {
+                    reloadProfiles()
+                }
+            }
+
             fun reloadProfiles() {
                 val rg = routerGroup
-                val newProfiles: List<ProxyEntity>
+                var newProfiles: List<ProxyEntity>
                 if (rg != null) {
                     // Router-group mode: load members from the router group
-                    val memberIds = SagerDatabase.routerMemberDao.getByRouter(rg.id)
+                    var memberIds = SagerDatabase.routerMemberDao.getByRouter(rg.id)
                         .sortedBy { it.userOrder }
                         .map { it.proxyId }
+                    if (memberIds.isEmpty() && SagerDatabase.proxyDao.getAll().isNotEmpty()) {
+                        runBlocking {
+                            runCatching {
+                                GroupManager.reconcileRouterMembers(GroupManager.snapshotRouterMembers())
+                            }
+                        }
+                        memberIds = SagerDatabase.routerMemberDao.getByRouter(rg.id)
+                            .sortedBy { it.userOrder }
+                            .map { it.proxyId }
+                    }
                     val entities = SagerDatabase.proxyDao.getEntities(memberIds).associateBy { it.id }
                     newProfiles = memberIds.mapNotNull { entities[it] }
                 } else {
@@ -2394,7 +2459,8 @@ class ConfigurationFragment @JvmOverloads constructor(
                     selectedProfileIndex = newProfileIds.indexOf(selectedProxy)
                 }
 
-                configurationListView.post {
+                runOnMainDispatcher {
+                    if (!isAdded || !::configurationListView.isInitialized) return@runOnMainDispatcher
                     configurationList.clear()
                     configurationList.putAll(newProfileMap)
                     configurationIdList.clear()
@@ -2406,7 +2472,6 @@ class ConfigurationFragment @JvmOverloads constructor(
                     } else if (newProfiles.isNotEmpty()) {
                         configurationListView.scrollTo(0, true)
                     }
-
                 }
             }
 

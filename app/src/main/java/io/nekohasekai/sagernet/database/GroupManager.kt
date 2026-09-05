@@ -28,6 +28,7 @@ object GroupManager {
 
         suspend fun groupRemoved(groupId: Long)
         suspend fun groupUpdated(groupId: Long)
+        suspend fun routerGroupsUpdated() = Unit
     }
 
     interface Interface {
@@ -234,6 +235,7 @@ object GroupManager {
             }
         }
         cleanupDanglingRouterMembers()
+        iterator { routerGroupsUpdated() }
     }
 
     fun markRouterRefreshFailed(sourceGroupId: Long, message: String) {

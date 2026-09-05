@@ -36,6 +36,7 @@ import io.nekohasekai.sagernet.database.GroupManager
 import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.ProxyGroup
 import io.nekohasekai.sagernet.database.SubscriptionBean
+import io.nekohasekai.sagernet.database.RouterGroupRepository
 import io.nekohasekai.sagernet.database.preference.OnPreferenceDataStoreChangeListener
 import io.nekohasekai.sagernet.databinding.LayoutMainBinding
 import io.nekohasekai.sagernet.fmt.AbstractBean
@@ -119,6 +120,14 @@ class MainActivity : ThemedActivity(),
         connection.connect(this, this)
         DataStore.configurationStore.registerChangeListener(this)
         GroupManager.userInterface = GroupInterfaceAdapter(this)
+
+        runOnDefaultDispatcher {
+            if (RouterGroupRepository.all().isNotEmpty()) {
+                runCatching {
+                    GroupManager.reconcileRouterMembers(GroupManager.snapshotRouterMembers())
+                }
+            }
+        }
 
         if (intent?.action == Intent.ACTION_VIEW) {
             onNewIntent(intent)
