@@ -77,3 +77,31 @@ object RouterRuntime {
         }
     }
 }
+
+object RouterRuntimeSelection {
+    fun resolve(
+        routerTags: Map<Long, String>,
+        profileTags: Map<Long, String>,
+        currentOutbound: (String) -> String,
+    ): LongArray {
+        if (routerTags.isEmpty() || profileTags.isEmpty()) return longArrayOf()
+        val profileIdsByTag = profileTags.entries.associate { (id, tag) -> tag to id }
+        val result = ArrayList<Long>(routerTags.size * 2)
+        routerTags.forEach { (routerId, routerTag) ->
+            val profileId = profileIdsByTag[currentOutbound(routerTag)] ?: return@forEach
+            result += routerId
+            result += profileId
+        }
+        return result.toLongArray()
+    }
+
+    fun toMap(pairs: LongArray): Map<Long, Long> {
+        val result = linkedMapOf<Long, Long>()
+        var index = 0
+        while (index + 1 < pairs.size) {
+            result[pairs[index]] = pairs[index + 1]
+            index += 2
+        }
+        return result
+    }
+}

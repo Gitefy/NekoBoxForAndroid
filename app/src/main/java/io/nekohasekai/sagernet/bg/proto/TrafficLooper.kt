@@ -85,7 +85,7 @@ class TrafficLooper
         selectMainLocked(id)
     }
 
-    private suspend fun selectMainLocked(id: Long) {
+    private suspend fun selectMainLocked(id: Long, statsTag: String = TAG_PROXY) {
         Logs.d("select traffic count $TAG_PROXY to $id, old id is $selectorNowId")
         val oldData = idMap[selectorNowId]
         val newData = idMap[id] ?: return
@@ -104,9 +104,20 @@ class TrafficLooper
         selectorNowFakeTag = newData.tag
         selectorNowId = id
         newData.apply {
-            tag = TAG_PROXY
+            tag = statsTag
             ignore = false
         }
+    }
+
+    private suspend fun syncUrlTestWinnerLocked(proxy: ProxyInstance): LongArray {
+        val selections = proxy.currentUrlTestSelections()
+        val mainTag = proxy.config.mainUrlTestTag ?: return selections
+        val mainRouterId = proxy.config.routerUrlTestTags.entries
+            .firstOrNull { it.value == mainTag }?.key ?: return selections
+        val selectionMap = io.nekohasekai.sagernet.route.RouterRuntimeSelection.toMap(selections)
+        val winnerId = selectionMap[mainRouterId] ?: return selections
+        if (winnerId != selectorNowId) selectMainLocked(winnerId, mainTag)
+        return selections
     }
 
     suspend fun resetTraffic(profileIds: LongArray) {
@@ -171,7 +182,10 @@ class TrafficLooper
                 delay(delayMs)
                 continue
             }
-            if (!proxy.isInitialized()) continue
+            if (!proxy.isInitialized()) {
+                delay(TrafficLoopPolicy.initializationRetryMillis(delayMs))
+                continue
+            }
 
             val snapshot = withStateLock {
                 if (trafficUpdater == null) {
@@ -179,6 +193,8 @@ class TrafficLooper
                     idMap[-1] = itemBypass
                     //
                     val tags = hashSetOf(TAG_PROXY, TAG_BYPASS)
+                    val dynamicMain = proxy.config.selectorGroupId >= 0L ||
+                        proxy.config.mainUrlTestTag != null
                     proxy.config.trafficMap.forEach { (tag, ents) ->
                         tags.add(tag)
                         for (ent in ents) {
@@ -188,23 +204,27 @@ class TrafficLooper
                                 tx = ent.tx,
                                 rxBase = ent.rx,
                                 txBase = ent.tx,
-                                ignore = proxy.config.selectorGroupId >= 0L,
+                                ignore = dynamicMain,
                             )
                             idMap[ent.id] = item
                             tagMap[tag] = item
                             Logs.d("traffic count $tag to ${ent.id}")
                         }
                     }
-                    if (proxy.config.selectorGroupId >= 0L) {
+                    if (proxy.config.mainUrlTestTag != null) {
+                        syncUrlTestWinnerLocked(proxy)
+                    } else if (proxy.config.selectorGroupId >= 0L) {
                         selectMainLocked(proxy.config.mainEntId)
                     }
                     //
                     trafficUpdater = TrafficUpdater(
                         box = proxy.box, items = idMap.values.toList()
                     )
+                    proxy.config.mainUrlTestTag?.let(tags::add)
                     proxy.box.setV2rayStats(tags.joinToString("\n"))
                 }
 
+                val urlTestSelections = syncUrlTestWinnerLocked(proxy)
                 trafficUpdater!!.updateAll()
                 currentCoroutineContext().ensureActive()
 
@@ -237,7 +257,8 @@ class TrafficLooper
                         if (showDirectSpeed) itemBypass.txRate else 0L,
                         if (showDirectSpeed) itemBypass.rxRate else 0L,
                         mainTx,
-                        mainRx
+                        mainRx,
+                        urlTestSelections,
                     ),
                     trafficUpdates = trafficUpdates,
                 )
@@ -268,7 +289,16 @@ class TrafficLooper
                 if (listenPostSpeed) postNotificationSpeedUpdate(snapshot.speed)
             }
 
-            delay(delayMs)
+            val mainActivityForeground = data.binder.callbackIdMap.containsValue(
+                SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
+            )
+            delay(
+                TrafficLoopPolicy.delayMillis(
+                    configuredMillis = delayMs,
+                    mainActivityForeground = mainActivityForeground,
+                    notificationSpeedVisible = data.notification?.listenPostSpeed == true,
+                )
+            )
         }
     }
 }

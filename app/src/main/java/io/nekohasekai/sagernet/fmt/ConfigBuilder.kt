@@ -158,6 +158,8 @@ class ConfigBuildResult(
     val selectorGroupId: Long,
     val routerSelectorTags: Map<String, String> = emptyMap(),
     val routerMemberIds: Map<String, Set<Long>> = emptyMap(),
+    val routerUrlTestTags: Map<Long, String> = emptyMap(),
+    val mainUrlTestTag: String? = null,
 ) {
     data class IndexEntity(var chain: LinkedHashMap<Int, ProxyEntity>)
 }
@@ -317,6 +319,8 @@ fun buildConfig(
 
     var routerSelectorTags: Map<String, String> = emptyMap()
     var routerMemberIds: Map<String, Set<Long>> = emptyMap()
+    var routerUrlTestTags: Map<Long, String> = emptyMap()
+    var mainUrlTestTag: String? = null
 
     return MyOptions().apply {
 	if (!forTest) {
@@ -761,13 +765,13 @@ fun buildConfig(
             router.stableTag to routerMembers[router.id].orEmpty().map { it.proxyId }.toSet()
         }.filterKeys(routerSelectorTags::containsKey)
 
-        val mainProxyTag = if (buildSelector) {
-            RouterRuntime.findUrlTestGroupForProxy(runtimeRouterGroups, proxy.id)
-                ?.takeIf { it in builtRouterTags }
-                ?: TAG_PROXY
-        } else {
-            tagMap[proxy.id] ?: TAG_PROXY
-        }
+        routerUrlTestTags = runtimeRouterGroups.filter {
+            it.mode == RouterRuntimeMode.URL_TEST && it.stableTag in builtRouterTags
+        }.associate { it.id to it.stableTag }
+
+        mainUrlTestTag = RouterRuntime.findUrlTestGroupForProxy(runtimeRouterGroups, proxy.id)
+            ?.takeIf { it in builtRouterTags }
+        val mainProxyTag = mainUrlTestTag ?: if (buildSelector) TAG_PROXY else tagMap[proxy.id] ?: TAG_PROXY
 
         // 在应用用户规则之前检查全局模式
         if (!forTest && DataStore.globalMode) {
@@ -1214,6 +1218,8 @@ fun buildConfig(
             if (buildSelector) group.id else -1L,
             routerSelectorTags,
             routerMemberIds,
+            routerUrlTestTags,
+            mainUrlTestTag,
         )
     }
 

@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED
 import android.os.Build
+import android.os.PowerManager
 import android.text.format.Formatter
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
@@ -41,7 +42,7 @@ import kotlinx.coroutines.sync.withLock
  */
 class ServiceNotification(
     private val service: BaseService.Interface, title: String,
-    channel: String, visible: Boolean = false,
+    channel: String, private val visible: Boolean = false,
 ) : BroadcastReceiver() {
     companion object {
         const val notificationId = 1
@@ -59,6 +60,9 @@ class ServiceNotification(
             lockscreenVisibility = Notification.VISIBILITY_SECRET,
         )
 
+        fun shouldPostSpeed(visible: Boolean, interactive: Boolean): Boolean =
+            visible && interactive
+
         fun genTitle(
             ent: ProxyEntity?,
             showProfileInNotification: Boolean = DataStore.showProfileInNotification,
@@ -74,7 +78,11 @@ class ServiceNotification(
         }
     }
 
-    var listenPostSpeed = true
+    @Volatile
+    var listenPostSpeed = shouldPostSpeed(
+        visible,
+        ((service as Context).getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive,
+    )
 
     suspend fun postNotificationSpeedUpdate(stats: SpeedDisplayData) {
         useBuilder {
@@ -201,7 +209,10 @@ class ServiceNotification(
 
     override fun onReceive(context: Context, intent: Intent) {
         if (service.data.state == BaseService.State.Connected) {
-            listenPostSpeed = intent.action == Intent.ACTION_SCREEN_ON
+            listenPostSpeed = shouldPostSpeed(
+                visible,
+                intent.action == Intent.ACTION_SCREEN_ON,
+            )
         }
     }
 

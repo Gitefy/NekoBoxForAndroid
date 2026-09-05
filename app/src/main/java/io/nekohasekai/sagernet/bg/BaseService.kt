@@ -115,6 +115,8 @@ class BaseService {
 
         override fun getState(): Int = (data?.state ?: State.Idle).ordinal
         override fun getProfileName(): String = data?.proxy?.displayProfileName ?: "Idle"
+        override fun getCurrentUrlTestSelections(): LongArray =
+            data?.proxy?.currentUrlTestSelections() ?: longArrayOf()
 
         override fun registerCallback(cb: ISagerNetServiceCallback, id: Int) {
             if (id == SagerConnection.CONNECTION_ID_RESTART_BG) {
@@ -351,6 +353,14 @@ class BaseService {
                         Logs.d("Network changed: $oldName -> $upstreamInterfaceName")
                         if (DataStore.networkChangeResetConnections) {
                             Libcore.resetAllConnections(true)
+                        }
+                        val runningProxy = data.proxy
+                        if (runningProxy?.isInitialized() == true) {
+                            data.binder.launch(Dispatchers.IO) {
+                                runningProxy.config.routerUrlTestTags.values.distinct().forEach {
+                                    runningProxy.box.refreshURLTestFor(it)
+                                }
+                            }
                         }
                     }
                 }

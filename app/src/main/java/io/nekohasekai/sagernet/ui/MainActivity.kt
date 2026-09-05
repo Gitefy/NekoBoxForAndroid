@@ -371,6 +371,9 @@ class MainActivity : ThemedActivity(),
     @SuppressLint("CommitTransaction")
     fun displayFragment(fragment: ToolbarFragment) {
         currentMainFragment = fragment
+        (fragment as? ConfigurationFragment)?.updateRuntimeUrlTestSelections(
+            runtimeUrlTestSelections
+        )
         supportFragmentManager.beginTransaction()
             .replace(R.id.fragment_holder, fragment)
             .commitAllowingStateLoss()
@@ -456,6 +459,9 @@ class MainActivity : ThemedActivity(),
         animateControls: Boolean = animate,
     ) {
         DataStore.serviceState = state
+        if (state != BaseService.State.Connected) {
+            updateRuntimeUrlTestSelections(longArrayOf())
+        }
         refreshConfigurationProfileState()
 
         binding.fab.changeState(state, DataStore.serviceState, animate)
@@ -481,13 +487,23 @@ class MainActivity : ThemedActivity(),
     }
 
     val connection = SagerConnection(SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND, true)
-    override fun onServiceConnected(service: ISagerNetService) = changeState(
-        try {
+    override fun onServiceConnected(service: ISagerNetService) {
+        val state = try {
             BaseService.State.values()[service.state]
         } catch (_: RemoteException) {
             BaseService.State.Idle
         }
-    )
+        changeState(state)
+        updateRuntimeUrlTestSelections(
+            if (state == BaseService.State.Connected) {
+                runCatching { service.currentUrlTestSelections }.getOrDefault(longArrayOf())
+            } else {
+                longArrayOf()
+            }
+        )
+    }
+
+    private var runtimeUrlTestSelections = longArrayOf()
 
     override fun onServiceDisconnected() = changeState(BaseService.State.Idle)
     override fun onBinderDied() {
@@ -503,6 +519,16 @@ class MainActivity : ThemedActivity(),
     // ONLY do UI update here, write DB in bg process
     override fun cbSpeedUpdate(stats: SpeedDisplayData) {
         binding.stats.updateSpeed(stats.txRateProxy, stats.rxRateProxy)
+        updateRuntimeUrlTestSelections(stats.urlTestSelections)
+    }
+
+    private fun updateRuntimeUrlTestSelections(selections: LongArray) {
+        runtimeUrlTestSelections = selections.copyOf()
+        val fragment = currentMainFragment
+            ?: supportFragmentManager.findFragmentById(R.id.fragment_holder)
+        (fragment as? ConfigurationFragment)?.updateRuntimeUrlTestSelections(
+            runtimeUrlTestSelections
+        )
     }
 
     override suspend fun cbTrafficUpdate(data: TrafficDataBatch) {

@@ -141,6 +141,7 @@ import androidx.appcompat.app.AlertDialog
 import io.nekohasekai.sagernet.database.SubscriptionBean
 import io.nekohasekai.sagernet.database.RouterGroup
 import io.nekohasekai.sagernet.database.RouterGroupRepository
+import io.nekohasekai.sagernet.route.RouterRuntimeSelection
 import kotlin.math.abs
 
 class ConfigurationFragment @JvmOverloads constructor(
@@ -269,9 +270,38 @@ class ConfigurationFragment @JvmOverloads constructor(
     @Volatile
     private var routerGroupSelectionSnapshot: Map<Long, Long> = emptyMap()
 
+    @Volatile
+    private var routerGroupRuntimeSelectionSnapshot: Map<Long, Long> = emptyMap()
+
     /** Returns true when [profileId] is the selected node inside [routerGroupId]. */
-    fun isSelectedProfileInRouterGroup(routerGroupId: Long, profileId: Long): Boolean {
-        return routerGroupSelectionSnapshot[routerGroupId] == profileId
+    fun isSelectedProfileInRouterGroup(routerGroup: RouterGroup, profileId: Long): Boolean {
+        val selectedId = if (routerGroup.mode == RouterGroup.MODE_URL_TEST) {
+            routerGroupRuntimeSelectionSnapshot[routerGroup.id]
+        } else {
+            routerGroupSelectionSnapshot[routerGroup.id]
+        }
+        return selectedId == profileId
+    }
+
+    private fun selectedProfileInRouterGroup(routerGroup: RouterGroup): Long? {
+        return if (routerGroup.mode == RouterGroup.MODE_URL_TEST) {
+            routerGroupRuntimeSelectionSnapshot[routerGroup.id]
+        } else {
+            routerGroupSelectionSnapshot[routerGroup.id]
+        }
+    }
+
+    fun updateRuntimeUrlTestSelections(pairs: LongArray) {
+        val next = RouterRuntimeSelection.toMap(pairs)
+        if (next == routerGroupRuntimeSelectionSnapshot) return
+        val changedIds = (routerGroupRuntimeSelectionSnapshot.values + next.values)
+            .filter { it > 0L }
+            .toSet()
+        routerGroupRuntimeSelectionSnapshot = next
+        if (!::adapter.isInitialized) return
+        adapter.groupFragments.values.forEach { fragment ->
+            fragment.adapter?.refreshProfileState(changedIds)
+        }
     }
 
     /** Called from [selectProfileInRouterGroup] to refresh the snapshot after a selection change. */
@@ -2300,7 +2330,10 @@ class ConfigurationFragment @JvmOverloads constructor(
 
                 if (rg != null) {
                     // In router-group mode, scroll to the currently selected node
-                    selectedProfileIndex = newProfileIds.indexOf(rg.selectedProxyId)
+                    selectedProfileIndex = newProfileIds.indexOf(
+                        (parentFragment as? ConfigurationFragment)
+                            ?.selectedProfileInRouterGroup(rg)
+                    )
                 } else if (selected) {
                     val selectedProxy = selectedItem?.id ?: DataStore.selectedProxy
                     selectedProfileIndex = newProfileIds.indexOf(selectedProxy)
@@ -2649,7 +2682,7 @@ class ConfigurationFragment @JvmOverloads constructor(
 
                 val rg = routerGroup
                 val selected = if (rg != null) {
-                    pf.isSelectedProfileInRouterGroup(rg.id, proxyEntity.id)
+                    pf.isSelectedProfileInRouterGroup(rg, proxyEntity.id)
                 } else {
                     pf.isSelectedProfile(proxyEntity.id)
                 }
@@ -2679,7 +2712,7 @@ class ConfigurationFragment @JvmOverloads constructor(
                 val pf = parentFragment as? ConfigurationFragment ?: return
                 val rg = routerGroup
                 val selected = if (rg != null) {
-                    pf.isSelectedProfileInRouterGroup(rg.id, proxyEntity.id)
+                    pf.isSelectedProfileInRouterGroup(rg, proxyEntity.id)
                 } else {
                     pf.isSelectedProfile(proxyEntity.id)
                 }

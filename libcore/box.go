@@ -225,6 +225,34 @@ func (b *BoxInstance) SelectOutboundFor(selectorTag, tag string) bool {
 	return selector.SelectOutbound(tag)
 }
 
+func (b *BoxInstance) CurrentOutboundFor(groupTag string) string {
+	proxy, ok := b.Outbound().Outbound(groupTag)
+	if !ok {
+		return ""
+	}
+	switch outbound := proxy.(type) {
+	case *group.Selector:
+		return outbound.Now()
+	case *group.URLTest:
+		return outbound.Now()
+	default:
+		return ""
+	}
+}
+
+func (b *BoxInstance) RefreshURLTestFor(groupTag string) bool {
+	proxy, ok := b.Outbound().Outbound(groupTag)
+	if !ok {
+		return false
+	}
+	urlTest, ok := proxy.(*group.URLTest)
+	if !ok {
+		return false
+	}
+	urlTest.CheckOutbounds()
+	return true
+}
+
 func UrlTest(i *BoxInstance, link string, timeout int32) (latency int32, err error) {
 	defer device.DeferPanicToError("box.UrlTest", func(err_ error) { err = err_ })
 	var connectionTracker adapter.ConnectionTracker

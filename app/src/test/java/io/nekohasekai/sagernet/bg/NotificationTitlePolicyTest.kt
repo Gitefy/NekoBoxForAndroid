@@ -19,6 +19,14 @@ class NotificationTitlePolicyTest {
     }
 
     @Test
+    fun hiddenVpnNotificationNeverRequestsSpeedUpdates() {
+        assertEquals(false, ServiceNotification.shouldPostSpeed(false, true))
+        assertEquals(false, ServiceNotification.shouldPostSpeed(false, false))
+        assertEquals(true, ServiceNotification.shouldPostSpeed(true, true))
+        assertEquals(false, ServiceNotification.shouldPostSpeed(true, false))
+    }
+
+    @Test
     fun returnsAppNameWhenShowProfileIsDisabled() {
         val proxy = ProxyEntity(id = 1L, groupId = 10L, userOrder = 0).apply {
             putBean(HttpBean().apply {
