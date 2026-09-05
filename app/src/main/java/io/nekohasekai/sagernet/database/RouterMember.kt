@@ -64,19 +64,12 @@ data class RouterMember(
         fun updateOrders(routerId: Long, orderedProxyIds: List<Long>) {
             val existing = getByRouter(routerId)
             if (existing.isEmpty()) return
-            val orderedSet = orderedProxyIds.toSet()
-            if (orderedSet.size == existing.size) {
-                for ((index, proxyId) in orderedProxyIds.withIndex()) {
-                    updateUserOrder(routerId, proxyId, (index + 1).toLong())
-                }
-            } else {
-                val remaining = existing.filter { it.proxyId !in orderedSet }.sortedBy { it.userOrder }
-                val merged = ArrayList<Long>(existing.size)
-                merged.addAll(orderedProxyIds)
-                merged.addAll(remaining.map { it.proxyId })
-                for ((index, proxyId) in merged.withIndex()) {
-                    updateUserOrder(routerId, proxyId, (index + 1).toLong())
-                }
+            val existingIds = existing.mapTo(hashSetOf()) { it.proxyId }
+            val ordered = orderedProxyIds.distinct().filter { it in existingIds }
+            val orderedSet = ordered.toSet()
+            val merged = ordered + existing.filter { it.proxyId !in orderedSet }.map { it.proxyId }
+            for ((index, proxyId) in merged.withIndex()) {
+                updateUserOrder(routerId, proxyId, (index + 1).toLong())
             }
         }
 

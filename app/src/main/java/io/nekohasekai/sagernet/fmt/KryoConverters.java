@@ -49,6 +49,31 @@ public class KryoConverters {
         return out.toByteArray();
     }
 
+    @FunctionalInterface
+    public interface StrictAction<T> {
+        T run();
+    }
+
+    private static final ThreadLocal<Boolean> STRICT_DESERIALIZATION = ThreadLocal.withInitial(() -> Boolean.FALSE);
+
+    public static boolean isStrictDeserialization() {
+        return STRICT_DESERIALIZATION.get();
+    }
+
+    public static <T> T withStrictDeserialization(StrictAction<T> action) {
+        boolean prev = STRICT_DESERIALIZATION.get();
+        STRICT_DESERIALIZATION.set(true);
+        try {
+            return action.run();
+        } finally {
+            if (prev) {
+                STRICT_DESERIALIZATION.set(true);
+            } else {
+                STRICT_DESERIALIZATION.remove();
+            }
+        }
+    }
+
     public static <T extends Serializable> T deserialize(T bean, byte[] bytes) {
         if (bytes == null) return bean;
         ByteArrayInputStream input = new ByteArrayInputStream(bytes);
@@ -56,6 +81,9 @@ public class KryoConverters {
         try {
             bean.deserializeFromBuffer(buffer);
         } catch (KryoException e) {
+            if (STRICT_DESERIALIZATION.get()) {
+                throw e;
+            }
             Logs.INSTANCE.w(e);
         }
         bean.initializeDefaultValues();

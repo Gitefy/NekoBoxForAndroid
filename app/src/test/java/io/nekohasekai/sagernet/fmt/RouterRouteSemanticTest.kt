@@ -30,6 +30,24 @@ class RouterRouteSemanticTest {
     }
 
     @Test
+    fun mainProxyRulesStayOnLegacyTargetWhenRouterGroupsExist() {
+        for (mainTag in listOf(TAG_PROXY, "legacy-google")) {
+            assertEquals(
+                mainTag,
+                resolveRouteOutbound(RuleEntity(outbound = 0), mainTag, profileTags, routerTags, 11),
+            )
+            assertEquals(
+                mainTag,
+                resolveRouteOutbound(RuleEntity(outbound = 11), mainTag, profileTags, routerTags, 11),
+            )
+            assertEquals(
+                "router.custom",
+                resolveRouteOutbound(RuleEntity(outbound = 0, routerGroupId = 7), mainTag, profileTags, routerTags, 11),
+            )
+        }
+    }
+
+    @Test
     fun routeEditorTargetsAreMutuallyExclusive() {
         assertEquals(
             RouteOutboundChoice(outbound = 0L, routerGroupId = 7L),

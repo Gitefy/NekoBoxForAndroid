@@ -145,12 +145,7 @@ data class ProxyEntity(
         output.writeString(uuid)
         output.writeString(error)
 
-        val bean = runCatching { requireBean() }.getOrNull()
-        val data = if (bean != null) {
-            KryoConverters.serialize(bean)
-        } else {
-            byteArrayOf()
-        }
+        val data = KryoConverters.serialize(requireBean())
         output.writeVarInt(data.size, true)
         output.writeBytes(data)
 
@@ -251,7 +246,7 @@ data class ProxyEntity(
             TYPE_CONFIG -> configBean
             TYPE_SNELL -> snellBean
             else -> error("Undefined type $type")
-        } ?: error("Null ${displayType()} profile (id=$id, groupId=$groupId)")
+        } ?: error("Missing profile data (type=$type, id=$id, groupId=$groupId)")
     }
 
     fun haveLink(): Boolean {

@@ -100,6 +100,7 @@ object RouterGroupRepository {
         val nodes = sourceIds.flatMap { sourceId ->
             SagerDatabase.proxyDao.getByGroup(sourceId).mapNotNull { proxy ->
                 runCatching {
+                    proxy.requireBean()
                     RouterNodeSnapshot(
                         id = proxy.id,
                         stableId = proxy.routerStableId(),
@@ -168,7 +169,7 @@ object RouterGroupRepository {
         return RouterDeleteResult.Deleted
     }
 
-    fun select(routerId: Long, proxyId: Long): RouterGroup {
+    fun select(routerId: Long, proxyId: Long): RouterGroup = SagerDatabase.instance.runInTransaction<RouterGroup> {
         val group = SagerDatabase.routerGroupDao.getById(routerId)
             ?: throw IllegalArgumentException("Proxy group does not exist")
         check(group.enabled && group.mode == RouterGroup.MODE_SELECTOR) {
@@ -179,13 +180,14 @@ object RouterGroupRepository {
         }
         val proxy = SagerDatabase.proxyDao.getById(proxyId)
             ?: throw IllegalArgumentException("Selected node does not exist")
+        proxy.requireBean()
         val stableId = proxy.routerStableId()
         val updated = group.copy(
             selectedProxyId = proxyId,
             selectedNodeKey = routerNodeKey(proxy.groupId, stableId),
         )
         SagerDatabase.routerGroupDao.update(updated)
-        return updated
+        updated
     }
 
     private fun newStableTag(): String =

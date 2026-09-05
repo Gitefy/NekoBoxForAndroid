@@ -24,3 +24,11 @@ jniLibs/
 *.log
 /nekobox_*.json
 .superpowers/
+
+# Private configuration exports: local only, never include in source uploads.
+**/nekobox_*.json
+**/*备份*
+**/*[Bb]ackup*.json
+**/*[Bb]ackup*.zip
+/A[0-9]*.yaml
+/A[0-9]*.json

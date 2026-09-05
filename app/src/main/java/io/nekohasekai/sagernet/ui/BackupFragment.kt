@@ -9,6 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.FileProvider
 import androidx.core.view.isVisible
+import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.jakewharton.processphoenix.ProcessPhoenix
 import io.nekohasekai.sagernet.BuildConfig
@@ -36,11 +37,17 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import java.io.BufferedInputStream
 import java.util.zip.ZipInputStream
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import io.nekohasekai.sagernet.fmt.KryoConverters
+import java.text.SimpleDateFormat
 
 class BackupFragment : NamedFragment(R.layout.layout_backup) {
 
-    private lateinit var binding: LayoutBackupBinding
-    private lateinit var backupData: ByteArray
+    private var pendingExportName: String? = null
     private var currentJob: kotlinx.coroutines.Job? = null
     private var snackbar: Snackbar? = null
 
@@ -58,24 +65,50 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
 
     override fun name0() = app.getString(R.string.backup)
 
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        pendingExportName = savedInstanceState?.getString("pendingExportName")
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString("pendingExportName", pendingExportName)
+        super.onSaveInstanceState(outState)
+    }
+
+    private fun backupFileName() =
+        "nekobox_backup_${SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.ROOT).format(Date())}.json"
+
     var content = ""
     private val exportSettings = registerForActivityResult(ActivityResultContracts.CreateDocument()) { data ->
+        val pending = pendingExportName?.let { File(app.cacheDir, it) }
+        pendingExportName = null
         if (data != null) {
-            runOnDefaultDispatcher {
+            lifecycleScope.launch {
                 try {
-                    requireActivity().contentResolver.openOutputStream(data)!!.use { os ->
-                        os.write(backupData)
+                    onDefaultDispatcher {
+                        check(pending?.isFile == true) { "Backup snapshot is unavailable; export again" }
+                        pending.inputStream().use { input ->
+                            checkNotNull(app.contentResolver.openOutputStream(data, "wt")) {
+                                "Unable to open backup destination"
+                            }.use { input.copyTo(it) }
+                        }
                     }
-                    onMainDispatcher {
+                    if (view != null) {
                         snackbar(getString(R.string.action_export_msg)).show()
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Logs.w(e)
-                    onMainDispatcher {
+                    if (view != null) {
                         snackbar(e.readableMessage).show()
                     }
+                } finally {
+                    pending?.delete()
                 }
             }
+        } else {
+            pending?.delete()
         }
     }
 
@@ -85,40 +118,39 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
         val binding = LayoutBackupBinding.bind(view)
 
         binding.actionExport.setOnClickListener {
-            runOnDefaultDispatcher {
+            if (currentJob?.isActive == true || pendingExportName != null) return@setOnClickListener
+            val profiles = binding.backupConfigurations.isChecked
+            val rules = binding.backupRules.isChecked
+            val settings = binding.backupSettings.isChecked
+            currentJob = viewLifecycleOwner.lifecycleScope.launch {
                 try {
-                    backupData = doBackup(
-                        binding.backupConfigurations.isChecked,
-                        binding.backupRules.isChecked,
-                        binding.backupSettings.isChecked
-                    )
-                    onMainDispatcher {
-                        startFilesForResult(
-                            exportSettings, "nekobox_backup_${Date().toLocaleString()}.json"
-                        )
+                    val cacheFile = onDefaultDispatcher {
+                        val bytes = doBackup(profiles, rules, settings)
+                        File(app.cacheDir, backupFileName()).apply { writeBytes(bytes) }
                     }
+                    pendingExportName = cacheFile.name
+                    startFilesForResult(exportSettings, cacheFile.name)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Logs.w(e)
-                    onMainDispatcher {
-                        snackbar(e.readableMessage).show()
-                    }
+                    pendingExportName = null
+                    snackbar(e.readableMessage).show()
                 }
             }
         }
 
         binding.actionShare.setOnClickListener {
-            runOnDefaultDispatcher {
+            if (currentJob?.isActive == true || pendingExportName != null) return@setOnClickListener
+            val profiles = binding.backupConfigurations.isChecked
+            val rules = binding.backupRules.isChecked
+            val settings = binding.backupSettings.isChecked
+            currentJob = viewLifecycleOwner.lifecycleScope.launch {
                 try {
-                    backupData = doBackup(
-                        binding.backupConfigurations.isChecked,
-                        binding.backupRules.isChecked,
-                        binding.backupSettings.isChecked
-                    )
-                    app.cacheDir.mkdirs()
-                    val cacheFile = File(
-                        app.cacheDir, "nekobox_backup_${Date().toLocaleString()}.json"
-                    )
-                    cacheFile.writeBytes(backupData)
+                    val cacheFile = onDefaultDispatcher {
+                        val bytes = doBackup(profiles, rules, settings)
+                        File(app.cacheDir, backupFileName()).apply { writeBytes(bytes) }
+                    }
                     onMainDispatcher {
                         startActivity(
                             Intent.createChooser(
@@ -132,6 +164,8 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
                             )
                         )
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Logs.w(e)
                     onMainDispatcher {
@@ -152,28 +186,7 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
         rule: Boolean,
         setting: Boolean
     ): ByteArray {
-        val out = JSONObject().apply {
-            put("version", BackupSerializer.BACKUP_VERSION)
-            if (profile) {
-                val allProfiles = SagerDatabase.proxyDao.getAll()
-                val (validProfiles, corruptedProfiles) = allProfiles.partition { proxy ->
-                    runCatching { proxy.requireBean() }.isSuccess
-                }
-                if (corruptedProfiles.isNotEmpty()) {
-                    Logs.w("Found ${corruptedProfiles.size} corrupted profiles in database, cleaning up...")
-                    runCatching { SagerDatabase.proxyDao.deleteProxy(corruptedProfiles) }
-                }
-                BackupSerializer.putParcelableArray(this, "profiles", validProfiles)
-                BackupSerializer.putParcelableArray(this, "groups", SagerDatabase.groupDao.allGroups())
-                BackupSerializer.putParcelableArray(this, "routerGroups", SagerDatabase.routerGroupDao.all())
-                BackupSerializer.putParcelableArray(this, "routerMembers", SagerDatabase.routerMemberDao.all())
-                BackupSerializer.putParcelableArray(this, "routerSources", SagerDatabase.routerGroupSourceDao.all())
-            }
-            if (rule) {
-                val rules = SagerDatabase.rulesDao.allRules()
-                BackupSerializer.putParcelableArray(this, "rules", rules)
-                BackupSerializer.putRouterRuleReferences(this, rules)
-            }
+        val out = BackupSerializer.exportDatabase(SagerDatabase.instance, profile, rule).apply {
             if (setting) {
                 BackupSerializer.putParcelableArray(this, "settings", PublicDatabase.kvPairDao.all())
             }
@@ -185,33 +198,29 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
 
     val importFile = registerForActivityResult(ActivityResultContracts.GetContent()) { file ->
         if (file != null) {
-            runOnDefaultDispatcher {
+            viewLifecycleOwner.lifecycleScope.launch {
                 startImport(file)
             }
         }
     }
 
     suspend fun startImport(file: Uri) {
-        val activity = requireActivity()
-        val fileName = requireContext().contentResolver.query(file, null, null, null, null)
-            ?.use { cursor ->
-                cursor.moveToFirst()
-                cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME).let(cursor::getString)
-            }
-            ?.takeIf { it.isNotBlank() } ?: file.pathSegments.last()
-            .substringAfterLast('/')
-            .substringAfter(':')
-
-        if (!fileName.endsWith(".json") && !fileName.endsWith(".zip")) {
-            onMainDispatcher {
-                snackbar(getString(R.string.backup_not_file, fileName)).show()
-            }
-            return
-        }
-
+        val activity = activity ?: return
         try {
-            val content = requireContext().contentResolver.openInputStream(file)!!.use { input ->
-                if (fileName.endsWith(".zip")) {
+            val fileName = onDefaultDispatcher {
+                activity.contentResolver.query(file, null, null, null, null)?.use { cursor ->
+                    val column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (cursor.moveToFirst() && column >= 0) cursor.getString(column) else null
+                }?.takeIf { it.isNotBlank() }
+                    ?: file.lastPathSegment.orEmpty().substringAfterLast('/').substringAfter(':')
+            }
+            if (!fileName.endsWith(".json", true) && !fileName.endsWith(".zip", true)) {
+                snackbar(getString(R.string.backup_not_file, fileName)).show()
+                return
+            }
+            val content = onDefaultDispatcher {
+                checkNotNull(activity.contentResolver.openInputStream(file)).use { input ->
+                if (fileName.endsWith(".zip", true)) {
                     ZipInputStream(BufferedInputStream(input)).use { zis ->
                         zis.nextEntry?.let { entry ->
                             if (entry.name.endsWith(".json")) {
@@ -224,6 +233,7 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
                 } else {
                     input.readBytes().toString(Charsets.UTF_8)
                 }
+            }
             }
 
             val json = JSONObject(content)
@@ -241,6 +251,9 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
                 MaterialAlertDialogBuilder(requireContext()).setTitle(R.string.backup_import)
                     .setView(import.root)
                     .setPositiveButton(R.string.backup_import) { _, _ ->
+                        val profiles = import.backupConfigurations.isChecked
+                        val rules = import.backupRules.isChecked
+                        val settings = import.backupSettings.isChecked
                         SagerNet.stopService()
 
                         val binding = LayoutProgressBinding.inflate(layoutInflater)
@@ -249,20 +262,23 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
                             .setView(binding.root)
                             .setCancelable(false)
                             .show()
-                        runOnDefaultDispatcher {
-                            runCatching {
-                                finishImport(
-                                    json,
-                                    import.backupConfigurations.isChecked,
-                                    import.backupRules.isChecked,
-                                    import.backupSettings.isChecked
-                                )
-                                triggerFullRestart(requireContext())
-                            }.onFailure {
-                                Logs.w(it)
-                                onMainDispatcher {
+                        val appContext = requireContext().applicationContext
+                        lifecycleScope.launch {
+                            try {
+                                withContext(Dispatchers.Default + NonCancellable) {
+                                    finishImport(json, profiles, rules, settings)
+                                    triggerFullRestart(appContext)
+                                }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                Logs.w(e)
+                                MessageStore.showMessage(e.readableMessage)
+                            } finally {
+                                try {
                                     dialog.dismiss()
-                                    MessageStore.showMessage(activity, it.readableMessage)
+                                } catch (e: Exception) {
+                                    // Ignored if window already detached
                                 }
                             }
                         }
@@ -270,6 +286,8 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
                     .setNegativeButton(android.R.string.cancel, null)
                     .show()
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Logs.w(e)
             onMainDispatcher {
@@ -281,59 +299,149 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
     fun finishImport(
         content: JSONObject, profile: Boolean, rule: Boolean, setting: Boolean
     ) {
-        SagerDatabase.instance.runInTransaction {
-            if (profile && content.has("profiles")) {
-                val profiles = BackupSerializer.getParcelableArray(content, "profiles", ProxyEntity.CREATOR)
-                val groups = BackupSerializer.getParcelableArray(content, "groups", ProxyGroup.CREATOR)
-                val routerGroups = BackupSerializer.getParcelableArray(content, "routerGroups", RouterGroup.CREATOR)
-                val routerMembers = BackupSerializer.getParcelableArray(content, "routerMembers", RouterMember.CREATOR)
-                val routerSources = BackupSerializer.getParcelableArray(content, "routerSources", RouterGroupSource.CREATOR)
+        KryoConverters.withStrictDeserialization {
+            val decodedSettings = if (setting) {
+                require(content.has("settings") && !content.isNull("settings")) {
+                    "Backup settings are missing or invalid"
+                }
+                val list = BackupSerializer.getParcelableArray(content, "settings", KeyValuePair.CREATOR)
+                val keys = HashSet<String>(list.size)
+                for (kv in list) {
+                    require(keys.add(kv.key)) { "Duplicate setting key in backup: ${kv.key}" }
+                }
+                list
+            } else null
 
-                SagerDatabase.routerGroupSourceDao.reset()
-                SagerDatabase.routerMemberDao.reset()
-                SagerDatabase.routerGroupDao.reset()
-                SagerDatabase.proxyDao.reset()
-                SagerDatabase.groupDao.reset()
+            data class DecodedProfiles(
+                val profiles: List<ProxyEntity>,
+                val groups: List<ProxyGroup>,
+                val routerGroups: List<RouterGroup>,
+                val routerMembers: List<RouterMember>,
+                val routerSources: List<RouterGroupSource>,
+                val validGroupIds: Set<Long>,
+                val validRouterIds: Set<Long>,
+                val validProxyIds: Set<Long>,
+            )
 
-                SagerDatabase.groupDao.insert(groups)
-                SagerDatabase.proxyDao.insert(profiles)
-                if (routerGroups.isNotEmpty()) SagerDatabase.routerGroupDao.insert(routerGroups)
-                val validRouterIds = SagerDatabase.routerGroupDao.all().mapTo(hashSetOf()) { it.id }
-                val validGroupIds = SagerDatabase.groupDao.allGroups().mapTo(hashSetOf()) { it.id }
-                val validProxyIds = SagerDatabase.proxyDao.getAll().mapTo(hashSetOf()) { it.id }
-                val validMembers = routerMembers.filter { it.routerId in validRouterIds && it.proxyId in validProxyIds }
-                val validSources = routerSources.filter { it.routerId in validRouterIds && it.sourceGroupId in validGroupIds }
-                if (validMembers.isNotEmpty()) SagerDatabase.routerMemberDao.insert(validMembers)
-                if (validSources.isNotEmpty()) SagerDatabase.routerGroupSourceDao.insert(validSources)
-                SagerDatabase.routerGroupDao.clearInvalidSelections()
-            }
+            val decodedProfileData = if (profile) {
+                require(content.has("profiles") && !content.isNull("profiles")) {
+                    "Backup profiles are missing or invalid"
+                }
+                require(content.has("groups") && !content.isNull("groups")) {
+                    "Backup groups are missing or invalid"
+                }
+                val profilesList = BackupSerializer.getParcelableArray(content, "profiles", ProxyEntity.CREATOR)
+                val groupsList = BackupSerializer.getParcelableArray(content, "groups", ProxyGroup.CREATOR)
+                val routerGroupsList = BackupSerializer.getParcelableArray(content, "routerGroups", RouterGroup.CREATOR)
+                val routerMembersList = BackupSerializer.getParcelableArray(content, "routerMembers", RouterMember.CREATOR)
+                val routerSourcesList = BackupSerializer.getParcelableArray(content, "routerSources", RouterGroupSource.CREATOR)
 
-            if (rule && content.has("rules")) {
+                profilesList.forEach { it.requireBean() }
+                val groupIds = groupsList.mapTo(hashSetOf()) { it.id }
+                require(profilesList.all { it.groupId in groupIds }) {
+                    "Backup contains profiles without a group"
+                }
+
+                val routerIds = routerGroupsList.mapTo(hashSetOf()) { it.id }
+                val proxyIds = profilesList.mapTo(hashSetOf()) { it.id }
+
+                require(routerMembersList.all { it.routerId in routerIds && it.proxyId in proxyIds }) {
+                    "Backup contains router members referencing missing routers or profiles"
+                }
+                require(routerSourcesList.all { it.routerId in routerIds && it.sourceGroupId in groupIds }) {
+                    "Backup contains router sources referencing missing routers or groups"
+                }
+
+                DecodedProfiles(
+                    profiles = profilesList,
+                    groups = groupsList,
+                    routerGroups = routerGroupsList,
+                    routerMembers = routerMembersList,
+                    routerSources = routerSourcesList,
+                    validGroupIds = groupIds,
+                    validRouterIds = routerIds,
+                    validProxyIds = proxyIds,
+                )
+            } else null
+
+            val decodedRules = if (rule) {
+                require(content.has("rules") && !content.isNull("rules")) {
+                    "Backup rules are missing or invalid"
+                }
                 val routerReferences = BackupSerializer.getRouterRuleReferences(content)
-                val rules = BackupSerializer.getParcelableArray(content, "rules") {
+                val rulesList = BackupSerializer.getParcelableArray(content, "rules") {
                     ParcelizeBridge.createRule(it)
                 }.map { imported ->
                     val routerGroupId = routerReferences[imported.id] ?: 0L
                     imported.copy(routerGroupId = routerGroupId)
                 }
-                SagerDatabase.rulesDao.reset()
-                SagerDatabase.rulesDao.insert(rules)
+
+                val targetRouterIds = if (decodedProfileData != null) {
+                    decodedProfileData.validRouterIds
+                } else {
+                    SagerDatabase.routerGroupDao.all().mapTo(hashSetOf()) { it.id }
+                }
+                val targetProxyIds = if (decodedProfileData != null) {
+                    decodedProfileData.validProxyIds
+                } else {
+                    SagerDatabase.proxyDao.getAll().mapTo(hashSetOf()) { it.id }
+                }
+
+                BackupSerializer.validateRuleReferences(rulesList, targetRouterIds, targetProxyIds)
+                rulesList
+            } else null
+
+            if (decodedProfileData != null && decodedRules == null) {
+                val existingRules = SagerDatabase.rulesDao.allRules()
+                BackupSerializer.validateRuleReferences(
+                    existingRules,
+                    decodedProfileData.validRouterIds,
+                    decodedProfileData.validProxyIds
+                )
             }
-        }
-        if (profile) {
-            GroupManager.cleanupDanglingRouterMembers()
-        }
-        if (setting && content.has("settings")) {
-            val settings = BackupSerializer.getParcelableArray(content, "settings", KeyValuePair.CREATOR)
-            PublicDatabase.kvPairDao.reset()
-            PublicDatabase.kvPairDao.insert(settings)
+
+            SagerDatabase.instance.runInTransaction {
+                if (decodedProfileData != null) {
+                    SagerDatabase.routerGroupSourceDao.reset()
+                    SagerDatabase.routerMemberDao.reset()
+                    SagerDatabase.routerGroupDao.reset()
+                    SagerDatabase.proxyDao.reset()
+                    SagerDatabase.groupDao.reset()
+
+                    SagerDatabase.groupDao.insert(decodedProfileData.groups)
+                    SagerDatabase.proxyDao.insert(decodedProfileData.profiles)
+                    if (decodedProfileData.routerGroups.isNotEmpty()) {
+                        SagerDatabase.routerGroupDao.insert(decodedProfileData.routerGroups)
+                    }
+                    if (decodedProfileData.routerMembers.isNotEmpty()) {
+                        SagerDatabase.routerMemberDao.insert(decodedProfileData.routerMembers)
+                    }
+                    if (decodedProfileData.routerSources.isNotEmpty()) {
+                        SagerDatabase.routerGroupSourceDao.insert(decodedProfileData.routerSources)
+                    }
+                    SagerDatabase.routerGroupDao.clearInvalidSelections()
+                }
+
+                if (decodedRules != null) {
+                    SagerDatabase.rulesDao.reset()
+                    SagerDatabase.rulesDao.insert(decodedRules)
+                }
+            }
+            if (decodedProfileData != null) {
+                GroupManager.cleanupDanglingRouterMembers()
+            }
+            if (decodedSettings != null) {
+                PublicDatabase.instance.runInTransaction {
+                    PublicDatabase.kvPairDao.reset()
+                    PublicDatabase.kvPairDao.insert(decodedSettings)
+                }
+            }
         }
     }
 
     private fun showMessage(message: String) {
         MessageStore.showMessage(message)
     }
-
     private fun showMessage(@StringRes resId: Int) {
         MessageStore.showMessage(requireActivity(), resId)
     }

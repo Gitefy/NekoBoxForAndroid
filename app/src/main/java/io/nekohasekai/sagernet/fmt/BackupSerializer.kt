@@ -3,6 +3,7 @@ package io.nekohasekai.sagernet.fmt
 import android.os.Parcel
 import android.os.Parcelable
 import io.nekohasekai.sagernet.database.RuleEntity
+import io.nekohasekai.sagernet.database.SagerDatabase
 import moe.matsuri.nb4a.utils.Util
 import org.json.JSONArray
 import org.json.JSONObject
@@ -11,6 +12,28 @@ import org.json.JSONObject
 object BackupSerializer {
 
     const val BACKUP_VERSION = 3
+
+    /** Capture related rows together; exporting must never repair or delete user data. */
+    fun exportDatabase(database: SagerDatabase, profiles: Boolean, rules: Boolean): JSONObject {
+        val json = JSONObject().put("version", BACKUP_VERSION)
+        database.runInTransaction {
+            if (profiles) {
+                val allProfiles = database.proxyDao().getAll()
+                allProfiles.forEach { it.requireBean() }
+                putParcelableArray(json, "profiles", allProfiles)
+                putParcelableArray(json, "groups", database.groupDao().allGroups())
+                putParcelableArray(json, "routerGroups", database.routerGroupDao().all())
+                putParcelableArray(json, "routerMembers", database.routerMemberDao().all())
+                putParcelableArray(json, "routerSources", database.routerGroupSourceDao().all())
+            }
+            if (rules) {
+                val allRules = database.rulesDao().allRules()
+                putParcelableArray(json, "rules", allRules)
+                putRouterRuleReferences(json, allRules)
+            }
+        }
+        return json
+    }
 
     fun putRouterRuleReferences(json: JSONObject, rules: Iterable<RuleEntity>) {
         json.put("routerRuleRefs", JSONArray().apply {
@@ -23,11 +46,31 @@ object BackupSerializer {
         })
     }
 
+    fun validateRuleReferences(
+        rules: Collection<RuleEntity>,
+        routerIds: Set<Long>,
+        proxyIds: Set<Long>
+    ) {
+        for (rule in rules) {
+            if (rule.routerGroupId > 0L) {
+                require(rule.routerGroupId in routerIds) {
+                    "Rule ${rule.id} references missing router group ${rule.routerGroupId}"
+                }
+            } else if (rule.outbound > 0L) {
+                require(rule.outbound in proxyIds) {
+                    "Rule ${rule.id} references missing profile ${rule.outbound}"
+                }
+            }
+        }
+    }
+
     fun getRouterRuleReferences(json: JSONObject): Map<Long, Long> {
-        if (!json.has("routerRuleRefs") || json.isNull("routerRuleRefs")) {
+        if (!json.has("routerRuleRefs")) {
             return emptyMap()
         }
-        val values = json.getJSONArray("routerRuleRefs")
+        require(!json.isNull("routerRuleRefs")) { "Section 'routerRuleRefs' in backup cannot be null" }
+        val values = json.optJSONArray("routerRuleRefs")
+            ?: throw IllegalArgumentException("Section 'routerRuleRefs' in backup must be a JSON array")
         return buildMap {
             for (index in 0 until values.length()) {
                 val value = values.getJSONObject(index)
@@ -53,8 +96,10 @@ object BackupSerializer {
         key: String,
         creator: Parcelable.Creator<T>
     ): List<T> {
-        if (!json.has(key) || json.isNull(key)) return emptyList()
-        val values = json.getJSONArray(key)
+        if (!json.has(key)) return emptyList()
+        require(!json.isNull(key)) { "Section '$key' in backup cannot be null" }
+        val values = json.optJSONArray(key)
+            ?: throw IllegalArgumentException("Section '$key' in backup must be a JSON array")
         return (0 until values.length()).map { index ->
             decode(values.getString(index), creator)
         }
@@ -65,8 +110,10 @@ object BackupSerializer {
         key: String,
         decoder: (Parcel) -> T
     ): List<T> {
-        if (!json.has(key) || json.isNull(key)) return emptyList()
-        val values = json.getJSONArray(key)
+        if (!json.has(key)) return emptyList()
+        require(!json.isNull(key)) { "Section '$key' in backup cannot be null" }
+        val values = json.optJSONArray(key)
+            ?: throw IllegalArgumentException("Section '$key' in backup must be a JSON array")
         return (0 until values.length()).map { index ->
             val data = Util.b64Decode(values.getString(index))
             val parcel = Parcel.obtain()

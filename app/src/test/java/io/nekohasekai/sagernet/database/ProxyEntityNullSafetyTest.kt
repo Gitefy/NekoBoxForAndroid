@@ -4,8 +4,25 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import org.junit.Assert.assertThrows
+import io.nekohasekai.sagernet.fmt.KryoConverters
 
 class ProxyEntityNullSafetyTest {
+
+    @Test
+    fun serializationRejectsMissingBeanInsteadOfProducingAnUnusableBackup() {
+        val entity = ProxyEntity(id = 42L, groupId = 10L, type = ProxyEntity.TYPE_SOCKS)
+        assertThrows(IllegalStateException::class.java) {
+            KryoConverters.serialize(entity)
+        }
+    }
+
+    @Test
+    fun missingChainBeanReportsErrorWithoutLookingUpAndroidResources() {
+        val entity = ProxyEntity(id = 43L, groupId = 10L, type = ProxyEntity.TYPE_CHAIN)
+        val error = assertThrows(IllegalStateException::class.java) { entity.requireBean() }
+        assertTrue(error.message.orEmpty().contains("43"))
+    }
 
     @Test
     fun displayTypeDoesNotThrowWhenBeansAreNull() {

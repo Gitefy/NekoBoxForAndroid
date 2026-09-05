@@ -11,8 +11,35 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import androidx.room.Room
+import androidx.test.platform.app.InstrumentationRegistry
+import io.nekohasekai.sagernet.database.ProxyEntity
+import io.nekohasekai.sagernet.database.ProxyGroup
+import io.nekohasekai.sagernet.database.SagerDatabase
+import org.junit.Assert.assertThrows
 
 class BackupSerializationTest {
+
+    @Test
+    fun exportOfDamagedProfileFailsWithoutDeletingProfilesMembersOrRules() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val database = Room.inMemoryDatabaseBuilder(context, SagerDatabase::class.java).build()
+        try {
+            database.groupDao().insert(listOf(ProxyGroup(id = 10, ungrouped = true)))
+            database.proxyDao().insert(listOf(ProxyEntity(id = 20, groupId = 10)))
+            database.routerGroupDao().insert(listOf(RouterGroup(id = 30, stableTag = "router.test")))
+            database.routerMemberDao().insert(listOf(RouterMember(30, 20)))
+            database.rulesDao().insert(listOf(RuleEntity(id = 40, routerGroupId = 30)))
+            assertThrows(IllegalStateException::class.java) {
+                BackupSerializer.exportDatabase(database, true, true)
+            }
+            assertEquals(listOf(20L), database.proxyDao().getAll().map { it.id })
+            assertEquals(listOf(20L), database.routerMemberDao().all().map { it.proxyId })
+            assertEquals(30L, database.rulesDao().allRules().single().routerGroupId)
+        } finally {
+            database.close()
+        }
+    }
 
     @Test
     fun routerGroupsMembersSourcesAndRuleReferencesSurviveBackupRoundTrip() {

@@ -249,7 +249,10 @@ object GroupManager {
 
     fun cleanupDanglingRouterMembers(clearInvalidSelections: Boolean = true) {
         runCatching {
-            val currentProxyIds = SagerDatabase.proxyDao.getAll().map { it.id }.toSet()
+            val currentProxyIds = SagerDatabase.proxyDao.getAll()
+                .filter { runCatching { it.requireBean() }.isSuccess }
+                .map { it.id }
+                .toSet()
             val members = SagerDatabase.routerGroupDao.all().flatMap { router ->
                 SagerDatabase.routerMemberDao.getByRouter(router.id)
             }
