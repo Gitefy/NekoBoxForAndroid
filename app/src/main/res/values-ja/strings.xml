@@ -526,7 +526,7 @@
     <string name="webdav_path">バックアップパス</string>
     <string name="webdav_test">接続をテスト</string>
     <string name="webdav_test_success">接続に成功しました</string>
-    <string name="webdav_test_failed" formatted="false">接続に失敗しました: %s</string>
+    <string name="webdav_test_failed">接続に失敗しました: %1$s</string>
     <string name="backup_to_webdav">WebDAV にバックアップ</string>
     <string name="restore_from_webdav">WebDAV から復元</string>
     <string name="webdav_backup_success">WebDAV へのバックアップに成功しました</string>

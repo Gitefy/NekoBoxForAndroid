@@ -600,7 +600,7 @@
     <string name="webdav_path">Путь резервной копии</string>
     <string name="webdav_test">Проверить соединение</string>
     <string name="webdav_test_success">Соединение успешно</string>
-    <string name="webdav_test_failed" formatted="false">Ошибка соединения: %s</string>
+    <string name="webdav_test_failed">Ошибка соединения: %1$s</string>
     <string name="backup_to_webdav">Резервное копирование в WebDAV</string>
     <string name="restore_from_webdav">Восстановление из WebDAV</string>
     <string name="webdav_backup_success">Резервное копирование в WebDAV выполнено</string>

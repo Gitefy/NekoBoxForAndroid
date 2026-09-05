@@ -87,6 +87,16 @@ data class RouterGroup(
         @Update
         fun update(router: RouterGroup): Int
 
+        @Query("""
+            UPDATE router_groups SET selectedProxyId = -1, selectedNodeKey = ''
+            WHERE selectedProxyId != -1 AND (
+                NOT EXISTS (SELECT 1 FROM proxy_entities WHERE id = router_groups.selectedProxyId)
+                OR NOT EXISTS (SELECT 1 FROM router_members
+                    WHERE routerId = router_groups.id AND proxyId = router_groups.selectedProxyId)
+            )
+        """)
+        fun clearInvalidSelections(): Int
+
         @Delete
         fun delete(router: RouterGroup): Int
 

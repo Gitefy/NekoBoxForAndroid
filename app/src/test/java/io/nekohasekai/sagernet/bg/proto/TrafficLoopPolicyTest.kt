@@ -6,6 +6,13 @@ import org.junit.Test
 class TrafficLoopPolicyTest {
 
     @Test
+    fun disablingSpeedStillPollsRouterSelectionWithoutBusySpinning() {
+        assertEquals(1_000L, TrafficLoopPolicy.delayMillis(0L, true, false))
+        assertEquals(30_000L, TrafficLoopPolicy.delayMillis(0L, false, false))
+        assertEquals(1_000L, TrafficLoopPolicy.delayMillis(-1L, true, false))
+    }
+
+    @Test
     fun keepsConfiguredRefreshRateWhileHomePageIsVisible() {
         assertEquals(
             1_000L,

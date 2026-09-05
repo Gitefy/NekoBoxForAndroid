@@ -10,7 +10,7 @@ object TrafficLoopPolicy {
         mainActivityForeground: Boolean,
         notificationSpeedVisible: Boolean,
     ): Long = when {
-        mainActivityForeground -> configuredMillis
+        mainActivityForeground -> if (configuredMillis > 0L) configuredMillis else 1_000L
         notificationSpeedVisible -> maxOf(configuredMillis, MIN_BACKGROUND_NOTIFICATION_MILLIS)
         else -> maxOf(configuredMillis, MIN_BACKGROUND_HIDDEN_MILLIS)
     }

@@ -678,7 +678,7 @@
     <string name="webdav_path">Backup Path</string>
     <string name="webdav_test">Test Connection</string>
     <string name="webdav_test_success">Connection Successful</string>
-    <string name="webdav_test_failed" formatted="false">Connection Failed: %s</string>
+    <string name="webdav_test_failed">Connection Failed: %1$s</string>
     <string name="backup_to_webdav">Backup to WebDAV</string>
     <string name="restore_from_webdav">Restore from WebDAV</string>
     <string name="webdav_backup_success">Backup to WebDAV successful</string>

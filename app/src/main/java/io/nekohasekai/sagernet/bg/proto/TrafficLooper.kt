@@ -11,6 +11,7 @@ import io.nekohasekai.sagernet.fmt.TAG_BYPASS
 import io.nekohasekai.sagernet.fmt.TAG_PROXY
 import io.nekohasekai.sagernet.ktx.Logs
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 
 class TrafficLooper
@@ -23,6 +24,15 @@ class TrafficLooper
     }
 
     private var job: Job? = null
+    private val updateRequests = Channel<Unit>(Channel.CONFLATED)
+
+    fun requestUpdate() {
+        updateRequests.trySend(Unit)
+    }
+
+    private suspend fun awaitUpdate(delayMillis: Long) {
+        withTimeoutOrNull(delayMillis) { updateRequests.receive() }
+    }
     private val idMap = mutableMapOf<Long, TrafficUpdater.TrafficLooperData>() // id to 1 data
     private val tagMap = mutableMapOf<String, TrafficUpdater.TrafficLooperData>() // tag to 1 data
     private val stateMutex = Mutex()
@@ -48,6 +58,7 @@ class TrafficLooper
         // finally traffic post
         if (!DataStore.profileTrafficStatistics) return
         withStateLock {
+            trafficUpdater?.updateAll()
             val traffic = mutableMapOf<Long, TrafficData>()
             data.proxy?.config?.trafficMap?.forEach { (_, ents) ->
                 for (ent in ents) {
@@ -171,7 +182,6 @@ class TrafficLooper
         val delayMs = DataStore.speedInterval.toLong()
         val showDirectSpeed = DataStore.showDirectSpeed
         val profileTrafficStatistics = DataStore.profileTrafficStatistics
-        if (delayMs == 0L) return
 
         // for display
         val itemBypass = TrafficUpdater.TrafficLooperData(tag = TAG_BYPASS)
@@ -179,11 +189,30 @@ class TrafficLooper
         while (currentCoroutineContext().isActive) {
             val proxy = data.proxy
             if (proxy == null) {
-                delay(delayMs)
+                awaitUpdate(TrafficLoopPolicy.initializationRetryMillis(delayMs))
                 continue
             }
             if (!proxy.isInitialized()) {
-                delay(TrafficLoopPolicy.initializationRetryMillis(delayMs))
+                awaitUpdate(TrafficLoopPolicy.initializationRetryMillis(delayMs))
+                continue
+            }
+
+            if (delayMs <= 0L) {
+                if (data.state == BaseService.State.Connected) {
+                    val selections = proxy.currentUrlTestSelections()
+                    data.binder.broadcast { callback ->
+                        if (data.binder.callbackIdMap[callback] ==
+                            SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
+                        ) {
+                            callback.cbSpeedUpdate(SpeedDisplayData(urlTestSelections = selections))
+                        }
+                    }
+                }
+                awaitUpdate(TrafficLoopPolicy.delayMillis(
+                    delayMs,
+                    data.binder.callbackIdMap.containsValue(SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND),
+                    false,
+                ))
                 continue
             }
 
@@ -292,7 +321,7 @@ class TrafficLooper
             val mainActivityForeground = data.binder.callbackIdMap.containsValue(
                 SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
             )
-            delay(
+            awaitUpdate(
                 TrafficLoopPolicy.delayMillis(
                     configuredMillis = delayMs,
                     mainActivityForeground = mainActivityForeground,

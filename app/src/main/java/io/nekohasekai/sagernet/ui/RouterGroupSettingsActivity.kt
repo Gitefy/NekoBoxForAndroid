@@ -5,6 +5,7 @@ import android.view.Menu
 import android.view.MenuItem
 import android.widget.Toast
 import androidx.appcompat.widget.Toolbar
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
 import androidx.preference.MultiSelectListPreference
@@ -51,7 +52,16 @@ class RouterGroupSettingsActivity : ThemedActivity(R.layout.layout_settings_acti
     override fun onOptionsItemSelected(item: MenuItem): Boolean = when (item.itemId) {
         android.R.id.home -> { finish(); true }
         R.id.action_apply -> { editor?.save(); true }
-        R.id.action_delete -> { editor?.delete(); true }
+        R.id.action_delete -> {
+            MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.delete_group_prompt)
+                .setPositiveButton(R.string.yes) { _, _ ->
+                    editor?.delete()
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
+            true
+        }
         else -> super.onOptionsItemSelected(item)
     }
 

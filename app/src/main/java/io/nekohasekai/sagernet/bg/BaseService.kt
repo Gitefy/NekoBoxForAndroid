@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.os.*
 import android.app.ActivityManager
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import io.nekohasekai.sagernet.Action
 import io.nekohasekai.sagernet.BootReceiver
 import io.nekohasekai.sagernet.R
@@ -33,6 +34,7 @@ import libcore.Libcore
 import moe.matsuri.nb4a.Protocols
 import moe.matsuri.nb4a.utils.Util
 import java.net.UnknownHostException
+import java.util.concurrent.ConcurrentHashMap
 
 class BaseService {
 
@@ -50,8 +52,8 @@ class BaseService {
     interface ExpectedException
 
     class Data internal constructor(private val service: Interface) {
-        var state = State.Stopped
-        var proxy: ProxyInstance? = null
+        @Volatile var state = State.Stopped
+        @Volatile var proxy: ProxyInstance? = null
         var notification: ServiceNotification? = null
 
         val receiver = broadcastReceiver { ctx, intent ->
@@ -106,17 +108,19 @@ class BaseService {
         private val callbacks = object : RemoteCallbackList<ISagerNetServiceCallback>() {
             override fun onCallbackDied(callback: ISagerNetServiceCallback?, cookie: Any?) {
                 super.onCallbackDied(callback, cookie)
+                callback?.let(callbackIdMap::remove)
             }
         }
 
-        val callbackIdMap = mutableMapOf<ISagerNetServiceCallback, Int>()
+        val callbackIdMap = ConcurrentHashMap<ISagerNetServiceCallback, Int>()
 
         override val coroutineContext = Dispatchers.Main.immediate + Job()
 
         override fun getState(): Int = (data?.state ?: State.Idle).ordinal
         override fun getProfileName(): String = data?.proxy?.displayProfileName ?: "Idle"
         override fun getCurrentUrlTestSelections(): LongArray =
-            data?.proxy?.currentUrlTestSelections() ?: longArrayOf()
+            data?.takeIf { it.state == State.Connected }?.proxy?.currentUrlTestSelections()
+                ?: longArrayOf()
 
         override fun registerCallback(cb: ISagerNetServiceCallback, id: Int) {
             if (id == SagerConnection.CONNECTION_ID_RESTART_BG) {
@@ -127,6 +131,9 @@ class BaseService {
                 callbacks.register(cb)
             }
             callbackIdMap[cb] = id
+            if (id == SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND) {
+                data?.proxy?.looper?.requestUpdate()
+            }
         }
 
         private val broadcastMutex = Mutex()
@@ -184,6 +191,7 @@ class BaseService {
 
         override fun close() {
             callbacks.kill()
+            callbackIdMap.clear()
             cancel()
             data = null
         }
@@ -204,6 +212,7 @@ class BaseService {
         ) {
             if (DataStore.selectedProxy == 0L) {
                 stopRunner(false, (this as Context).getString(R.string.profile_empty))
+                return
             }
             val routerReloadRequested = routerTag != null && routerProxyId != null
             if (routerReloadRequested && trySelectRouter(routerTag!!, routerProxyId!!)) return
@@ -340,23 +349,34 @@ class BaseService {
         var upstreamInterfaceName: String?
 
         suspend fun preInit() {
-            DefaultNetworkListener.start(this) {
-                SagerNet.connectivity.getLinkProperties(it)?.also { link ->
-                    SagerNet.underlyingNetwork = it
+            var previousNetwork: android.net.Network? = null
+            var hadNetwork = false
+            DefaultNetworkListener.start(this) { network ->
+                if (network == null) {
+                    previousNetwork = null
+                    SagerNet.underlyingNetwork = null
+                    return@start
+                }
+                SagerNet.connectivity.getLinkProperties(network)?.also { link ->
+                    val networkChanged = hadNetwork && previousNetwork != network
+                    previousNetwork = network
+                    hadNetwork = true
+                    SagerNet.underlyingNetwork = network
                     DataStore.vpnService?.updateUnderlyingNetwork()
                     //
                     val oldName = upstreamInterfaceName
                     if (oldName != link.interfaceName) {
                         upstreamInterfaceName = link.interfaceName
                     }
-                    if (oldName != null && upstreamInterfaceName != null && oldName != upstreamInterfaceName) {
+                    if (networkChanged || (oldName != null && upstreamInterfaceName != null && oldName != upstreamInterfaceName)) {
                         Logs.d("Network changed: $oldName -> $upstreamInterfaceName")
                         if (DataStore.networkChangeResetConnections) {
                             Libcore.resetAllConnections(true)
                         }
                         val runningProxy = data.proxy
-                        if (runningProxy?.isInitialized() == true) {
+                        if (data.state == State.Connected && runningProxy?.isInitialized() == true) {
                             data.binder.launch(Dispatchers.IO) {
+                                if (data.state != State.Connected || data.proxy !== runningProxy) return@launch
                                 runningProxy.config.routerUrlTestTags.values.distinct().forEach {
                                     runningProxy.box.refreshURLTestFor(it)
                                 }
@@ -411,27 +431,15 @@ class BaseService {
                     }
                     addAction(Action.RESET_UPSTREAM_CONNECTIONS)
                 }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    registerReceiver(
-                        data.receiver,
-                        filter,
-                        "$packageName.SERVICE",
-                        null,
-                        Context.RECEIVER_EXPORTED
-                    )
-                } else {
-                    registerReceiver(
-                        data.receiver,
-                        filter,
-                        "$packageName.SERVICE",
-                        null
-                    )
-                }
+                ContextCompat.registerReceiver(
+                    this, data.receiver, filter, "$packageName.SERVICE", null,
+                    ContextCompat.RECEIVER_NOT_EXPORTED,
+                )
                 data.closeReceiverRegistered = true
             }
 
             data.changeState(State.Connecting)
-            runOnMainDispatcher {
+            data.connectingJob = data.binder.launch(start = CoroutineStart.LAZY) {
                 try {
                     data.notification = createNotification(ServiceNotification.genTitle(profile))
 
@@ -471,6 +479,7 @@ class BaseService {
                     data.connectingJob = null
                 }
             }
+            data.connectingJob?.start()
             return Service.START_NOT_STICKY
         }
     }

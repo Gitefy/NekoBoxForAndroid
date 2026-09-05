@@ -145,10 +145,14 @@ object GroupManager {
     }
 
     suspend fun reconcileRouterMembers(previous: RouterRefreshSnapshot) {
-        cleanupDanglingRouterMembers()
+        // Keep the old selected ID until reconciliation can resolve it through the snapshot.
+        cleanupDanglingRouterMembers(clearInvalidSelections = false)
         val routers = SagerDatabase.routerGroupDao.all()
-            .filter { it.enabled && it.stableTag.isNotBlank() }
-        if (routers.isEmpty()) return
+            .filter { it.stableTag.isNotBlank() }
+        if (routers.isEmpty()) {
+            cleanupDanglingRouterMembers()
+            return
+        }
 
         val groups = routers.mapNotNull { router ->
             runCatching {
@@ -162,9 +166,15 @@ object GroupManager {
                 )
             }.onFailure { error ->
                 Logs.e("Router ${router.stableTag} match configuration is invalid", error)
+                SagerDatabase.routerGroupDao.update(
+                    router.copy(lastError = "Invalid Router match configuration"),
+                )
             }.getOrNull()
         }
-        if (groups.size != routers.size) return
+        if (groups.isEmpty()) {
+            cleanupDanglingRouterMembers()
+            return
+        }
 
         val sourceGroups = SagerDatabase.groupDao.allGroups().associateBy { it.id }
         val nodes = SagerDatabase.proxyDao.getAll().mapNotNull { proxy ->
@@ -187,9 +197,10 @@ object GroupManager {
         val result = RouterReconciler.reconcile(nodes, groups, previous.membersByRouterId)
         if (result.error != null) {
             Logs.e("Router reconciliation preserved existing members: ${result.error}")
-            routers.forEach { router ->
+            routers.filter { router -> groups.any { it.routerId == router.id } }.forEach { router ->
                 SagerDatabase.routerGroupDao.update(router.copy(lastError = result.error))
             }
+            cleanupDanglingRouterMembers()
             return
         }
 
@@ -222,6 +233,7 @@ object GroupManager {
                 )
             }
         }
+        cleanupDanglingRouterMembers()
     }
 
     fun markRouterRefreshFailed(sourceGroupId: Long, message: String) {
@@ -233,7 +245,7 @@ object GroupManager {
             }
     }
 
-    fun cleanupDanglingRouterMembers() {
+    fun cleanupDanglingRouterMembers(clearInvalidSelections: Boolean = true) {
         runCatching {
             val currentProxyIds = SagerDatabase.proxyDao.getAll().map { it.id }.toSet()
             val members = SagerDatabase.routerGroupDao.all().flatMap { router ->
@@ -244,6 +256,7 @@ object GroupManager {
             }, currentProxyIds).forEach { proxyId ->
                 SagerDatabase.routerMemberDao.deleteByProxy(proxyId)
             }
+            if (clearInvalidSelections) SagerDatabase.routerGroupDao.clearInvalidSelections()
         }.onFailure { error ->
             Logs.e("Unable to clean dangling router members", error)
         }

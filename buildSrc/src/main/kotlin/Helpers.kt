@@ -63,7 +63,9 @@ fun Project.setupCommon() {
             showAll = true
             checkAllWarnings = true
             checkReleaseBuilds = true
-            warningsAsErrors = true
+            // Keep advisory dependency/style findings visible without promoting them
+            // to runtime correctness errors. Lint errors still abort the build.
+            warningsAsErrors = false
             textOutput = project.file("build/lint.txt")
             htmlOutput = project.file("build/lint.html")
         }

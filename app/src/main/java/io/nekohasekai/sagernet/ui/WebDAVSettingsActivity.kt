@@ -148,17 +148,17 @@ class WebDAVSettingsActivity : ThemedActivity() {
                         }
                         .build()
 
-                    val response = client.newCall(authRequest).execute()
-                    
-                    when (response.code) {
-                        401 -> throw Exception(getString(R.string.webdav_auth_error))
-                        403 -> throw Exception(getString(R.string.webdav_permission_denied))
-                        404 -> throw Exception(getString(R.string.webdav_server_not_found))
-                        in 500..599 -> throw Exception(getString(R.string.webdav_server_error))
-                    }
+                    client.newCall(authRequest).execute().use { response ->
+                        when (response.code) {
+                            401 -> throw Exception(getString(R.string.webdav_auth_error))
+                            403 -> throw Exception(getString(R.string.webdav_permission_denied))
+                            404 -> throw Exception(getString(R.string.webdav_server_not_found))
+                            in 500..599 -> throw Exception(getString(R.string.webdav_server_error))
+                        }
 
-                    if (!response.isSuccessful) {
-                        throw Exception(getString(R.string.webdav_connect_failed, response.code))
+                        if (!response.isSuccessful) {
+                            throw Exception(getString(R.string.webdav_connect_failed, response.code))
+                        }
                     }
 
                     // 如果认证成功，再测试目录操作
@@ -185,9 +185,10 @@ class WebDAVSettingsActivity : ThemedActivity() {
                             }
                             .build()
 
-                        val dirResponse = client.newCall(dirRequest).execute()
-                        if (!dirResponse.isSuccessful && dirResponse.code != 405) {  // 405 表示目录已存在
-                            throw Exception(getString(R.string.webdav_create_dir_failed))
+                        client.newCall(dirRequest).execute().use { dirResponse ->
+                            if (!dirResponse.isSuccessful && dirResponse.code != 405) {  // 405 表示目录已存在
+                                throw Exception(getString(R.string.webdav_create_dir_failed))
+                            }
                         }
                     }
 

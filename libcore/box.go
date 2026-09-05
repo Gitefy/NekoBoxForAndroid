@@ -95,6 +95,7 @@ func NewSingBoxInstance(config string, localTransport LocalDNSTransport) (b *Box
 	var options option.Options
 	err = options.UnmarshalJSONContext(ctx, []byte(config))
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("decode config: %v", err)
 	}
 
@@ -207,6 +208,11 @@ func (b *BoxInstance) QueryStats(tag, direct string) int64 {
 }
 
 func (b *BoxInstance) SelectOutbound(tag string) bool {
+	b.access.Lock()
+	defer b.access.Unlock()
+	if b.state != 1 {
+		return false
+	}
 	if b.selector != nil {
 		return b.selector.SelectOutbound(tag)
 	}
@@ -214,6 +220,11 @@ func (b *BoxInstance) SelectOutbound(tag string) bool {
 }
 
 func (b *BoxInstance) SelectOutboundFor(selectorTag, tag string) bool {
+	b.access.Lock()
+	defer b.access.Unlock()
+	if b.state != 1 {
+		return false
+	}
 	proxy, ok := b.Outbound().Outbound(selectorTag)
 	if !ok {
 		return false
@@ -226,6 +237,11 @@ func (b *BoxInstance) SelectOutboundFor(selectorTag, tag string) bool {
 }
 
 func (b *BoxInstance) CurrentOutboundFor(groupTag string) string {
+	b.access.Lock()
+	defer b.access.Unlock()
+	if b.state != 1 {
+		return ""
+	}
 	proxy, ok := b.Outbound().Outbound(groupTag)
 	if !ok {
 		return ""
@@ -241,6 +257,11 @@ func (b *BoxInstance) CurrentOutboundFor(groupTag string) string {
 }
 
 func (b *BoxInstance) RefreshURLTestFor(groupTag string) bool {
+	b.access.Lock()
+	defer b.access.Unlock()
+	if b.state != 1 {
+		return false
+	}
 	proxy, ok := b.Outbound().Outbound(groupTag)
 	if !ok {
 		return false
@@ -249,7 +270,9 @@ func (b *BoxInstance) RefreshURLTestFor(groupTag string) bool {
 	if !ok {
 		return false
 	}
-	urlTest.CheckOutbounds()
+	// The group's context is cancelled by Close. Do not hold up Android's
+	// caller or core shutdown while probes wait for unreachable nodes.
+	go urlTest.CheckOutbounds()
 	return true
 }
 

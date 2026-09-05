@@ -593,7 +593,7 @@
     <string name="webdav_path">مسیر پشتیبان</string>
     <string name="webdav_test">آزمایش اتصال</string>
     <string name="webdav_test_success">اتصال موفق بود</string>
-    <string name="webdav_test_failed" formatted="false">اتصال ناموفق بود: %s</string>
+    <string name="webdav_test_failed">اتصال ناموفق بود: %1$s</string>
     <string name="backup_to_webdav">پشتیبان‌گیری در WebDAV</string>
     <string name="restore_from_webdav">بازیابی از WebDAV</string>
     <string name="webdav_backup_success">پشتیبان‌گیری در WebDAV موفق بود</string>

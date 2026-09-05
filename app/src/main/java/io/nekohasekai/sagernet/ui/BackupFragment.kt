@@ -691,6 +691,7 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
                 val validSources = routerSources.filter { it.routerId in validRouterIds && it.sourceGroupId in validGroupIds }
                 if (validMembers.isNotEmpty()) SagerDatabase.routerMemberDao.insert(validMembers)
                 if (validSources.isNotEmpty()) SagerDatabase.routerGroupSourceDao.insert(validSources)
+                SagerDatabase.routerGroupDao.clearInvalidSelections()
             }
 
             if (rule && content.has("rules")) {
@@ -704,6 +705,9 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
                 SagerDatabase.rulesDao.reset()
                 SagerDatabase.rulesDao.insert(rules)
             }
+        }
+        if (profile) {
+            GroupManager.cleanupDanglingRouterMembers()
         }
         if (setting && content.has("settings")) {
             val settings = BackupSerializer.getParcelableArray(content, "settings", KeyValuePair.CREATOR)

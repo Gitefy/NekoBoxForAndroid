@@ -69,7 +69,10 @@ object RouterReconciler {
                 .mapNotNull { indexed ->
                     val previous = indexed.value
                     val current = currentById[previous.proxyId]
-                        ?.takeIf { it.subscriptionId == previous.sourceGroupId && it.id in matchedIdSet }
+                        ?.takeIf {
+                            it.subscriptionId == previous.sourceGroupId && it.id in matchedIdSet &&
+                                routerStableIdOrFallback(it.stableId, it.id) == previous.stableId
+                        }
                         ?: currentByStableKey[StableNodeKey(previous.sourceGroupId, previous.stableId)]
                             ?.takeIf { it.id in matchedIdSet }
                     current?.let { node ->
@@ -103,11 +106,13 @@ object RouterReconciler {
             val members = membersByRouterId[group.routerId].orEmpty()
             val previousSelected = previousMembers[group.routerId].orEmpty()
                 .firstOrNull { it.proxyId == group.selectedProxyId }
-            val selected = members.firstOrNull { it.proxyId == group.selectedProxyId }
-                ?: previousSelected?.let { old ->
+            val selected = previousSelected?.let { old ->
                     members.firstOrNull {
                         it.stableId == old.stableId && it.sourceGroupId == old.sourceGroupId
                     }
+                }
+                ?: members.firstOrNull {
+                    previousSelected == null && it.proxyId == group.selectedProxyId
                 }
                 ?: members.firstOrNull()
             group.routerId to selected?.proxyId

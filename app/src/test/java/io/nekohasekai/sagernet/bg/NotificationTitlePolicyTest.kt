@@ -4,10 +4,19 @@ import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.fmt.http.HttpBean
 import android.app.Notification
 import android.app.NotificationManager
+import androidx.core.app.NotificationCompat
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class NotificationTitlePolicyTest {
+
+    @Test
+    fun wakeLockChangesNeverPromoteHiddenNotification() {
+        assertEquals(NotificationCompat.PRIORITY_MIN, ServiceNotification.notificationPriority(false, false))
+        assertEquals(NotificationCompat.PRIORITY_MIN, ServiceNotification.notificationPriority(false, true))
+        assertEquals(NotificationCompat.PRIORITY_LOW, ServiceNotification.notificationPriority(true, false))
+        assertEquals(NotificationCompat.PRIORITY_HIGH, ServiceNotification.notificationPriority(true, true))
+    }
 
     @Test
     fun vpnNotificationIsHiddenFromLockScreen() {

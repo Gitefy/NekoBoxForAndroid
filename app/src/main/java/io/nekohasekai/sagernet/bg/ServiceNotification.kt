@@ -1,7 +1,6 @@
 package io.nekohasekai.sagernet.bg
 
 import android.app.Notification
-import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
@@ -56,12 +55,18 @@ class ServiceNotification(
         )
 
         fun vpnNotificationChannelPolicy() = NotificationChannelPolicy(
-            importance = NotificationManager.IMPORTANCE_MIN,
+            importance = NotificationManagerCompat.IMPORTANCE_MIN,
             lockscreenVisibility = Notification.VISIBILITY_SECRET,
         )
 
         fun shouldPostSpeed(visible: Boolean, interactive: Boolean): Boolean =
             visible && interactive
+
+        fun notificationPriority(visible: Boolean, wakeLockAcquired: Boolean): Int = when {
+            !visible -> NotificationCompat.PRIORITY_MIN
+            wakeLockAcquired -> NotificationCompat.PRIORITY_HIGH
+            else -> NotificationCompat.PRIORITY_LOW
+        }
 
         fun genTitle(
             ent: ProxyEntity?,
@@ -133,8 +138,7 @@ class ServiceNotification(
     suspend fun postNotificationWakeLockStatus(acquired: Boolean) {
         updateActions()
         useBuilder {
-            it.priority =
-                if (acquired) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_LOW
+            it.priority = notificationPriority(visible, acquired)
         }
         update()
     }
@@ -153,6 +157,7 @@ class ServiceNotification(
         .setPriority(if (visible) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_MIN)
 
     private val buildLock = Mutex()
+    @Volatile private var destroyed = false
 
     private suspend fun useBuilder(f: (NotificationCompat.Builder) -> Unit) {
         buildLock.withLock {
@@ -200,7 +205,7 @@ class ServiceNotification(
             val resetUpstreamAction = NotificationCompat.Action.Builder(
                 0, service.getString(R.string.reset_connections),
                 PendingIntent.getBroadcast(
-                    service, 0, Intent(Action.RESET_UPSTREAM_CONNECTIONS), flags
+                    service, 0, Intent(Action.RESET_UPSTREAM_CONNECTIONS).setPackage(service.packageName), flags
                 )
             ).setShowsUserInterface(false).build()
             it.addAction(resetUpstreamAction)
@@ -219,6 +224,7 @@ class ServiceNotification(
 
     private suspend fun show() =
         useBuilder {
+            if (destroyed) return@useBuilder
             try {
                 if (Build.VERSION.SDK_INT >= 34) {
                     (service as Service).startForeground(
@@ -239,10 +245,13 @@ class ServiceNotification(
         }
 
     private suspend fun update() = useBuilder {
+        if (destroyed) return@useBuilder
         NotificationManagerCompat.from(service as Service).notify(notificationId, it.build())
     }
 
     fun destroy() {
+        if (destroyed) return
+        destroyed = true
         listenPostSpeed = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             (service as Service).stopForeground(Service.STOP_FOREGROUND_REMOVE)

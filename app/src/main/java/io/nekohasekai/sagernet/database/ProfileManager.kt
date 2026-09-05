@@ -110,6 +110,7 @@ object ProfileManager {
     suspend fun deleteProfile2(groupId: Long, profileId: Long) {
         SagerDatabase.routerMemberDao.deleteByProxy(profileId)
         if (SagerDatabase.proxyDao.deleteById(profileId) == 0) return
+        GroupManager.cleanupDanglingRouterMembers()
         if (DataStore.selectedProxy == profileId) {
             DataStore.selectedProxy = 0L
         }
@@ -118,6 +119,7 @@ object ProfileManager {
     suspend fun deleteProfile(groupId: Long, profileId: Long) {
         SagerDatabase.routerMemberDao.deleteByProxy(profileId)
         if (SagerDatabase.proxyDao.deleteById(profileId) == 0) return
+        GroupManager.cleanupDanglingRouterMembers()
         if (DataStore.selectedProxy == profileId) {
             DataStore.selectedProxy = 0L
         }

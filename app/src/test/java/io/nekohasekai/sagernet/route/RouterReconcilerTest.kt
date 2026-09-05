@@ -9,6 +9,40 @@ import org.junit.Test
 class RouterReconcilerTest {
 
     @Test
+    fun reusedProfileIdDoesNotStealStableMemberOrderOrSelection() {
+        val result = RouterReconciler.reconcile(
+            currentNodes = listOf(
+                RouterNodeSnapshot(100, "replacement", "US A", subscriptionId = 10),
+                RouterNodeSnapshot(200, "original", "US renamed", subscriptionId = 10),
+            ),
+            groups = listOf(group(1, setOf(10), "US", selectedProxyId = 100)),
+            previousMembers = mapOf(1L to listOf(RouterMemberSnapshot(100, "original", 10, 7))),
+        )
+
+        assertEquals(listOf(200L, 100L), result.membersByRouterId.getValue(1).map { it.proxyId })
+        assertEquals(listOf(7L, 8L), result.membersByRouterId.getValue(1).map { it.userOrder })
+        assertEquals(200L, result.selectedProxyIdsByRouterId.getValue(1))
+    }
+
+    @Test
+    fun selectionFollowsStableIdentityWhenExistingIdsSwapNodes() {
+        val result = RouterReconciler.reconcile(
+            currentNodes = listOf(
+                RouterNodeSnapshot(100, "b", "US A", subscriptionId = 10),
+                RouterNodeSnapshot(200, "a", "US B", subscriptionId = 10),
+            ),
+            groups = listOf(group(1, setOf(10), "US", selectedProxyId = 100)),
+            previousMembers = mapOf(1L to listOf(
+                RouterMemberSnapshot(100, "a", 10, 7),
+                RouterMemberSnapshot(200, "b", 10, 8),
+            )),
+        )
+
+        assertEquals(200L, result.selectedProxyIdsByRouterId.getValue(1))
+        assertEquals(listOf(200L, 100L), result.membersByRouterId.getValue(1).map { it.proxyId })
+    }
+
+    @Test
     fun remapsMemberAndSelectionBySourceScopedStableIdentity() {
         val result = RouterReconciler.reconcile(
             currentNodes = listOf(RouterNodeSnapshot(200, "node-a", "US renamed", subscriptionId = 10)),

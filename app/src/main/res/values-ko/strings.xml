@@ -520,7 +520,7 @@
     <string name="webdav_path">백업 경로</string>
     <string name="webdav_test">연결 테스트</string>
     <string name="webdav_test_success">연결 성공</string>
-    <string name="webdav_test_failed" formatted="false">연결 실패: %s</string>
+    <string name="webdav_test_failed">연결 실패: %1$s</string>
     <string name="backup_to_webdav">WebDAV에 백업</string>
     <string name="restore_from_webdav">WebDAV에서 복원</string>
     <string name="webdav_backup_success">WebDAV에 백업 성공</string>

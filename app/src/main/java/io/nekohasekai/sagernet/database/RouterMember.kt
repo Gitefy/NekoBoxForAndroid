@@ -57,6 +57,29 @@ data class RouterMember(
         @Query("DELETE FROM router_members WHERE proxyId = :proxyId")
         fun deleteByProxy(proxyId: Long): Int
 
+        @Query("UPDATE router_members SET userOrder = :userOrder WHERE routerId = :routerId AND proxyId = :proxyId")
+        fun updateUserOrder(routerId: Long, proxyId: Long, userOrder: Long): Int
+
+        @Transaction
+        fun updateOrders(routerId: Long, orderedProxyIds: List<Long>) {
+            val existing = getByRouter(routerId)
+            if (existing.isEmpty()) return
+            val orderedSet = orderedProxyIds.toSet()
+            if (orderedSet.size == existing.size) {
+                for ((index, proxyId) in orderedProxyIds.withIndex()) {
+                    updateUserOrder(routerId, proxyId, (index + 1).toLong())
+                }
+            } else {
+                val remaining = existing.filter { it.proxyId !in orderedSet }.sortedBy { it.userOrder }
+                val merged = ArrayList<Long>(existing.size)
+                merged.addAll(orderedProxyIds)
+                merged.addAll(remaining.map { it.proxyId })
+                for ((index, proxyId) in merged.withIndex()) {
+                    updateUserOrder(routerId, proxyId, (index + 1).toLong())
+                }
+            }
+        }
+
         @Insert
         fun insert(members: List<RouterMember>)
 

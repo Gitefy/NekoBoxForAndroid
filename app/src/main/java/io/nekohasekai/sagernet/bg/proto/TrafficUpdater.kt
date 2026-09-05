@@ -1,9 +1,17 @@
 package io.nekohasekai.sagernet.bg.proto
 
 class TrafficUpdater(
-    private val box: libcore.BoxInstance,
+    private val queryStats: (String, String) -> Long,
     val items: List<TrafficLooperData>, // contain "bypass"
+    private val monotonicMillis: () -> Long = { System.nanoTime() / 1_000_000L },
 ) {
+    constructor(box: libcore.BoxInstance, items: List<TrafficLooperData>) :
+        this(box::queryStats, items)
+
+    init {
+        val now = monotonicMillis()
+        items.forEach { it.lastUpdate = now }
+    }
 
     class TrafficLooperData(
         // Don't associate proxyEntity
@@ -21,7 +29,7 @@ class TrafficUpdater(
 
     private fun updateOne(item: TrafficLooperData): TrafficLooperData {
         // last update
-        val now = System.currentTimeMillis()
+        val now = monotonicMillis()
         val interval = now - item.lastUpdate
         item.lastUpdate = now
         if (interval <= 0) {
@@ -31,8 +39,8 @@ class TrafficUpdater(
         }
 
         // query
-        val tx = box.queryStats(item.tag, "uplink")
-        val rx = box.queryStats(item.tag, "downlink")
+        val tx = queryStats(item.tag, "uplink")
+        val rx = queryStats(item.tag, "downlink")
 
         // add diff
         item.rx += rx
@@ -67,6 +75,7 @@ class TrafficUpdater(
                 item.rxRate = diff.rxRate
                 item.txRate = diff.txRate
                 item.hasTrafficDelta = diff.rx != 0L || diff.tx != 0L
+                item.lastUpdate = monotonicMillis()
             }
         }
 //        Logs.d(JavaUtil.gson.toJson(items))

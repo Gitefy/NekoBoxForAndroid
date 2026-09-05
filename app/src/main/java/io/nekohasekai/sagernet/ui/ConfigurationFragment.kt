@@ -1573,13 +1573,23 @@ class ConfigurationFragment @JvmOverloads constructor(
             if (::proxyGroup.isInitialized) {
                 outState.putParcelable("proxyGroup", proxyGroup)
             }
+            routerGroup?.let {
+                outState.putParcelable("routerGroup", it)
+            }
         }
 
         override fun onViewStateRestored(savedInstanceState: Bundle?) {
             super.onViewStateRestored(savedInstanceState)
 
+            var restored = false
             savedInstanceState?.getParcelable<ProxyGroup>("proxyGroup")?.also {
                 proxyGroup = it
+                restored = true
+            }
+            savedInstanceState?.getParcelable<RouterGroup>("routerGroup")?.also {
+                routerGroup = it
+            }
+            if (restored && !::configurationListView.isInitialized) {
                 onViewCreated(requireView(), null)
             }
         }
@@ -1829,7 +1839,9 @@ class ConfigurationFragment @JvmOverloads constructor(
             })
 
             if (!select) {
-                undoManager = UndoSnackbarManager(activity as MainActivity, adapter!!)
+                if (!inRouterGroupMode) {
+                    undoManager = UndoSnackbarManager(activity as MainActivity, adapter!!)
+                }
                 setupItemTouchHelper()
                 setupBottomBarScrollDriver()
             }
@@ -1845,23 +1857,40 @@ class ConfigurationFragment @JvmOverloads constructor(
 
             val touchSlop = ViewConfiguration.get(requireContext()).scaledTouchSlop
             var lastRawY = 0f
-            configurationListView.setOnTouchListener { recyclerView, event ->
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> lastRawY = event.rawY
-                    MotionEvent.ACTION_MOVE -> {
-                        val cannotScroll = !recyclerView.canScrollVertically(-1) &&
-                                !recyclerView.canScrollVertically(1)
-                        if (cannotScroll) {
-                            val fingerDy = event.rawY - lastRawY
-                            if (abs(fingerDy) >= touchSlop) {
-                                mainActivity.driveBottomBar(-fingerDy.toInt())
-                                lastRawY = event.rawY
+            configurationListView.addOnItemTouchListener(object : RecyclerView.SimpleOnItemTouchListener() {
+                override fun onInterceptTouchEvent(recyclerView: RecyclerView, event: MotionEvent): Boolean {
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> lastRawY = event.rawY
+                        MotionEvent.ACTION_MOVE -> {
+                            val cannotScroll = !recyclerView.canScrollVertically(-1) &&
+                                    !recyclerView.canScrollVertically(1)
+                            if (cannotScroll) {
+                                val fingerDy = event.rawY - lastRawY
+                                if (abs(fingerDy) >= touchSlop) {
+                                    mainActivity.driveBottomBar(-fingerDy.toInt())
+                                    lastRawY = event.rawY
+                                }
                             }
                         }
                     }
+                    return false
                 }
-                false
+            })
+        }
+
+        override fun onDestroyView() {
+            adapter?.let {
+                ProfileManager.removeListener(it)
+                GroupManager.removeListener(it)
             }
+            if (::undoManager.isInitialized) {
+                undoManager.flush()
+            }
+            if (::itemTouchHelper.isInitialized) {
+                itemTouchHelper.attachToRecyclerView(null)
+            }
+            adapter = null
+            super.onDestroyView()
         }
 
         override fun onDestroy() {
@@ -2073,6 +2102,7 @@ class ConfigurationFragment @JvmOverloads constructor(
             }
 
             private val updated = HashSet<ProxyEntity>()
+            private var routerOrderChanged = false
 
             fun filter(name: String) {
                 if (name.isEmpty()) {
@@ -2091,6 +2121,14 @@ class ConfigurationFragment @JvmOverloads constructor(
 
             fun move(from: Int, to: Int) {
                 if (from == to) return
+
+                if (inRouterGroupMode) {
+                    val draggedItemId = configurationIdList.removeAt(from)
+                    configurationIdList.add(to, draggedItemId)
+                    routerOrderChanged = true
+                    notifyItemMoved(from, to)
+                    return
+                }
 
                 if (layoutManager is FixedGridLayoutManager) {
                     moveDualColumn(from, to)
@@ -2138,6 +2176,24 @@ class ConfigurationFragment @JvmOverloads constructor(
             }
 
             fun commitMove() = runOnDefaultDispatcher {
+                val rg = routerGroup
+                if (inRouterGroupMode && rg != null) {
+                    if (routerOrderChanged) {
+                        routerOrderChanged = false
+                        val orderedIds = ArrayList(configurationIdList)
+                        SagerDatabase.routerMemberDao.updateOrders(rg.id, orderedIds)
+                        if (DataStore.serviceState.started) {
+                            SagerNet.reloadService()
+                        }
+                    }
+                    onMainDispatcher {
+                        if (layoutManager is FixedGridLayoutManager) {
+                            notifyDataSetChanged()
+                        }
+                    }
+                    return@runOnDefaultDispatcher
+                }
+
                 updated.forEach { SagerDatabase.proxyDao.updateProxy(it) }
                 updated.clear()
                 onMainDispatcher {
@@ -2306,9 +2362,8 @@ class ConfigurationFragment @JvmOverloads constructor(
                     val memberIds = SagerDatabase.routerMemberDao.getByRouter(rg.id)
                         .sortedBy { it.userOrder }
                         .map { it.proxyId }
-                    newProfiles = memberIds.mapNotNull { id ->
-                        SagerDatabase.proxyDao.getById(id)
-                    }
+                    val entities = SagerDatabase.proxyDao.getEntities(memberIds).associateBy { it.id }
+                    newProfiles = memberIds.mapNotNull { entities[it] }
                 } else {
                     // Normal proxy-group mode
                     var list = SagerDatabase.proxyDao.getByGroup(proxyGroup.id)

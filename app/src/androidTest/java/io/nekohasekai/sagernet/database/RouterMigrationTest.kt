@@ -146,6 +146,43 @@ class RouterMigrationTest {
         cursor.getLong(0)
     }
 
+    @Test
+    fun clearsDanglingSelectionsIncludingDisabledRoutersWithoutChangingValidSelections() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val database = Room.inMemoryDatabaseBuilder(context, SagerDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        try {
+            database.openHelper.writableDatabase.execSQL(
+                "INSERT INTO proxy_entities " +
+                    "(id, groupId, type, userOrder, tx, rx, status, ping, uuid) " +
+                    "VALUES (20, 10, 0, 0, 0, 0, 0, 0, 'node')"
+            )
+            val routers = database.routerGroupDao()
+            val valid = routers.create(RouterGroup(
+                stableTag = "router.valid", selectedProxyId = 20, selectedNodeKey = "10:node",
+            ))
+            val deleted = routers.create(RouterGroup(
+                stableTag = "router.deleted", enabled = false,
+                selectedProxyId = 30, selectedNodeKey = "10:deleted",
+            ))
+            val nonMember = routers.create(RouterGroup(
+                stableTag = "router.nonmember", selectedProxyId = 20, selectedNodeKey = "10:node",
+            ))
+            database.routerMemberDao().insert(listOf(RouterMember(valid, 20), RouterMember(deleted, 30)))
+
+            assertEquals(2, routers.clearInvalidSelections())
+            assertEquals(20L, routers.getById(valid)!!.selectedProxyId)
+            assertEquals("10:node", routers.getById(valid)!!.selectedNodeKey)
+            for (id in listOf(deleted, nonMember)) {
+                assertEquals(RouterGroup.NO_SELECTION, routers.getById(id)!!.selectedProxyId)
+                assertEquals("", routers.getById(id)!!.selectedNodeKey)
+            }
+        } finally {
+            database.close()
+        }
+    }
+
     private companion object {
         const val TEST_DB = "router-migration-test"
     }
