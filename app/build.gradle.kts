@@ -103,27 +103,6 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.3")
 }
 
-val buildHevTun by tasks.registering {
-    val hevAbis = listOf("arm64-v8a")
-    val bashExecutable = System.getenv("BASH_EXE")
-        ?.takeIf { file(it).isFile }
-        ?: listOf(
-            "C:/Program Files/Git/bin/bash.exe",
-            "C:/Program Files (x86)/Git/bin/bash.exe"
-        ).firstOrNull { file(it).isFile }
-        ?: "bash"
-    doLast {
-        val missing = hevAbis.any { !file("src/main/jniLibs/$it/libhev-socks5-tunnel.so").exists() }
-        if (missing || System.getenv("FORCE_HEV") == "1") {
-            exec {
-                val script = rootProject.file("buildScript/compile-hevtun.sh")
-                    .absolutePath.replace('\\', '/')
-                commandLine(bashExecutable, "-lc", "\"$script\"")
-            }
-        }
-    }
-}
-
 val verifyLibcore by tasks.registering {
     val libcoreAar = file("libs/libcore.aar")
     doLast {
@@ -188,6 +167,5 @@ tasks.matching { it.name == "assembleOssDebug" }.configureEach {
 }
 
 tasks.named("preBuild") {
-    dependsOn(buildHevTun)
     dependsOn(verifyLibcore)
 }

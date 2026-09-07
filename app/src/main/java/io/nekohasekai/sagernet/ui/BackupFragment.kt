@@ -45,7 +45,7 @@ import kotlinx.coroutines.Dispatchers
 import io.nekohasekai.sagernet.fmt.KryoConverters
 import java.text.SimpleDateFormat
 
-class BackupFragment : NamedFragment(R.layout.layout_backup) {
+class BackupFragment : ToolbarFragment(R.layout.layout_backup) {
 
     private var pendingExportName: String? = null
     private var currentJob: kotlinx.coroutines.Job? = null
@@ -63,8 +63,6 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
         currentJob = null
     }
 
-    override fun name0() = app.getString(R.string.backup)
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pendingExportName = savedInstanceState?.getString("pendingExportName")
@@ -76,7 +74,7 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
     }
 
     private fun backupFileName() =
-        "nekobox_backup_${SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.ROOT).format(Date())}.json"
+        "asteria_backup_${SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.ROOT).format(Date())}.json"
 
     var content = ""
     private val exportSettings = registerForActivityResult(ActivityResultContracts.CreateDocument()) { data ->
@@ -114,6 +112,7 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        toolbar.setTitle(R.string.backup)
 
         val binding = LayoutBackupBinding.bind(view)
 
@@ -305,12 +304,13 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
                     "Backup settings are missing or invalid"
                 }
                 val list = BackupSerializer.getParcelableArray(content, "settings", KeyValuePair.CREATOR)
-                val keys = HashSet<String>(list.size)
-                for (kv in list) {
+                val filteredList = list.filterNot { it.key in DataStore.DEPRECATED_SETTING_KEYS }
+                val keys = HashSet<String>(filteredList.size)
+                for (kv in filteredList) {
                     require(keys.add(kv.key)) { "Duplicate setting key in backup: ${kv.key}" }
                     kv.validate()
                 }
-                list
+                filteredList
             } else null
 
             data class DecodedProfiles(

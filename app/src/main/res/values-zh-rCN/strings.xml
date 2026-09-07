@@ -304,7 +304,7 @@
     <string name="connection_test_refused">连接重置</string>
     <string name="connection_test_timeout_error">超时</string>
     <string name="connection_test_unreachable">不可达</string>
-    <string name="tile_title">开关</string>
+    <string name="tile_title">Asteria</string>
     <string name="append_http_proxy">追加 HTTP 代理至 VPN</string>
     <string name="append_http_proxy_sum">浏览器 / 一些支持的应用 将直接使用 HTTP 代理, 而不经过虚拟网卡设备 (Android 10+)</string>
     <string name="http_proxy_bypass">HTTP 代理绕过列表</string>
@@ -425,8 +425,6 @@
     <string name="destination_override_summary">使用探测的域来覆盖目标地址, 而不是仅用于路由</string>
     <string name="destination_override">覆盖目标地址</string>
     <string name="tun_implementation">TUN 实现</string>
-    <string name="enable_hev_tun">启用 Hev TUN</string>
-    <string name="enable_hev_tun_summary">使用 hev-socks5-tunnel 创建 TUN 设备</string>
     <string name="generating">正在生成…</string>
     <string name="warp_generate">生成配置</string>
     <string name="warp_license">CloudFlare Warp 是一个免费的 WireGuard VPN 提供源. 使用它, 代表您同意其服务条款。</string>

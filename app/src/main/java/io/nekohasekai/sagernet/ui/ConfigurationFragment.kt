@@ -1924,43 +1924,11 @@ class ConfigurationFragment @JvmOverloads constructor(
                     undoManager = UndoSnackbarManager(activity as MainActivity, adapter!!)
                 }
                 setupItemTouchHelper()
-                setupBottomBarScrollDriver()
             }
 
             runOnDefaultDispatcher {
                 adapter?.reloadProfiles()
             }
-        }
-
-        private fun setupBottomBarScrollDriver() {
-            val mainActivity = activity as? MainActivity ?: return
-            configurationListView.addOnScrollListener(object : RecyclerView.OnScrollListener() {
-                override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
-                    if (dy != 0) mainActivity.driveBottomBar(dy)
-                }
-            })
-
-            val touchSlop = ViewConfiguration.get(requireContext()).scaledTouchSlop
-            var lastRawY = 0f
-            configurationListView.addOnItemTouchListener(object : RecyclerView.SimpleOnItemTouchListener() {
-                override fun onInterceptTouchEvent(recyclerView: RecyclerView, event: MotionEvent): Boolean {
-                    when (event.actionMasked) {
-                        MotionEvent.ACTION_DOWN -> lastRawY = event.rawY
-                        MotionEvent.ACTION_MOVE -> {
-                            val cannotScroll = !recyclerView.canScrollVertically(-1) &&
-                                    !recyclerView.canScrollVertically(1)
-                            if (cannotScroll) {
-                                val fingerDy = event.rawY - lastRawY
-                                if (abs(fingerDy) >= touchSlop) {
-                                    mainActivity.driveBottomBar(-fingerDy.toInt())
-                                    lastRawY = event.rawY
-                                }
-                            }
-                        }
-                    }
-                    return false
-                }
-            })
         }
 
         override fun onDestroyView() {

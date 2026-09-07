@@ -46,8 +46,7 @@ class ServiceNotification(
     companion object {
         const val notificationId = 1
         const val vpnNotificationChannel = "service-vpn-hidden"
-        val flags =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+        const val flags = PendingIntent.FLAG_IMMUTABLE
 
         data class NotificationChannelPolicy(
             val importance: Int,
@@ -246,18 +245,18 @@ class ServiceNotification(
 
     private suspend fun update() = useBuilder {
         if (destroyed) return@useBuilder
-        NotificationManagerCompat.from(service as Service).notify(notificationId, it.build())
+        try {
+            NotificationManagerCompat.from(service as Service).notify(notificationId, it.build())
+        } catch (_: SecurityException) {
+            // Notification permission may be revoked while the VPN is running.
+        }
     }
 
     fun destroy() {
         if (destroyed) return
         destroyed = true
         listenPostSpeed = false
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            (service as Service).stopForeground(Service.STOP_FOREGROUND_REMOVE)
-        } else {
-            (service as Service).stopForeground(true)
-        }
+        (service as Service).stopForeground(Service.STOP_FOREGROUND_REMOVE)
         service.unregisterReceiver(this)
     }
 }

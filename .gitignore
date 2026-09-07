@@ -32,3 +32,7 @@ jniLibs/
 **/*[Bb]ackup*.zip
 /A[0-9]*.yaml
 /A[0-9]*.json
+
+# Keystores and signing credentials
+*.keystore
+*.jks

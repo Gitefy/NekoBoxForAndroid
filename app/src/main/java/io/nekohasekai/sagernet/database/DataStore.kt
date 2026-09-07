@@ -90,12 +90,12 @@ object DataStore : OnPreferenceDataStoreChangeListener {
 
     var appTLSVersion by configurationStore.string(Key.APP_TLS_VERSION)
     var enableClashAPI by configurationStore.boolean(Key.ENABLE_CLASH_API)
-    var showBottomBar by configurationStore.boolean(Key.SHOW_BOTTOM_BAR)
     var confirmProfileDelete by configurationStore.boolean(Key.CONFIRM_PROFILE_DELETE) { true }
     var groupLayoutMode by configurationStore.stringToInt(Key.GROUP_LAYOUT_MODE) { 0 }
     var profileCardStyle by configurationStore.stringToInt(Key.PROFILE_CARD_STYLE) { 0 }
+    val DEPRECATED_SETTING_KEYS get() = Key.DEPRECATED_SETTING_KEYS
 
-    var allowInsecureOnRequest by configurationStore.boolean(Key.ALLOW_INSECURE_ON_REQUEST)
+    var allowInsecureOnRequest by configurationStore.boolean(Key.ALLOW_INSECURE_ON_REQUEST) { false }
     var networkChangeResetConnections by configurationStore.boolean(Key.NETWORK_CHANGE_RESET_CONNECTIONS) { true }
     var wakeResetConnections by configurationStore.boolean(Key.WAKE_RESET_CONNECTIONS)
 
@@ -135,8 +135,8 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     var acquireWakeLock by configurationStore.boolean(Key.ACQUIRE_WAKE_LOCK)
     var hideFromRecentApps by configurationStore.boolean(Key.HIDE_FROM_RECENT_APPS)
 
-    var rulesGeositeUrl by configurationStore.string(Key.RULES_GEOSITE_URL) { "https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip.db" }
-    var rulesGeoipUrl by configurationStore.string(Key.RULES_GEOIP_URL) { "https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite.db" }
+    var rulesGeositeUrl by configurationStore.string(Key.RULES_GEOSITE_URL) { "https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite.db" }
+    var rulesGeoipUrl by configurationStore.string(Key.RULES_GEOIP_URL) { "https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip.db" }
     var rulesUpdateInterval by configurationStore.string(Key.RULES_UPDATE_INTERVAL) { "0" } // 默认为0，不自动更新
 
     // hopefully hashCode = mHandle doesn't change, currently this is true from KitKat to Nougat
@@ -158,8 +158,7 @@ object DataStore : OnPreferenceDataStoreChangeListener {
         set(value) = saveLocalPort(Key.MIXED_PORT, value)
 
     val mixedInboundNeedsAuth: Boolean
-        get() = serviceMode == Key.MODE_VPN &&
-            !(appendHttpProxy && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+        get() = serviceMode == Key.MODE_VPN
 
     val mixedInboundHasAuth: Boolean
         get() = mixedInboundNeedsAuth &&
@@ -171,6 +170,13 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     fun initGlobal() {
         if (configurationStore.getString(Key.MIXED_PORT) == null) {
             mixedPort = mixedPort
+        }
+        sanitizeDeprecatedPreferences()
+    }
+
+    fun sanitizeDeprecatedPreferences() {
+        for (key in DEPRECATED_SETTING_KEYS) {
+            PublicDatabase.kvPairDao.delete(key)
         }
     }
 
@@ -193,7 +199,9 @@ object DataStore : OnPreferenceDataStoreChangeListener {
 
     val persistAcrossReboot by configurationStore.boolean(Key.PERSIST_ACROSS_REBOOT) { false }
 
-    var appendHttpProxy by configurationStore.boolean(Key.APPEND_HTTP_PROXY)
+    var appendHttpProxy: Boolean
+        get() = false
+        set(_) {}
     var httpProxyBypass by configurationStore.string(Key.HTTP_PROXY_BYPASS) { "" }
     var dnsHosts by configurationStore.string(Key.DNS_HOSTS) { "" }
     var strictRoute by configurationStore.boolean(Key.STRICT_ROUTE) { true }
@@ -203,7 +211,6 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     var alwaysShowAddress by configurationStore.boolean(Key.ALWAYS_SHOW_ADDRESS)
 
     var tunImplementation by configurationStore.stringToInt(Key.TUN_IMPLEMENTATION) { TunImplementation.GVISOR }
-    var enableHevTun by configurationStore.boolean(Key.ENABLE_HEV_TUN)
     var profileTrafficStatistics by configurationStore.boolean(Key.PROFILE_TRAFFIC_STATISTICS) { true }
 
     var yacdURL by configurationStore.string("yacdURL") { "http://127.0.0.1:9090/ui" }
@@ -212,7 +219,9 @@ object DataStore : OnPreferenceDataStoreChangeListener {
 
     var globalAllowInsecure by configurationStore.boolean(Key.GLOBAL_ALLOW_INSECURE) { false }
 
-    var enableTLSFragment by configurationStore.boolean(Key.ENABLE_TLS_FRAGMENT) { false }
+    var enableTLSFragment: Boolean
+        get() = false
+        set(_) {}
     var fragmentLength by configurationStore.string(Key.FRAGMENT_LENGTH) { "100-200" }
     var fragmentInterval by configurationStore.string(Key.FRAGMENT_INTERVAL) { "10-20" }
 

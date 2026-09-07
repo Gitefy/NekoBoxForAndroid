@@ -263,14 +263,13 @@ class BaseService {
                 return false
             }
             val selected = SagerDatabase.proxyDao.getById(proxyId) ?: return false
-            SagerDatabase.routerGroupDao.update(
-                router.copy(
-                    selectedProxyId = proxyId,
-                    selectedNodeKey = routerNodeKey(
-                        selected.groupId,
-                        routerStableIdOrFallback(selected.uuid, selected.id),
-                    ),
-                )
+            SagerDatabase.routerGroupDao.updateSelection(
+                routerId = router.id,
+                selectedProxyId = proxyId,
+                selectedNodeKey = routerNodeKey(
+                    selected.groupId,
+                    routerStableIdOrFallback(selected.uuid, selected.id),
+                ),
             )
             return true
         }

@@ -111,6 +111,17 @@ data class RouterGroup(
 
         @Query("""
             UPDATE router_groups
+            SET selectedProxyId = :selectedProxyId, selectedNodeKey = :selectedNodeKey
+            WHERE id = :routerId
+        """)
+        fun updateSelection(
+            routerId: Long,
+            selectedProxyId: Long,
+            selectedNodeKey: String,
+        ): Int
+
+        @Query("""
+            UPDATE router_groups
             SET selectedProxyId = :selectedProxyId, selectedNodeKey = :selectedNodeKey, lastError = :lastError
             WHERE id = :routerId
         """)

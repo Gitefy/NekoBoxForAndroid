@@ -204,20 +204,27 @@ object GroupManager {
         }
 
         val matchedAt = System.currentTimeMillis()
-        // Record the matchConfig string that was active when we computed members, so we can
-        // detect concurrent filter changes inside the synchronized block.
+        // Record the matchConfig and sourceGroupIds that were active when we computed members, so we can
+        // detect concurrent configuration or source changes inside the synchronized block.
         val snapshotMatchConfigs = routers.associate { it.id to it.matchConfig }
+        val snapshotSourceGroupIds = groups.associate { it.routerId to it.sourceGroupIds.sorted() }
         synchronized(RouterGroupRepository.routerSyncLock) {
             SagerDatabase.instance.runInTransaction {
                 result.membersByRouterId.forEach { (routerId, members) ->
-                    // Re-read the router inside the lock to detect concurrent filter changes.
+                    // Re-read the router and its sources inside the lock to detect concurrent changes.
                     val freshRouter = SagerDatabase.routerGroupDao.getById(routerId) ?: return@forEach
-                    // If the persisted matchConfig has changed since we computed members, our
-                    // result is stale. Skip writing; the save() that changed the config will
+                    val freshSources = SagerDatabase.routerGroupSourceDao.sourcesFor(routerId).map { it.sourceGroupId }.sorted()
+                    // If the persisted matchConfig or sources have changed since we computed members, our
+                    // result is stale. Skip writing; the save() that changed the config/sources will
                     // trigger a new reconcile with up-to-date filter and source data.
                     val computedMatchConfig = snapshotMatchConfigs[routerId]
+                    val computedSources = snapshotSourceGroupIds[routerId]
                     if (computedMatchConfig != null && computedMatchConfig != freshRouter.matchConfig) {
                         Logs.w("Router ${freshRouter.stableTag}: matchConfig changed during reconcile, skipping stale members")
+                        return@forEach
+                    }
+                    if (computedSources != null && computedSources != freshSources) {
+                        Logs.w("Router ${freshRouter.stableTag}: sources changed during reconcile, skipping stale members")
                         return@forEach
                     }
                     SagerDatabase.routerMemberDao.replaceMembers(

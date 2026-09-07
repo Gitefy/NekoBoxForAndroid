@@ -103,7 +103,6 @@ class MainActivity : ThemedActivity(),
                 null
             )
         }
-        binding.stats.setOnClickListener { if (DataStore.serviceState.connected) binding.stats.testConnection() }
 
         setContentView(binding.root)
         currentMainFragment =
@@ -396,14 +395,7 @@ class MainActivity : ThemedActivity(),
         showWhenConnected: Boolean,
         animate: Boolean,
     ) {
-        val showControls = fragment is ConfigurationFragment || DataStore.showBottomBar
-        binding.stats.useExternalScrollDriver = fragment is ConfigurationFragment
-        binding.stats.syncMainControls(
-            showControls,
-            DataStore.serviceState,
-            showWhenConnected,
-            animate,
-        )
+        val showControls = fragment is ConfigurationFragment
         binding.fab.animate().cancel()
         if (showControls) {
             binding.fab.show()
@@ -425,10 +417,6 @@ class MainActivity : ThemedActivity(),
         (fragment as? ConfigurationFragment)?.refreshProfileState()
     }
 
-    fun driveBottomBar(scrollDy: Int) {
-        binding.stats.onListScrolled(scrollDy)
-    }
-
     fun displayFragmentWithId(@IdRes id: Int): Boolean {
         when (id) {
             R.id.nav_configuration -> {
@@ -439,13 +427,8 @@ class MainActivity : ThemedActivity(),
             R.id.nav_route -> displayFragment(RouteFragment())
             R.id.nav_settings -> displayFragment(SettingsFragment())
             R.id.nav_traffic -> displayFragment(WebviewFragment())
-            R.id.nav_tools -> displayFragment(ToolsFragment())
+            R.id.nav_tools -> displayFragment(BackupFragment())
             R.id.nav_logcat -> displayFragment(LogcatFragment())
-            R.id.nav_faq -> {
-                launchCustomTab("https://matsuridayo.github.io/")
-                return false
-            }
-
             R.id.nav_about -> displayFragment(AboutFragment())
 
             else -> return false
@@ -467,7 +450,6 @@ class MainActivity : ThemedActivity(),
         refreshConfigurationProfileState()
 
         binding.fab.changeState(state, DataStore.serviceState, animate)
-        binding.stats.changeState(state)
         syncMainControls(
             showWhenConnected = state == BaseService.State.Connected,
             animate = animateControls,
@@ -520,7 +502,6 @@ class MainActivity : ThemedActivity(),
     // may NOT called when app is in background
     // ONLY do UI update here, write DB in bg process
     override fun cbSpeedUpdate(stats: SpeedDisplayData) {
-        binding.stats.updateSpeed(stats.txRateProxy, stats.rxRateProxy)
         updateRuntimeUrlTestSelections(stats.urlTestSelections)
     }
 
@@ -551,10 +532,6 @@ class MainActivity : ThemedActivity(),
     override fun onPreferenceDataStoreChanged(store: PreferenceDataStore, key: String) {
         when (key) {
             Key.SERVICE_MODE -> onBinderDied()
-            Key.SHOW_BOTTOM_BAR -> syncMainControls(
-                showWhenConnected = DataStore.showBottomBar,
-                animate = true,
-            )
             Key.SHOW_PROFILE_IN_NOTIFICATION -> {
                 if (DataStore.serviceState.canStop) {
                     SagerNet.reloadService()

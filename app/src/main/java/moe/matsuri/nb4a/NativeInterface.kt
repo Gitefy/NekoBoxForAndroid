@@ -95,14 +95,13 @@ class NativeInterface : BoxPlatformInterface, NB4AInterface {
                 if (DataStore.baseService !== service || service.data.proxy !== proxy) return@runOnDefaultDispatcher
                 val selected = SagerDatabase.proxyDao.getById(id) ?: return@runOnDefaultDispatcher
                 SagerDatabase.routerGroupDao.getByStableTag(routerTag)?.let { router ->
-                    SagerDatabase.routerGroupDao.update(
-                        router.copy(
-                            selectedProxyId = id,
-                            selectedNodeKey = routerNodeKey(
-                                selected.groupId,
-                                routerStableIdOrFallback(selected.uuid, selected.id),
-                            ),
-                        )
+                    SagerDatabase.routerGroupDao.updateSelection(
+                        routerId = router.id,
+                        selectedProxyId = id,
+                        selectedNodeKey = routerNodeKey(
+                            selected.groupId,
+                            routerStableIdOrFallback(selected.uuid, selected.id),
+                        ),
                     )
                 }
             }

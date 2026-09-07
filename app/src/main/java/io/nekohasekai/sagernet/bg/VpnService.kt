@@ -16,7 +16,6 @@ import io.nekohasekai.sagernet.fmt.hysteria.HysteriaBean
 import io.nekohasekai.sagernet.ktx.*
 import io.nekohasekai.sagernet.ui.VpnRequestActivity
 import io.nekohasekai.sagernet.utils.Subnet
-import moe.matsuri.nb4a.hevtun.HevTunRuntime
 import android.net.VpnService as BaseVpnService
 
 class VpnService : BaseVpnService(),
@@ -27,7 +26,6 @@ class VpnService : BaseVpnService(),
         const val PRIVATE_VLAN4_CLIENT = "172.19.0.1"
         const val PRIVATE_VLAN4_ROUTER = "172.19.0.2"
         const val FAKEDNS_VLAN4_CLIENT = "198.18.0.0"
-        const val HEV_MAPDNS_VLAN4 = "100.64.0.0"
         const val PRIVATE_VLAN6_CLIENT = "fdfe:dcba:9876::1"
         const val PRIVATE_VLAN6_ROUTER = "fdfe:dcba:9876::2"
 
@@ -42,11 +40,6 @@ class VpnService : BaseVpnService(),
     override suspend fun startProcesses() {
         DataStore.vpnService = this
         super.startProcesses() // launch proxy instance
-
-        if (DataStore.enableHevTun) {
-            val tunFd = establishTun()
-            HevTunRuntime.start(this, tunFd)
-        }
     }
 
     override var wakeLock: PowerManager.WakeLock? = null
@@ -59,7 +52,6 @@ class VpnService : BaseVpnService(),
 
     @Suppress("EXPERIMENTAL_API_USAGE")
     override fun killProcesses() {
-        HevTunRuntime.stop()
         conn?.close()
         conn = null
         super.killProcesses()
@@ -95,17 +87,13 @@ class VpnService : BaseVpnService(),
     }
 
     fun startVpn(tunOptionsJson: String, tunPlatformOptionsJson: String): Int {
-//        Logs.d(tunOptionsJson)
-//        Logs.d(tunPlatformOptionsJson)
-//        val tunOptions = JSONObject(tunOptionsJson)
-
-        return establishTun()
+        return establishTun(tunMtu(tunOptionsJson, DataStore.mtu))
     }
 
-    fun establishTun(): Int {
+    fun establishTun(mtu: Int = DataStore.mtu): Int {
         val builder = Builder().setConfigureIntent(SagerNet.configureIntent(this))
             .setSession(getString(R.string.app_name))
-            .setMtu(DataStore.mtu)
+            .setMtu(mtu)
         val ipv6Mode = DataStore.ipv6Mode
 
         // address
@@ -123,9 +111,6 @@ class VpnService : BaseVpnService(),
             }
             builder.addRoute(PRIVATE_VLAN4_ROUTER, 32)
             builder.addRoute(FAKEDNS_VLAN4_CLIENT, 15)
-            if (DataStore.enableHevTun && DataStore.enableFakeDns) {
-                builder.addRoute(HEV_MAPDNS_VLAN4, 10)
-            }
             // https://issuetracker.google.com/issues/149636790
             if (ipv6Mode != IPv6Mode.DISABLE) {
                 builder.addRoute("2000::", 3)
@@ -138,7 +123,7 @@ class VpnService : BaseVpnService(),
         }
 
         updateUnderlyingNetwork(builder)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(metered)
+        builder.setMetered(metered)
 
         // app route
         val packageName = packageName
@@ -202,7 +187,7 @@ class VpnService : BaseVpnService(),
             }
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && DataStore.appendHttpProxy) {
+        if (DataStore.appendHttpProxy) {
             builder.setHttpProxy(
                 ProxyInfo.buildDirectProxy(
                     LOCALHOST,
@@ -215,18 +200,16 @@ class VpnService : BaseVpnService(),
         }
 
         metered = DataStore.meteredNetwork
-        if (Build.VERSION.SDK_INT >= 29) builder.setMetered(metered)
+        builder.setMetered(metered)
         conn = builder.establish() ?: throw NullConnectionException()
 
         return conn!!.fd
     }
 
     fun updateUnderlyingNetwork(builder: Builder? = null) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
-            SagerNet.underlyingNetwork?.let {
-                builder?.setUnderlyingNetworks(arrayOf(SagerNet.underlyingNetwork))
-                    ?: setUnderlyingNetworks(arrayOf(SagerNet.underlyingNetwork))
-            }
+        SagerNet.underlyingNetwork?.let {
+            builder?.setUnderlyingNetworks(arrayOf(SagerNet.underlyingNetwork))
+                ?: setUnderlyingNetworks(arrayOf(SagerNet.underlyingNetwork))
         }
     }
 

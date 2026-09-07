@@ -8,6 +8,30 @@ import io.nekohasekai.sagernet.ktx.urlSafe
 import moe.matsuri.nb4a.SingBoxOptions
 import moe.matsuri.nb4a.utils.listByLineOrComma
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import org.json.JSONObject
+
+fun parseSingBoxAnyTLS(json: JSONObject): AnyTLSBean? = parseSingBoxAnyTLSMap(buildMap {
+    for (key in json.keys()) put(key, json.get(key))
+})
+
+internal fun parseSingBoxAnyTLSMap(json: Map<String, Any?>): AnyTLSBean? {
+    if (json["type"] != "anytls") return null
+    val server = json["server"]?.toString()?.takeIf { it.isNotBlank() } ?: return null
+    val port = (json["server_port"] as? Number)?.toInt()?.takeIf { it > 0 } ?: return null
+    val tls = json["tls"] as? Map<*, *>
+    val utls = tls?.get("utls") as? Map<*, *>
+    return AnyTLSBean().apply {
+        name = json["tag"]?.toString()?.takeIf { it.isNotBlank() }
+        serverAddress = server
+        serverPort = port
+        password = json["password"]?.toString() ?: ""
+        sni = tls?.get("server_name")?.toString() ?: ""
+        allowInsecure = tls?.get("insecure") as? Boolean ?: false
+        utlsFingerprint = utls?.get("fingerprint")?.toString() ?: ""
+        alpn = (tls?.get("alpn") as? List<*>)?.joinToString("\n") ?: ""
+        initializeDefaultValues()
+    }
+}
 
 fun buildSingBoxOutboundAnyTLSBean(bean: AnyTLSBean): SingBoxOptions.Outbound_AnyTLSOptions {
     return SingBoxOptions.Outbound_AnyTLSOptions().apply {

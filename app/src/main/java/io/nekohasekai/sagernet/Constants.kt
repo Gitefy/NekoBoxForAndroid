@@ -75,15 +75,25 @@ object Key {
 
     const val ACQUIRE_WAKE_LOCK = "acquireWakeLock"
     const val HIDE_FROM_RECENT_APPS = "hideFromRecentApps"
-    const val SHOW_BOTTOM_BAR = "showBottomBar"
     const val CONFIRM_PROFILE_DELETE = "confirmProfileDelete"
     const val GROUP_LAYOUT_MODE = "groupLayoutMode"
     const val PROFILE_CARD_STYLE = "profileCardStyle"
 
     const val ALLOW_INSECURE_ON_REQUEST = "allowInsecureOnRequest"
 
+    val DEPRECATED_SETTING_KEYS = setOf(
+        APPEND_HTTP_PROXY,
+        HTTP_PROXY_BYPASS,
+        ENABLE_TLS_FRAGMENT,
+        FRAGMENT_LENGTH,
+        FRAGMENT_INTERVAL,
+        "enableHevTun",
+        "showBottomBar",
+        "meteredNetwork",
+        "wakeResetConnections",
+    )
+
     const val TUN_IMPLEMENTATION = "tunImplementation"
-    const val ENABLE_HEV_TUN = "enableHevTun"
     const val PROFILE_TRAFFIC_STATISTICS = "profileTrafficStatistics"
 
     const val PROFILE_DIRTY = "profileDirty"

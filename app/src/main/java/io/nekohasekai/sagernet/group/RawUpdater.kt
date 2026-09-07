@@ -26,6 +26,7 @@ import io.nekohasekai.sagernet.ktx.*
 import libcore.Libcore
 import moe.matsuri.nb4a.Protocols
 import moe.matsuri.nb4a.proxy.anytls.AnyTLSBean
+import moe.matsuri.nb4a.proxy.anytls.parseSingBoxAnyTLS
 import moe.matsuri.nb4a.proxy.config.ConfigBean
 import moe.matsuri.nb4a.utils.Util
 import org.ini4j.Ini
@@ -1026,7 +1027,7 @@ object RawUpdater : GroupUpdater() {
                                 it
                             }
                         }.map {
-                            ConfigBean().apply {
+                            parseSingBoxAnyTLS(it) ?: ConfigBean().apply {
                                 applyDefaultValues()
                                 type = 1
                                 config = it.toStringPretty()
