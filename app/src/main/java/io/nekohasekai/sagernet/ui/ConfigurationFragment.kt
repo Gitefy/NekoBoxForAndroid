@@ -143,6 +143,7 @@ import io.nekohasekai.sagernet.database.SubscriptionBean
 import io.nekohasekai.sagernet.database.RouterGroup
 import io.nekohasekai.sagernet.database.RouterGroupRepository
 import io.nekohasekai.sagernet.route.RouterRuntimeSelection
+import io.nekohasekai.sagernet.route.UrlTestTargetResolver
 import kotlin.math.abs
 
 class ConfigurationFragment @JvmOverloads constructor(
@@ -1281,11 +1282,33 @@ class ConfigurationFragment @JvmOverloads constructor(
         val test = TestDialog()
         val dialog = test.builder.show()
         val testJobs = mutableListOf<Job>()
-        val group = DataStore.currentGroup()
+        val routerGroup = if (adapter.inRouterGroupMode) {
+            adapter.routerGroupList.getOrNull(groupPager.currentItem)
+        } else {
+            null
+        }
+        val group = if (routerGroup == null) DataStore.currentGroup() else null
+        val groupName = routerGroup?.name ?: group!!.displayName()
 
         val mainJob = runOnDefaultDispatcher {
-            val profilesList = SagerDatabase.proxyDao.getByGroup(group.id)
+            val profilesList = UrlTestTargetResolver.resolve(
+                routerGroupId = routerGroup?.id,
+                loadRouterTargets = { routerId ->
+                    val memberIds = SagerDatabase.routerMemberDao.getByRouter(routerId)
+                        .map { it.proxyId }
+                    val entities = SagerDatabase.proxyDao.getEntities(memberIds).associateBy { it.id }
+                    memberIds.mapNotNull { entities[it] }
+                },
+                loadNormalGroupTargets = {
+                    SagerDatabase.proxyDao.getByGroup(group!!.id)
+                },
+            )
             test.proxyN = profilesList.size
+            if (routerGroup != null && profilesList.isEmpty()) {
+                runOnMainDispatcher {
+                    snackbar(getString(R.string.profile_empty)).show()
+                }
+            }
             val profiles = ConcurrentLinkedQueue(profilesList)
             repeat(DataStore.connectionTestConcurrent) {
                 testJobs.add(launch(Dispatchers.IO) {
@@ -1338,7 +1361,7 @@ class ConfigurationFragment @JvmOverloads constructor(
             test.dialogStatus.set(1)
             test.notification = ConnectionTestNotification(
                 dialog.context,
-                "[${group.displayName()}] ${getString(R.string.connection_test)}"
+                "[$groupName] ${getString(R.string.connection_test)}"
             )
             dialog.hide()
         }
