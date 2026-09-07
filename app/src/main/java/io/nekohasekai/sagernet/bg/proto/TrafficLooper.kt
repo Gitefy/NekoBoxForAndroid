@@ -215,7 +215,6 @@ class TrafficLooper
                 ))
                 continue
             }
-
             val snapshot = withStateLock {
                 if (trafficUpdater == null) {
                     idMap.clear()
@@ -224,16 +223,23 @@ class TrafficLooper
                     val tags = hashSetOf(TAG_PROXY, TAG_BYPASS)
                     val dynamicMain = proxy.config.selectorGroupId >= 0L ||
                         proxy.config.mainUrlTestTag != null
+                    // Nodes belonging to independent Router groups must never be mass-ignored:
+                    // they accumulate traffic independently of the main selector winner.
+                    val routerMemberIds = proxy.config.routerAllMemberIds
                     proxy.config.trafficMap.forEach { (tag, ents) ->
                         tags.add(tag)
                         for (ent in ents) {
+                            // Only ignore nodes that are NOT already accounted for by an
+                            // independent Router. Router member nodes get their own ignore=false
+                            // path and are updated regardless of main selector state.
+                            val belongsToRouter = ent.id in routerMemberIds
                             val item = TrafficUpdater.TrafficLooperData(
                                 tag = tag,
                                 rx = ent.rx,
                                 tx = ent.tx,
                                 rxBase = ent.rx,
                                 txBase = ent.tx,
-                                ignore = dynamicMain,
+                                ignore = dynamicMain && !belongsToRouter,
                             )
                             idMap[ent.id] = item
                             tagMap[tag] = item
@@ -245,7 +251,6 @@ class TrafficLooper
                     } else if (proxy.config.selectorGroupId >= 0L) {
                         selectMainLocked(proxy.config.mainEntId)
                     }
-                    //
                     trafficUpdater = TrafficUpdater(
                         box = proxy.box, items = idMap.values.toList()
                     )

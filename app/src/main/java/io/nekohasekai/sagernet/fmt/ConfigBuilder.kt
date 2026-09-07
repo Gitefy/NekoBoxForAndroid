@@ -145,6 +145,13 @@ internal fun buildRouterOutbounds(
                 url = router.filter.testUrl
                 interval = "${router.filter.intervalSeconds}s"
                 tolerance = router.filter.toleranceMs
+                // sing-box enforces interval <= idle_timeout. The core's default idle_timeout is
+                // 1800s (30 min). When the user sets a longer interval for battery savings, we
+                // must emit a matching idle_timeout so the config can start. We use 2× the
+                // interval to give the group enough time to go idle between test rounds.
+                if (router.filter.intervalSeconds > 1800) {
+                    idle_timeout = "${router.filter.intervalSeconds * 2}s"
+                }
             }
         }
     }
@@ -161,6 +168,9 @@ class ConfigBuildResult(
     val routerMemberIds: Map<String, Set<Long>> = emptyMap(),
     val routerUrlTestTags: Map<Long, String> = emptyMap(),
     val mainUrlTestTag: String? = null,
+    /** Union of all proxy IDs belonging to any Router group (selector or urltest). Used by
+     *  TrafficLooper to avoid suppressing independent Router node traffic statistics. */
+    val routerAllMemberIds: Set<Long> = emptySet(),
 ) {
     data class IndexEntity(var chain: LinkedHashMap<Int, ProxyEntity>)
 }
@@ -1212,6 +1222,9 @@ fun buildConfig(
     }.let {
         val configMap = it.asMap()
         Util.mergeJSON(configMap, proxy.requireBean().customConfigJson)
+        val allRouterMemberIds = routerGroups.flatMapTo(mutableSetOf<Long>()) { router ->
+            routerMembers[router.id].orEmpty().map { member -> member.proxyId }
+        }
         ConfigBuildResult(
             gson.toJson(configMap),
             externalIndexMap,
@@ -1223,6 +1236,7 @@ fun buildConfig(
             routerMemberIds,
             routerUrlTestTags,
             null,
+            allRouterMemberIds,
         )
     }
 

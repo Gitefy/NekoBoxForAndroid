@@ -105,6 +105,21 @@ data class RouterGroup(
 
         @Insert
         fun insert(routers: List<RouterGroup>)
+
+        @Query("UPDATE router_groups SET lastError = :error WHERE id = :routerId")
+        fun setLastError(routerId: Long, error: String): Int
+
+        @Query("""
+            UPDATE router_groups
+            SET selectedProxyId = :selectedProxyId, selectedNodeKey = :selectedNodeKey, lastError = :lastError
+            WHERE id = :routerId
+        """)
+        fun updateSelectionAndError(
+            routerId: Long,
+            selectedProxyId: Long,
+            selectedNodeKey: String,
+            lastError: String,
+        ): Int
     }
 
     companion object {

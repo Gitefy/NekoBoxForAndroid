@@ -159,9 +159,10 @@ class KeyValuePair() : Parcelable {
         val stream = ByteArrayOutputStream()
         val intBuffer = ByteBuffer.allocate(4)
         for (v in value) {
+            val bytes = v.toByteArray()       // compute UTF-8 bytes once
             intBuffer.rewind()
-            stream.write(intBuffer.putInt(v.length).array())
-            stream.write(v.toByteArray())
+            stream.write(intBuffer.putInt(bytes.size).array())  // write byte count (not char count)
+            stream.write(bytes)
         }
         this.value = stream.toByteArray()
         return this

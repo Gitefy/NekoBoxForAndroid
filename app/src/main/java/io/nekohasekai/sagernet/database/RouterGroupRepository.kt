@@ -77,6 +77,9 @@ fun RouterGroupDraft.validate(
     if (filter.intervalSeconds < 10) {
         throw RouterGroupValidationException(RouterGroupValidationException.Field.INTERVAL, "Interval must be at least 10 seconds")
     }
+    if (filter.intervalSeconds > 86400) {
+        throw RouterGroupValidationException(RouterGroupValidationException.Field.INTERVAL, "Interval must not exceed 86400 seconds (24 hours)")
+    }
     if (filter.toleranceMs !in 0..65535) {
         throw RouterGroupValidationException(RouterGroupValidationException.Field.TOLERANCE, "Tolerance must be between 0 and 65535 ms")
     }

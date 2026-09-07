@@ -337,7 +337,7 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
                 val routerMembersList = BackupSerializer.getParcelableArray(content, "routerMembers", RouterMember.CREATOR)
                 val routerSourcesList = BackupSerializer.getParcelableArray(content, "routerSources", RouterGroupSource.CREATOR)
 
-                require(groupsList.all { it.id > 0L && !it.name.isNullOrBlank() }) {
+                require(groupsList.all { g -> g.id > 0L && (g.ungrouped || !g.name.isNullOrBlank()) }) {
                     "Backup contains invalid or blank proxy groups"
                 }
                 require(routerGroupsList.all { it.id > 0L && it.stableTag.isNotBlank() }) {
@@ -448,7 +448,7 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
                         }
                     }
                 } else {
-                    // R02: Partial restore "只恢复规则" (Rules only, local database profiles kept)
+                    // R03: Partial restore "只恢复规则" (Rules only, local database profiles kept)
                     val localRouters = SagerDatabase.routerGroupDao.all().associate { it.id to it.stableTag }
                     val localProxies = SagerDatabase.proxyDao.getAll().associate { it.id to it.routerStableId() }
                     val backupRouters = if (content.has("routerGroups") && !content.isNull("routerGroups")) {
@@ -456,11 +456,19 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
                             BackupSerializer.getParcelableArray(content, "routerGroups", RouterGroup.CREATOR).associate { it.id to it.stableTag }
                         }.getOrNull().orEmpty()
                     } else emptyMap()
-                    val backupProxies = if (content.has("profiles") && !content.isNull("profiles")) {
-                        runCatching {
-                            BackupSerializer.getParcelableArray(content, "profiles", ProxyEntity.CREATOR).associate { it.id to it.routerStableId() }
-                        }.getOrNull().orEmpty()
-                    } else emptyMap()
+
+                    // R03 fix: read the stable-identity index emitted by the exporter when
+                    // profiles were not included. Falls back to inline profiles if present.
+                    val backupOutboundStableIds: Map<Long, String> =
+                        BackupSerializer.getRuleOutboundStableIds(content).ifEmpty {
+                            // Legacy fallback: backup was produced with profiles section
+                            if (content.has("profiles") && !content.isNull("profiles")) {
+                                runCatching {
+                                    BackupSerializer.getParcelableArray(content, "profiles", ProxyEntity.CREATOR)
+                                        .associate { it.id to it.routerStableId() }
+                                }.getOrNull().orEmpty()
+                            } else emptyMap()
+                        }
 
                     for (ruleItem in rulesList) {
                         if (ruleItem.routerGroupId > 0L) {
@@ -474,9 +482,11 @@ class BackupFragment : NamedFragment(R.layout.layout_backup) {
                                 "Rule ${ruleItem.id} references router group ${ruleItem.routerGroupId} whose identity does not match local router (expected $expectedTag, found $localTag)"
                             }
                         } else if (ruleItem.outbound > 0L) {
-                            val expectedStableId = backupProxies[ruleItem.outbound]
+                            // R03 fix: use the stable ID from ruleOutboundRefs instead of requiring profiles
+                            val expectedStableId = backupOutboundStableIds[ruleItem.id]
+                                ?: backupOutboundStableIds[ruleItem.outbound]
                             require(expectedStableId != null) {
-                                "Cannot verify stable identity for profile ${ruleItem.outbound} referenced by rule ${ruleItem.id}"
+                                "Cannot verify stable identity for profile ${ruleItem.outbound} referenced by rule ${ruleItem.id}: export does not contain profile identity information"
                             }
                             val localStableId = localProxies[ruleItem.outbound]
                             require(localStableId != null && localStableId == expectedStableId) {

@@ -5,6 +5,7 @@ import android.os.Parcelable
 import io.nekohasekai.sagernet.database.RouterGroup
 import io.nekohasekai.sagernet.database.RuleEntity
 import io.nekohasekai.sagernet.database.SagerDatabase
+import io.nekohasekai.sagernet.database.routerStableId
 import moe.matsuri.nb4a.utils.Util
 import org.json.JSONArray
 import org.json.JSONObject
@@ -38,6 +39,12 @@ object BackupSerializer {
                 val allRouters = database.routerGroupDao().all()
                 putParcelableArray(json, "rules", allRules)
                 putRouterRuleReferences(json, allRules, allRouters)
+                if (!profiles) {
+                    // When exporting rules without profiles, the import side cannot reconstruct
+                    // backupProxies from the backup. Attach a stable-identity index so the importer
+                    // can verify that each rule's outbound proxy still refers to the same node.
+                    putRuleOutboundRefs(json, allRules, database)
+                }
             }
         }
         return json
@@ -60,6 +67,52 @@ object BackupSerializer {
                 })
             }
         })
+    }
+
+    /**
+     * Emits a `ruleOutboundRefs` section mapping each rule's legacy outbound proxy ID to the
+     * node's stable identity string. Used when exporting rules without profiles so the import
+     * side can verify node identity without needing the full profiles section.
+     */
+    fun putRuleOutboundRefs(
+        json: JSONObject,
+        rules: Iterable<RuleEntity>,
+        database: SagerDatabase,
+    ) {
+        val outboundIds = rules.mapNotNull { r -> r.outbound.takeIf { it > 0L } }.toSet()
+        if (outboundIds.isEmpty()) return
+        val stableIdMap = outboundIds.associateWith { proxyId ->
+            database.proxyDao().getById(proxyId)?.let { proxy ->
+                runCatching { proxy.requireBean() }.getOrNull()
+                    ?.let { proxy.routerStableId() }
+            }
+        }
+        json.put("ruleOutboundRefs", JSONArray().apply {
+            rules.filter { it.outbound > 0L }.forEach { rule ->
+                val stableId = stableIdMap[rule.outbound] ?: return@forEach
+                put(JSONObject().apply {
+                    put("ruleId", rule.id)
+                    put("outbound", rule.outbound)
+                    put("stableId", stableId)
+                })
+            }
+        })
+    }
+
+    /** Returns a map from rule ID to outbound stable ID, read from `ruleOutboundRefs`. */
+    fun getRuleOutboundStableIds(json: JSONObject): Map<Long, String> {
+        if (!json.has("ruleOutboundRefs")) return emptyMap()
+        require(!json.isNull("ruleOutboundRefs")) { "Section 'ruleOutboundRefs' in backup cannot be null" }
+        val values = json.optJSONArray("ruleOutboundRefs")
+            ?: throw IllegalArgumentException("Section 'ruleOutboundRefs' in backup must be a JSON array")
+        val result = HashMap<Long, String>()
+        for (i in 0 until values.length()) {
+            val obj = values.getJSONObject(i)
+            val ruleId = obj.getLong("ruleId")
+            val stableId = obj.optString("stableId").takeIf { it.isNotBlank() } ?: continue
+            result[ruleId] = stableId
+        }
+        return result
     }
 
     fun validateRuleReferences(

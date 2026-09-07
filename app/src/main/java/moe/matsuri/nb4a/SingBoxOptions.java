@@ -4456,6 +4456,8 @@ public class SingBoxOptions {
 
         public Integer tolerance;
 
+        public String idle_timeout;
+
     }
 
     public static class Rule_DefaultOptions extends Rule {

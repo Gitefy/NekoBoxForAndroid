@@ -167,9 +167,7 @@ object GroupManager {
                 )
             }.onFailure { error ->
                 Logs.e("Router ${router.stableTag} match configuration is invalid", error)
-                SagerDatabase.routerGroupDao.update(
-                    router.copy(lastError = "Invalid Router match configuration"),
-                )
+                SagerDatabase.routerGroupDao.setLastError(router.id, "Invalid Router match configuration")
             }.getOrNull()
         }
         if (groups.isEmpty()) {
@@ -199,16 +197,29 @@ object GroupManager {
         if (result.error != null) {
             Logs.e("Router reconciliation preserved existing members: ${result.error}")
             routers.filter { router -> groups.any { it.routerId == router.id } }.forEach { router ->
-                SagerDatabase.routerGroupDao.update(router.copy(lastError = result.error))
+                SagerDatabase.routerGroupDao.setLastError(router.id, result.error)
             }
             cleanupDanglingRouterMembers()
             return
         }
 
         val matchedAt = System.currentTimeMillis()
+        // Record the matchConfig string that was active when we computed members, so we can
+        // detect concurrent filter changes inside the synchronized block.
+        val snapshotMatchConfigs = routers.associate { it.id to it.matchConfig }
         synchronized(RouterGroupRepository.routerSyncLock) {
             SagerDatabase.instance.runInTransaction {
                 result.membersByRouterId.forEach { (routerId, members) ->
+                    // Re-read the router inside the lock to detect concurrent filter changes.
+                    val freshRouter = SagerDatabase.routerGroupDao.getById(routerId) ?: return@forEach
+                    // If the persisted matchConfig has changed since we computed members, our
+                    // result is stale. Skip writing; the save() that changed the config will
+                    // trigger a new reconcile with up-to-date filter and source data.
+                    val computedMatchConfig = snapshotMatchConfigs[routerId]
+                    if (computedMatchConfig != null && computedMatchConfig != freshRouter.matchConfig) {
+                        Logs.w("Router ${freshRouter.stableTag}: matchConfig changed during reconcile, skipping stale members")
+                        return@forEach
+                    }
                     SagerDatabase.routerMemberDao.replaceMembers(
                         routerId,
                         members.map { member ->
@@ -220,7 +231,6 @@ object GroupManager {
                             )
                         }
                     )
-                    val freshRouter = SagerDatabase.routerGroupDao.getById(routerId) ?: return@forEach
                     val selectedProxyId = if (freshRouter.selectedProxyId != RouterGroup.NO_SELECTION &&
                         members.any { it.proxyId == freshRouter.selectedProxyId }
                     ) {
@@ -232,12 +242,13 @@ object GroupManager {
                         ?.let { routerNodeKey(it.sourceGroupId, it.stableId) }
                         .orEmpty()
                     val lastError = if (members.isEmpty()) "No nodes match ${freshRouter.name}" else ""
-                    SagerDatabase.routerGroupDao.update(
-                        freshRouter.copy(
-                            selectedProxyId = selectedProxyId,
-                            selectedNodeKey = selectedNodeKey,
-                            lastError = lastError,
-                        )
+                    // Use a field-level update to avoid overwriting fields that may have been
+                    // changed by a concurrent save() (e.g. matchConfig, mode, name).
+                    SagerDatabase.routerGroupDao.updateSelectionAndError(
+                        routerId = routerId,
+                        selectedProxyId = selectedProxyId,
+                        selectedNodeKey = selectedNodeKey,
+                        lastError = lastError,
                     )
                 }
                 cleanupDanglingRouterMembers()
@@ -249,9 +260,10 @@ object GroupManager {
     fun markRouterRefreshFailed(sourceGroupId: Long, message: String) {
         val error = message.ifBlank { "Subscription refresh failed" }
         SagerDatabase.routerGroupSourceDao.routersForSource(sourceGroupId)
-            .mapNotNull { SagerDatabase.routerGroupDao.getById(it.routerId) }
-            .forEach { router ->
-                SagerDatabase.routerGroupDao.update(router.copy(lastError = error))
+            .forEach { source ->
+                // Use a field-level update to avoid overwriting concurrent changes to other fields
+                // (e.g. matchConfig updated by a save() racing with a failed refresh).
+                SagerDatabase.routerGroupDao.setLastError(source.routerId, error)
             }
     }
 
