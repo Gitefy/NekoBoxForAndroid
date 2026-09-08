@@ -19,8 +19,6 @@ import io.nekohasekai.sagernet.bg.SagerConnection
 import io.nekohasekai.sagernet.bg.ServiceNotification
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.ktx.Logs
-import io.nekohasekai.sagernet.ktx.isOss
-import io.nekohasekai.sagernet.ktx.isPreview
 import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
 import io.nekohasekai.sagernet.ui.MainActivity
 import io.nekohasekai.sagernet.utils.*
@@ -125,10 +123,6 @@ class SagerNet : Application(),
 
         lateinit var application: SagerNet
 
-        val isTv by lazy {
-            uiMode.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
-        }
-
         val configureIntent: (Context) -> PendingIntent by lazy {
             {
                 PendingIntent.getActivity(
@@ -214,11 +208,6 @@ class SagerNet : Application(),
 
         var appVersionNameForDisplay = {
             var n = BuildConfig.VERSION_NAME
-            if (isPreview) {
-                n += " " + BuildConfig.PRE_VERSION_NAME
-            } else if (!isOss) {
-                n += " ${BuildConfig.FLAVOR}"
-            }
             if (BuildConfig.DEBUG) {
                 n += " DEBUG"
             }

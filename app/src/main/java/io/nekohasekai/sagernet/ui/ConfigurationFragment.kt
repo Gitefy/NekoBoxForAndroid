@@ -2649,12 +2649,6 @@ class ConfigurationFragment @JvmOverloads constructor(
                                 SagerNet.reloadService()
                                 reloadAccess.unlock()
                             }
-                        } else if (SagerNet.isTv) {
-                            if (DataStore.serviceState.started) {
-                                SagerNet.stopService()
-                            } else {
-                                SagerNet.startService()
-                            }
                         }
                     }
                 }

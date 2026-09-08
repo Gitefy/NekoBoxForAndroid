@@ -162,7 +162,6 @@ fun Project.setupApp() {
             applicationId = pkgName
             versionCode = verCode
             versionName = verName
-            buildConfigField("String", "PRE_VERSION_NAME", "\"\"")
         }
     }
     setupAppCommon()
@@ -189,37 +188,14 @@ fun Project.setupApp() {
         flavorDimensions += "vendor"
         productFlavors {
             create("oss")
-            create("fdroid")
-            create("play")
-            create("preview") {
-                buildConfigField(
-                    "String",
-                    "PRE_VERSION_NAME",
-                    "\"${requireMetadata().getProperty("PRE_VERSION_NAME")}\""
-                )
-            }
         }
 
         applicationVariants.all {
             outputs.all {
                 this as BaseVariantOutputImpl
-                val isPreview = outputFileName.contains("-preview")
-                outputFileName = if (isPreview) {
-                    outputFileName.replace(
-                        project.name,
-                        "Asteria-" + requireMetadata().getProperty("PRE_VERSION_NAME")
-                    ).replace("-preview", "")
-                } else {
-                    outputFileName.replace(project.name, "Asteria-$versionName")
-                        .replace("-release", "")
-                        .replace("-oss", "")
-                }
-            }
-        }
-
-        for (abi in listOf("Arm64")) {
-            tasks.create("assemble" + abi + "FdroidRelease") {
-                dependsOn("assembleFdroidRelease")
+                outputFileName = outputFileName.replace(project.name, "Asteria-$versionName")
+                    .replace("-release", "")
+                    .replace("-oss", "")
             }
         }
 
