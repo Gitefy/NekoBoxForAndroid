@@ -203,7 +203,7 @@ class TrafficLooper
                 SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
             )
 
-            if (delayMs <= 0L) {
+            if (!TrafficLoopPolicy.shouldCollectTraffic(delayMs, profileTrafficStatistics)) {
                 // Nobody is listening -> skip the selection query and the IPC round-trip.
                 if (mainActivityForeground && data.state == BaseService.State.Connected) {
                     val selections = proxy.currentUrlTestSelections()
@@ -312,7 +312,7 @@ class TrafficLooper
                         if (data.binder.callbackIdMap[callback] ==
                             SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
                         ) {
-                            callback.cbSpeedUpdate(snapshot.speed)
+                            if (delayMs > 0L) callback.cbSpeedUpdate(snapshot.speed)
                             if (snapshot.trafficUpdates.isNotEmpty()) {
                                 snapshot.trafficUpdates.chunked(TRAFFIC_BATCH_SIZE).forEach {
                                     callback.cbTrafficUpdate(TrafficDataBatch(ArrayList(it)))

@@ -1,9 +1,17 @@
 package io.nekohasekai.sagernet.bg.proto
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TrafficLoopPolicyTest {
+    @Test
+    fun statisticsRemainCollectableWhenSpeedRefreshIsDisabled() {
+        assertTrue(TrafficLoopPolicy.shouldCollectTraffic(0L, true))
+        assertFalse(TrafficLoopPolicy.shouldCollectTraffic(0L, false))
+    }
+
 
     @Test
     fun disablingSpeedStillPollsRouterSelectionWithoutBusySpinning() {

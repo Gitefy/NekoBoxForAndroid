@@ -20,6 +20,9 @@ import (
 // the databases directly; sing-box 1.15 removed that mechanism, so the
 // referenced files must exist on disk before the router parses rule-sets.
 func extractLocalGeoRuleSets(options option.Options) error {
+	if options.Route == nil {
+		return nil
+	}
 	for _, ruleSet := range options.Route.RuleSet {
 		if ruleSet.Type != C.RuleSetTypeLocal || ruleSet.Format != C.RuleSetFormatBinary {
 			continue

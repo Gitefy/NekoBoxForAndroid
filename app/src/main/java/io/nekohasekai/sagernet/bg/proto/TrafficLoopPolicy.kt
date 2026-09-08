@@ -5,6 +5,9 @@ object TrafficLoopPolicy {
     private const val MIN_BACKGROUND_HIDDEN_MILLIS = 30_000L
     private const val MIN_INITIALIZATION_RETRY_MILLIS = 250L
 
+    fun shouldCollectTraffic(configuredMillis: Long, profileTrafficStatistics: Boolean): Boolean =
+        configuredMillis > 0L || profileTrafficStatistics
+
     fun delayMillis(
         configuredMillis: Long,
         mainActivityForeground: Boolean,
