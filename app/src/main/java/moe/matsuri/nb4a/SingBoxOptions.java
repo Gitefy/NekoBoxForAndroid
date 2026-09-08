@@ -2829,20 +2829,22 @@ public class SingBoxOptions {
         public Integer mtu;
 
         // Generate note: Listable
-        public List<String> inet4_address;
+        public List<String> address;
+
+        public String dns_mode;
 
         // Generate note: Listable
-        public List<String> inet6_address;
+        public List<String> dns_address;
 
         public Boolean auto_route;
 
         public Boolean strict_route;
 
         // Generate note: Listable
-        public List<String> inet4_route_address;
+        public List<String> route_address;
 
         // Generate note: Listable
-        public List<String> inet6_route_address;
+        public List<String> route_exclude_address;
 
         // Generate note: Listable
         public List<String> include_interface;
@@ -2870,8 +2872,6 @@ public class SingBoxOptions {
 
         // Generate note: Listable
         public List<String> exclude_package;
-
-        public Boolean endpoint_independent_nat;
 
         public Long udp_timeout;
 

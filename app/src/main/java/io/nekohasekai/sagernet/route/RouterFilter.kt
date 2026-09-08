@@ -14,16 +14,20 @@ data class RouterFilterConfig(
         exclude = excludeRegex.compileIfPresent(RouterFilterException.Field.EXCLUDE),
     )
 
-    fun toJson(): String = Gson().toJson(this)
+    fun toJson(): String = gson.toJson(this)
 
     companion object {
+        // Reused: config building calls these for every router group on every
+        // (re)connect; a fresh Gson per call is pure overhead.
+        private val gson = Gson()
+
         const val DEFAULT_TEST_URL = "https://www.gstatic.com/generate_204"
         const val DEFAULT_INTERVAL_SECONDS = 300L
         const val DEFAULT_TOLERANCE_MS = 50
 
         fun fromJson(value: String): RouterFilterConfig {
             if (value.isBlank()) return RouterFilterConfig()
-            return Gson().fromJson(value, RouterFilterConfig::class.java).let { parsed ->
+            return gson.fromJson(value, RouterFilterConfig::class.java).let { parsed ->
                 parsed.copy(
                     testUrl = parsed.testUrl.takeIf(String::isNotBlank) ?: DEFAULT_TEST_URL,
                     intervalSeconds = parsed.intervalSeconds.takeIf { it > 0 } ?: DEFAULT_INTERVAL_SECONDS,

@@ -564,6 +564,8 @@ class BackupFragment : ToolbarFragment(R.layout.layout_backup) {
                     PublicDatabase.kvPairDao.reset()
                     PublicDatabase.kvPairDao.insert(decodedSettings)
                 }
+                // Settings were written directly through the DAO; drop the read cache.
+                DataStore.configurationStore.invalidateCache()
             }
         }
     }

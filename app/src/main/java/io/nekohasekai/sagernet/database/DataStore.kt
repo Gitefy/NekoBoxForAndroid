@@ -177,6 +177,7 @@ object DataStore : OnPreferenceDataStoreChangeListener {
         for (key in DEPRECATED_SETTING_KEYS) {
             PublicDatabase.kvPairDao.delete(key)
         }
+        configurationStore.invalidateCache()
     }
 
 
@@ -209,7 +210,7 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     var connectionTestTimeout by configurationStore.int(Key.CONNECTION_TEST_TIMEOUT) { 3000 }
     var alwaysShowAddress by configurationStore.boolean(Key.ALWAYS_SHOW_ADDRESS)
 
-    var tunImplementation by configurationStore.stringToInt(Key.TUN_IMPLEMENTATION) { TunImplementation.GVISOR }
+    var tunImplementation by configurationStore.stringToInt(Key.TUN_IMPLEMENTATION) { TunImplementation.GO }
     var profileTrafficStatistics by configurationStore.boolean(Key.PROFILE_TRAFFIC_STATISTICS) { true }
 
     var yacdURL by configurationStore.string("yacdURL") { "http://127.0.0.1:9090/ui" }
