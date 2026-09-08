@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	geosites "github.com/sagernet/sing-box/common/geosite"
@@ -97,6 +98,77 @@ func TestExtractGeoRuleSetWritesSRS(t *testing.T) {
 	// Second run reuses the up-to-date extracted file.
 	if err = extractGeoRuleSet(geositeDat, "test-ads", out); err != nil {
 		t.Fatalf("extractGeoRuleSet (cached): %v", err)
+	}
+}
+
+func TestExtractGeoRuleSetRebuildsCorruptCache(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestGeositeDB(t, tmp)
+
+	oldAssets := externalAssetsPath
+	externalAssetsPath = tmp + string(os.PathSeparator)
+	defer func() { externalAssetsPath = oldAssets }()
+
+	outputPath := filepath.Join(tmp, "test-ads.srs")
+	if err := os.WriteFile(outputPath, []byte("not an srs file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dbInfo, err := os.Stat(filepath.Join(tmp, geositeDat))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chtimes(outputPath, dbInfo.ModTime(), dbInfo.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err = extractGeoRuleSet(geositeDat, "test-ads", outputPath); err != nil {
+		t.Fatalf("extractGeoRuleSet should rebuild corrupt cache: %v", err)
+	}
+
+	file, err := os.Open(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err = srs.Read(file, false); err != nil {
+		t.Fatalf("rebuilt cache should be a valid binary rule-set: %v", err)
+	}
+}
+
+func TestExtractGeoRuleSetSerializesSameOutput(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestGeositeDB(t, tmp)
+
+	oldAssets := externalAssetsPath
+	externalAssetsPath = tmp + string(os.PathSeparator)
+	defer func() { externalAssetsPath = oldAssets }()
+
+	outputPath := filepath.Join(tmp, "test-ads.srs")
+	const workers = 8
+	errs := make(chan error, workers)
+	var waitGroup sync.WaitGroup
+	for range workers {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			errs <- extractGeoRuleSet(geositeDat, "test-ads", outputPath)
+		}()
+	}
+	waitGroup.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent extraction failed: %v", err)
+		}
+	}
+
+	file, err := os.Open(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err = srs.Read(file, false); err != nil {
+		t.Fatalf("concurrent extraction should leave a valid binary rule-set: %v", err)
 	}
 }
 
