@@ -360,3 +360,146 @@ func TestSSRAssertUnsupported(t *testing.T) {
 		t.Fatal("shadowsocksr outbound should be rejected by the 1.15 core")
 	}
 }
+
+// TestDNSBlockAndStrategySchema mirrors the DNS JSON ConfigBuilder emits after
+// the sing-box 1.15 migration: typed servers with "domain_resolver", DNS rules
+// carrying "action"/"rcode" (predefined block) or "query_type" (fakeip), and
+// the query strategy as the top-level dns.strategy client option. The per-rule
+// "strategy" action option must NOT be used: combined with "query_type" rules
+// it is rejected at startup (see TestDNSStrategyActionWithQueryTypeRejected).
+func TestDNSBlockAndStrategySchema(t *testing.T) {
+	cfg := `{
+  "log": {"level": "info"},
+  "outbounds": [
+    {"type": "direct", "tag": "direct"},
+    {"type": "direct", "tag": "bypass"},
+    {"type": "block", "tag": "block"}
+  ],
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "stack": "go",
+      "address": ["172.19.0.1/30"],
+      "interface_name": "tun0",
+      "mtu": 9000,
+      "auto_route": true
+    }
+  ],
+  "dns": {
+    "servers": [
+      {"tag": "dns-local", "type": "local"},
+      {"tag": "dns-direct", "type": "udp", "server": "1.1.1.1", "server_port": 53, "domain_resolver": "dns-local"},
+      {"tag": "dns-remote", "type": "udp", "server": "8.8.8.8", "server_port": 53, "domain_resolver": "dns-direct"},
+      {"tag": "dns-fake", "type": "fakeip", "inet4_range": "198.18.0.0/15", "inet6_range": "fc00::/18"}
+    ],
+    "rules": [
+      {"domain_suffix": ["blocked.example"], "action": "predefined", "rcode": "NOERROR"},
+      {"inbound": ["tun-in"], "server": "dns-fake", "disable_cache": true, "query_type": ["A", "AAAA"]},
+      {"domain_suffix": ["example.com"], "server": "dns-remote"}
+    ],
+    "final": "dns-remote",
+    "strategy": "prefer_ipv4"
+  },
+  "route": {"final": "direct", "auto_detect_interface": true}
+}`
+	b, err := NewSingBoxInstance(cfg, nil)
+	if err != nil {
+		t.Fatalf("DNS config should parse on sing-box 1.15: %v", err)
+	}
+	defer b.Close()
+}
+
+// TestDNSStrategyActionWithQueryTypeRejected pins the startup failure seen on
+// device: a "query_type" DNS rule (fakeip) is incompatible with the legacy
+// per-rule "strategy" action option and the combination is rejected when the
+// DNS router initializes.
+func TestDNSStrategyActionWithQueryTypeRejected(t *testing.T) {
+	cfg := `{
+  "outbounds": [{"type": "direct", "tag": "direct"}],
+  "dns": {
+    "servers": [
+      {"tag": "dns-remote", "type": "udp", "server": "8.8.8.8", "server_port": 53},
+      {"tag": "dns-fake", "type": "fakeip", "inet4_range": "198.18.0.0/15"}
+    ],
+    "rules": [
+      {"server": "dns-fake", "query_type": ["A", "AAAA"]},
+      {"domain_suffix": ["example.com"], "server": "dns-remote", "strategy": "prefer_ipv4"}
+    ],
+    "final": "dns-remote"
+  },
+  "route": {"final": "direct"}
+}`
+	_, err := NewSingBoxInstance(cfg, nil)
+	if err == nil {
+		t.Fatal("query_type rule combined with rule-level strategy should be rejected at startup")
+	}
+}
+
+// TestDNSLegacySchemaRejected proves the pre-migration DNS fields that would
+// have caused physical-device startup failures are rejected by the 1.15 core.
+func TestDNSLegacySchemaRejected(t *testing.T) {
+	cases := map[string]string{
+		"legacy rcode server value": `{
+  "outbounds": [{"type": "direct", "tag": "direct"}],
+  "dns": {
+    "servers": [{"tag": "dns-local", "type": "local"}],
+    "rules": [{"domain_suffix": ["blocked.example"], "action": "predefined", "rcode": "success"}]
+  },
+  "route": {"final": "direct"}
+}`,
+		"server-level strategy": `{
+  "outbounds": [{"type": "direct", "tag": "direct"}],
+  "dns": {
+    "servers": [{"tag": "dns-direct", "type": "udp", "server": "1.1.1.1", "strategy": "prefer_ipv4"}]
+  },
+  "route": {"final": "direct"}
+}`,
+		"server-level address_resolver": `{
+  "outbounds": [{"type": "direct", "tag": "direct"}],
+  "dns": {
+    "servers": [{"tag": "dns-direct", "type": "udp", "server": "1.1.1.1", "address_resolver": "dns-local"}]
+  },
+  "route": {"final": "direct"}
+}`,
+	}
+	for name, cfg := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := NewSingBoxInstance(cfg, nil)
+			if err == nil {
+				t.Fatalf("legacy DNS schema should be rejected by the 1.15 core")
+			}
+		})
+	}
+}
+
+// TestRouteConcurrentDialRejected proves the NekoBox "concurrent_dial" route
+// extension no longer exists in sing-box 1.15, so ConfigBuilder must not emit
+// it (otherwise the whole config fails strict parsing).
+func TestRouteConcurrentDialRejected(t *testing.T) {
+	cfg := `{
+  "outbounds": [{"type": "direct", "tag": "direct"}],
+  "route": {"final": "direct", "concurrent_dial": false}
+}`
+	_, err := NewSingBoxInstance(cfg, nil)
+	if err == nil {
+		t.Fatal("route.concurrent_dial should be rejected by the 1.15 core")
+	}
+}
+
+// TestDirectFragmentExtensionRejected proves the NekoBox fork-only "fragment"
+// extension on the direct outbound no longer exists in sing-box 1.15 (TLS
+// fragmentation moved to the route "tls_fragment" action / TLS options).
+func TestDirectFragmentExtensionRejected(t *testing.T) {
+	cfg := `{
+  "outbounds": [
+    {"type": "direct", "tag": "direct"},
+    {"type": "direct", "tag": "fragment", "fragment": {"length": "1-5", "interval": "30-60"}}
+  ],
+  "route": {"final": "direct"}
+}`
+	_, err := NewSingBoxInstance(cfg, nil)
+	if err == nil {
+		t.Fatal("direct outbound 'fragment' extension should be rejected by the 1.15 core")
+	}
+}

@@ -104,6 +104,15 @@ func NewSingBoxInstance(config string, localTransport LocalDNSTransport) (b *Box
 		return nil, fmt.Errorf("decode config: %v", err)
 	}
 
+	// sing-box 1.15 removed the nekoutils hooks that resolved "geosite:" /
+	// "geoip:" local rule-set references from the consolidated geo databases;
+	// materialize them as binary rule-set files before the router loads them.
+	err = extractLocalGeoRuleSets(options)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("extract geo rule-sets: %v", err)
+	}
+
 	// create box
 	instance, err := box.New(box.Options{
 		Options:           options,

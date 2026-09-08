@@ -4617,6 +4617,10 @@ public class SingBoxOptions {
 
         public String outbound;
 
+        // sing-box 1.15 "resolve" rule action (replaces legacy inbound
+        // domain_strategy).
+        public String strategy;
+
     }
 
     public static class DNSRule_DefaultOptions extends DNSRule {
@@ -4690,6 +4694,8 @@ public class SingBoxOptions {
         public Boolean invert;
 
         public String server;
+
+        public String strategy;
 
         public Boolean disable_cache;
 

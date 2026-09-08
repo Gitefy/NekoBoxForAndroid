@@ -318,7 +318,6 @@ fun buildConfig(
     val enableDnsRouting = DataStore.enableDnsRouting
     val useFakeDns = DataStore.enableFakeDns && !forTest
     val needSniff = DataStore.trafficSniffing > 0
-    val needSniffOverride = DataStore.trafficSniffing == 2
     val externalIndexMap = ArrayList<IndexEntity>()
     val ipv6Mode = if (forTest) IPv6Mode.ENABLE else DataStore.ipv6Mode
 
@@ -386,6 +385,13 @@ fun buildConfig(
             }
         }
 
+        // sing-box 1.15 removed the per-DNS-server "strategy" field, and the
+        // per-rule "strategy" action option is rejected at startup when combined
+        // with "query_type" rules (used by fakeip). The query strategy is now
+        // expressed once as the top-level dns.strategy client option; distinct
+        // per-target strategies from settings can no longer be represented.
+        val dnsStrategy = autoDnsDomainStrategy(SingBoxOptionsUtil.domainStrategy("dns-remote"))
+
         inbounds = mutableListOf()
 
         if (!forTest) {
@@ -400,11 +406,10 @@ fun buildConfig(
                     else -> "go"
                 }
                 mtu = DataStore.mtu
-                domain_strategy = genDomainStrategy(DataStore.resolveDestination)
+                // sing-box 1.15 removed legacy inbound fields. Sniffing and the
+                // inbound domain strategy are emitted as route rule actions below.
                 auto_route = true
                 strict_route = DataStore.strictRoute
-                sniff = needSniff
-                sniff_override_destination = needSniffOverride
                 address = when (ipv6Mode) {
                     IPv6Mode.DISABLE -> listOf(VpnService.PRIVATE_VLAN4_CLIENT + "/28")
                     IPv6Mode.ONLY -> listOf(VpnService.PRIVATE_VLAN6_CLIENT + "/126")
@@ -419,9 +424,9 @@ fun buildConfig(
                 tag = TAG_MIXED
                 listen = bind
                 listen_port = DataStore.mixedPort
-                domain_strategy = genDomainStrategy(DataStore.resolveDestination)
-                sniff = needSniff
-                sniff_override_destination = needSniffOverride
+                // sing-box 1.15 rejects legacy inbound fields on listen inbounds
+                // (sniff / sniff_override_destination / domain_strategy); see the
+                // route rule actions below for their replacements.
                 if (DataStore.mixedInboundHasAuth) {
                     users = listOf(User().also { u ->
                         u.username = DataStore.mixedUsername
@@ -440,9 +445,8 @@ fun buildConfig(
             override_android_vpn = true
             rules = mutableListOf()
             rule_set = mutableListOf()
-
-            // 添加并发拨号设置
-             concurrent_dial = DataStore.concurrentDial
+            // sing-box 1.15 removed the fork-only "concurrent_dial" route
+            // extension; concurrent dialing is now built into the core dialer.
         }
 
         // returns outbound tag
@@ -930,7 +934,9 @@ fun buildConfig(
                     when (rule.outbound) {
                         -1L -> {
                             if (shouldAddDnsRule) {
-                                userDNSRuleList += makeDnsRuleObj().apply { server = "dns-direct" }
+                                userDNSRuleList += makeDnsRuleObj().apply {
+                                    server = "dns-direct"
+                                }
                             }
 
                             if (rule_set != null && rulesetTags.isNotEmpty()) {
@@ -985,8 +991,8 @@ fun buildConfig(
                         -2L -> {
                             if (shouldAddDnsRule) {
                                 userDNSRuleList += makeDnsRuleObj().apply {
-                                    server = "dns-block"
-                                    disable_cache = true
+                                    _hack_config_map["action"] = "predefined"
+                                    _hack_config_map["rcode"] = "NOERROR"
                                 }
                             }
 
@@ -996,8 +1002,8 @@ fun buildConfig(
                                     if (tag.startsWith("ruleset-") && tagInfo != null && !tagInfo.second) {
                                         userDNSRuleList += DNSRule_DefaultOptions().apply {
                                             rule_set = mutableListOf(tag)
-                                            server = "dns-block"
-                                            disable_cache = true
+                                            _hack_config_map["action"] = "predefined"
+                                            _hack_config_map["rcode"] = "NOERROR"
                                         }
                                     }
                                 }
@@ -1041,13 +1047,16 @@ fun buildConfig(
         })
 
         if (DataStore.enableTLSFragment) {
+            // sing-box 1.15 removed the fork-only direct-outbound "fragment"
+            // extension (a {length, interval} object). TLS fragmentation now
+            // lives in the route "tls_fragment" action / TLS options; emitting
+            // the legacy object breaks strict parsing. Emit a plain direct
+            // outbound so the TAG_FRAGMENT detour keeps working without
+            // crashing config decode. (Full migration to "tls_fragment" is a
+            // separate follow-up.)
             val fragmentOutbound = Outbound().apply {
                 tag = TAG_FRAGMENT
                 type = "direct"
-                _hack_config_map["fragment"] = Fragment().apply {
-                    length = DataStore.fragmentLength
-                    interval = DataStore.fragmentInterval
-                }.asMap()
             }
             outbounds.add(fragmentOutbound)
         }
@@ -1087,7 +1096,6 @@ fun buildConfig(
             }
         }
 
-        dns.servers.add(buildDnsServerOptions("dns-block", "rcode://success"))
         dns.servers.add(buildDnsServerOptions("dns-local", "local", detour = TAG_DIRECT))
 
         directDNS.firstOrNull().let {
@@ -1095,8 +1103,7 @@ fun buildConfig(
                 tag = "dns-direct",
                 address = it ?: throw Exception("No direct DNS, check your settings!"),
                 detour = TAG_DIRECT,
-                addressResolver = "dns-local",
-                strategy = autoDnsDomainStrategy(SingBoxOptionsUtil.domainStrategy("dns-direct"))
+                addressResolver = "dns-local"
             ))
         }
 
@@ -1105,8 +1112,7 @@ fun buildConfig(
             if (!forTest) dns.servers.add(buildDnsServerOptions(
                 tag = "dns-remote",
                 address = it ?: throw Exception("No remote DNS, check your settings!"),
-                addressResolver = "dns-direct",
-                strategy = autoDnsDomainStrategy(SingBoxOptionsUtil.domainStrategy("dns-remote"))
+                addressResolver = "dns-direct"
             ))
         }
         if (dnsHosts.isNotEmpty()) {
@@ -1118,6 +1124,7 @@ fun buildConfig(
         }
 
         dns.final_ = if (forTest) "dns-direct" else "dns-remote"
+        dns.strategy = dnsStrategy
 
         // dns object user rules
         if (enableDnsRouting) {
@@ -1134,6 +1141,26 @@ fun buildConfig(
                 protocol = listOf("dns")
                 action = "hijack-dns"
             })
+            // sing-box 1.15 replaced legacy inbound fields with rule actions
+            // (inserted at index 0, so final order is: port 53 hijack, sniff,
+            // resolve, dns hijack, then user rules):
+            // - inbound "sniff" -> "sniff" action. Non-terminating; must run
+            //   before rules that match on the sniffed protocol/domain.
+            // - inbound "domain_strategy" -> "resolve" action with the strategy.
+            // - "sniff_override_destination" has no sing-box 1.15 equivalent and
+            //   is dropped; plain sniffing still works.
+            val inboundResolveStrategy = genDomainStrategy(DataStore.resolveDestination)
+            if (inboundResolveStrategy.isNotEmpty()) {
+                route.rules.add(0, Rule_DefaultOptions().apply {
+                    action = "resolve"
+                    strategy = inboundResolveStrategy
+                })
+            }
+            if (needSniff) {
+                route.rules.add(0, Rule_DefaultOptions().apply {
+                    action = "sniff"
+                })
+            }
             route.rules.add(0, Rule_DefaultOptions().apply {
                 port = listOf(53)
                 action = "hijack-dns"
@@ -1154,7 +1181,6 @@ fun buildConfig(
             if (useFakeDns) {
                 dns.servers.add(DNSServerOptions().apply {
                     tag = "dns-fake"
-                    strategy = "ipv4_only"
                     _hack_config_map["type"] = "fakeip"
                     _hack_config_map["inet4_range"] = "198.18.0.0/15"
                     _hack_config_map["inet6_range"] = "fc00::/18"
@@ -1195,8 +1221,7 @@ fun buildConfig(
                     tag = serverTag,
                     address = resolver,
                     detour = TAG_DIRECT,
-                    addressResolver = if (!resolver.isIpAddress()) "dns-direct" else null,
-                    strategy = autoDnsDomainStrategy(SingBoxOptionsUtil.domainStrategy("server"))
+                    addressResolver = if (!resolver.isIpAddress()) "dns-direct" else null
                 ))
                 dns.rules.add(0, DNSRule_DefaultOptions().apply {
                     makeSingBoxRule(hosts)
@@ -1238,13 +1263,16 @@ internal fun buildDnsServerOptions(
     address: String,
     detour: String? = null,
     addressResolver: String? = null,
-    strategy: String? = null,
 ): DNSServerOptions {
     val options = DNSServerOptions().apply {
         this.tag = tag
-        if (detour != null) this.detour = detour
-        if (addressResolver != null) this.address_resolver = addressResolver
-        if (strategy != null) this.strategy = strategy
+        // sing-box 1.15 rejects a detour to an empty direct outbound ("makes no
+        // sense"): with no detour the DNS transport dials directly, which is
+        // the same behavior. Only emit detour for real outbounds.
+        if (detour != null && detour != TAG_DIRECT && detour != TAG_BYPASS) this.detour = detour
+        // sing-box 1.15 renamed the legacy DNS server "address_resolver" field to
+        // "domain_resolver" (a string tag or object form).
+        if (addressResolver != null) this._hack_config_map["domain_resolver"] = addressResolver
     }
     when {
         address == "local" -> {
@@ -1252,10 +1280,6 @@ internal fun buildDnsServerOptions(
         }
         address == "fakeip" -> {
             options._hack_config_map["type"] = "fakeip"
-        }
-        address.startsWith("rcode://") -> {
-            options._hack_config_map["type"] = "rcode"
-            options._hack_config_map["rcode"] = address.substringAfter("rcode://")
         }
         else -> {
             val scheme = if (address.contains("://")) {
