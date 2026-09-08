@@ -558,6 +558,7 @@
         <item>gVisor</item>
         <item>System</item>
         <item>Mixed</item>
+        <item>@string/tun_implementation_go</item>
     </string-array>
 
     <string-array name="hysteria_protocol">

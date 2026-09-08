@@ -31,7 +31,7 @@ import io.nekohasekai.sagernet.fmt.shadowsocksr.buildSingBoxOutboundShadowsocksR
 import io.nekohasekai.sagernet.fmt.snell.SnellBean
 import io.nekohasekai.sagernet.fmt.snell.buildSingBoxOutboundSnellBean
 import io.nekohasekai.sagernet.fmt.wireguard.WireGuardBean
-import io.nekohasekai.sagernet.fmt.wireguard.buildSingBoxOutboundWireguardBean
+import io.nekohasekai.sagernet.fmt.wireguard.buildSingBoxWireGuardEndpointBean
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.isIpAddress
 import io.nekohasekai.sagernet.ktx.mkPort
@@ -396,28 +396,22 @@ fun buildConfig(
                 stack = when (DataStore.tunImplementation) {
                     TunImplementation.GVISOR -> "gvisor"
                     TunImplementation.SYSTEM -> "system"
-                    else -> "mixed"
+                    TunImplementation.MIXED -> "mixed"
+                    else -> "go"
                 }
-                endpoint_independent_nat = true
                 mtu = DataStore.mtu
                 domain_strategy = genDomainStrategy(DataStore.resolveDestination)
                 auto_route = true
                 strict_route = DataStore.strictRoute
                 sniff = needSniff
                 sniff_override_destination = needSniffOverride
-                when (ipv6Mode) {
-                    IPv6Mode.DISABLE -> {
-                        inet4_address = listOf(VpnService.PRIVATE_VLAN4_CLIENT + "/28")
-                    }
-
-                    IPv6Mode.ONLY -> {
-                        inet6_address = listOf(VpnService.PRIVATE_VLAN6_CLIENT + "/126")
-                    }
-
-                    else -> {
-                        inet4_address = listOf(VpnService.PRIVATE_VLAN4_CLIENT + "/28")
-                        inet6_address = listOf(VpnService.PRIVATE_VLAN6_CLIENT + "/126")
-                    }
+                address = when (ipv6Mode) {
+                    IPv6Mode.DISABLE -> listOf(VpnService.PRIVATE_VLAN4_CLIENT + "/28")
+                    IPv6Mode.ONLY -> listOf(VpnService.PRIVATE_VLAN6_CLIENT + "/126")
+                    else -> listOf(
+                        VpnService.PRIVATE_VLAN4_CLIENT + "/28",
+                        VpnService.PRIVATE_VLAN6_CLIENT + "/126"
+                    )
                 }
             })
             inbounds.add(Inbound_MixedOptions().apply {
@@ -438,6 +432,7 @@ fun buildConfig(
         }
 
         outbounds = mutableListOf()
+        endpoints = mutableListOf()
 
         // init routing object
         route = RouteOptions().apply {
@@ -599,7 +594,7 @@ fun buildConfig(
                             buildSingBoxOutboundShadowsocksRBean(bean)
 
                         is WireGuardBean ->
-                            buildSingBoxOutboundWireguardBean(bean)
+                            buildSingBoxWireGuardEndpointBean(bean)
 
                         is SSHBean ->
                             buildSingBoxOutboundSSHBean(bean)
@@ -710,7 +705,12 @@ fun buildConfig(
                     }
                 }
 
-                outbounds.add(currentOutbound)
+                if (currentOutbound is SingBoxOptions.Endpoint) {
+                    // WireGuard & friends live in `endpoints` since sing-box 1.15
+                    endpoints.add(currentOutbound)
+                } else {
+                    outbounds.add(currentOutbound)
+                }
                 chainOutbounds.add(currentOutbound)
                 pastOutbound = currentOutbound
                 pastEntity = proxyEntity
@@ -1087,35 +1087,27 @@ fun buildConfig(
             }
         }
 
-        dns.servers.add(DNSServerOptions().apply {
-            address = "rcode://success"
-            tag = "dns-block"
-        })
-
-        dns.servers.add(DNSServerOptions().apply {
-            address = "local"
-            tag = "dns-local"
-            detour = TAG_DIRECT
-        })
+        dns.servers.add(buildDnsServerOptions("dns-block", "rcode://success"))
+        dns.servers.add(buildDnsServerOptions("dns-local", "local", detour = TAG_DIRECT))
 
         directDNS.firstOrNull().let {
-            dns.servers.add(DNSServerOptions().apply {
-                address = it ?: throw Exception("No direct DNS, check your settings!")
-                tag = "dns-direct"
-                detour = TAG_DIRECT
-                address_resolver = "dns-local"
-                strategy = autoDnsDomainStrategy(SingBoxOptionsUtil.domainStrategy(tag))
-            })
+            dns.servers.add(buildDnsServerOptions(
+                tag = "dns-direct",
+                address = it ?: throw Exception("No direct DNS, check your settings!"),
+                detour = TAG_DIRECT,
+                addressResolver = "dns-local",
+                strategy = autoDnsDomainStrategy(SingBoxOptionsUtil.domainStrategy("dns-direct"))
+            ))
         }
 
         remoteDns.firstOrNull().let {
             // Always use direct DNS for urlTest
-            if (!forTest) dns.servers.add(DNSServerOptions().apply {
-                address = it ?: throw Exception("No remote DNS, check your settings!")
-                tag = "dns-remote"
-                address_resolver = "dns-direct"
-                strategy = autoDnsDomainStrategy(SingBoxOptionsUtil.domainStrategy(tag))
-            })
+            if (!forTest) dns.servers.add(buildDnsServerOptions(
+                tag = "dns-remote",
+                address = it ?: throw Exception("No remote DNS, check your settings!"),
+                addressResolver = "dns-direct",
+                strategy = autoDnsDomainStrategy(SingBoxOptionsUtil.domainStrategy("dns-remote"))
+            ))
         }
         if (dnsHosts.isNotEmpty()) {
             dns.servers.add(DNSServerOptions().apply {
@@ -1160,15 +1152,12 @@ fun buildConfig(
             })
             // FakeDNS obj
             if (useFakeDns) {
-                dns.fakeip = DNSFakeIPOptions().apply {
-                    enabled = true
-                    inet4_range = "198.18.0.0/15"
-                    inet6_range = "fc00::/18"
-                }
                 dns.servers.add(DNSServerOptions().apply {
-                    address = "fakeip"
                     tag = "dns-fake"
                     strategy = "ipv4_only"
+                    _hack_config_map["type"] = "fakeip"
+                    _hack_config_map["inet4_range"] = "198.18.0.0/15"
+                    _hack_config_map["inet6_range"] = "fc00::/18"
                 })
                 dns.rules.add(DNSRule_DefaultOptions().apply {
                     inbound = listOf(deviceInboundTag)
@@ -1202,15 +1191,13 @@ fun buildConfig(
                 if (hosts.isNullOrEmpty()) return@forEach
 
                 val serverTag = "dns-sub-$gid"
-                dns.servers.add(DNSServerOptions().apply {
-                    address = resolver
-                    tag = serverTag
-                    detour = TAG_DIRECT
-                    if (!resolver.isIpAddress()) {
-                        address_resolver = "dns-direct"
-                    }
+                dns.servers.add(buildDnsServerOptions(
+                    tag = serverTag,
+                    address = resolver,
+                    detour = TAG_DIRECT,
+                    addressResolver = if (!resolver.isIpAddress()) "dns-direct" else null,
                     strategy = autoDnsDomainStrategy(SingBoxOptionsUtil.domainStrategy("server"))
-                })
+                ))
                 dns.rules.add(0, DNSRule_DefaultOptions().apply {
                     makeSingBoxRule(hosts)
                     server = serverTag
@@ -1240,4 +1227,107 @@ fun buildConfig(
         )
     }
 
+}
+
+// buildDnsServerOptions converts the legacy sing-box DNS server address string
+// (used by NekoBox settings) into the sing-box 1.15+ typed DNS server format.
+// The legacy "address" field was removed in sing-box 1.14, so we must emit
+// "type" + type-specific fields instead.
+internal fun buildDnsServerOptions(
+    tag: String,
+    address: String,
+    detour: String? = null,
+    addressResolver: String? = null,
+    strategy: String? = null,
+): DNSServerOptions {
+    val options = DNSServerOptions().apply {
+        this.tag = tag
+        if (detour != null) this.detour = detour
+        if (addressResolver != null) this.address_resolver = addressResolver
+        if (strategy != null) this.strategy = strategy
+    }
+    when {
+        address == "local" -> {
+            options._hack_config_map["type"] = "local"
+        }
+        address == "fakeip" -> {
+            options._hack_config_map["type"] = "fakeip"
+        }
+        address.startsWith("rcode://") -> {
+            options._hack_config_map["type"] = "rcode"
+            options._hack_config_map["rcode"] = address.substringAfter("rcode://")
+        }
+        else -> {
+            val scheme = if (address.contains("://")) {
+                address.substringBefore("://").lowercase()
+            } else {
+                "udp"
+            }
+            val body = if (address.contains("://")) address.substringAfter("://") else address
+            when (scheme) {
+                "https", "h3" -> {
+                    val url = "https://$body".toHttpUrlOrNull()
+                        ?: error("invalid DNS HTTPS URL: $address")
+                    options._hack_config_map["type"] = if (scheme == "h3") "h3" else "https"
+                    options._hack_config_map["server"] = url.host
+                    options._hack_config_map["server_port"] =
+                        if (url.port != -1) url.port else 443
+                    if (url.encodedPath.isNotBlank() && url.encodedPath != "/") {
+                        options._hack_config_map["path"] = url.encodedPath
+                    }
+                    options._hack_config_map["tls"] = mapOf(
+                        "enabled" to true,
+                        "server_name" to if (url.host.isIpAddress()) "" else url.host
+                    )
+                }
+                "tls", "tcp", "udp", "quic" -> {
+                    val defaultPort = when (scheme) {
+                        "tls", "quic" -> 853
+                        else -> 53
+                    }
+                    val (host, port) = parseDnsHostPort(body, defaultPort)
+                    options._hack_config_map["type"] = scheme
+                    options._hack_config_map["server"] = host
+                    options._hack_config_map["server_port"] = port
+                    if (scheme == "tls" || scheme == "quic") {
+                        options._hack_config_map["tls"] = mapOf(
+                            "enabled" to true,
+                            "server_name" to if (host.isIpAddress()) "" else host
+                        )
+                    }
+                }
+                else -> {
+                    // Unknown scheme: treat as plain UDP to avoid silently
+                    // emitting an unsupported legacy address.
+                    val (host, port) = parseDnsHostPort(address, 53)
+                    options._hack_config_map["type"] = "udp"
+                    options._hack_config_map["server"] = host
+                    options._hack_config_map["server_port"] = port
+                }
+            }
+        }
+    }
+    return options
+}
+
+private fun parseDnsHostPort(input: String, defaultPort: Int): Pair<String, Int> {
+    val s = input.trim()
+    if (s.startsWith("[")) {
+        val close = s.indexOf("]")
+        if (close == -1) return s to defaultPort
+        val host = s.substring(1, close)
+        val port = if (s.length > close + 2 && s[close + 1] == ':') {
+            s.substring(close + 2).toIntOrNull() ?: defaultPort
+        } else {
+            defaultPort
+        }
+        return host to port
+    }
+    val lastColon = s.lastIndexOf(":")
+    val firstColon = s.indexOf(":")
+    if (lastColon != -1 && firstColon == lastColon) {
+        val port = s.substring(lastColon + 1).toIntOrNull()
+        if (port != null) return s.substring(0, lastColon) to port
+    }
+    return s to defaultPort
 }
