@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.os.RemoteException
 import android.view.KeyEvent
@@ -134,16 +133,14 @@ class MainActivity : ThemedActivity(),
 
         refreshNavMenu(DataStore.enableClashAPI)
 
-        // sdk 33 notification
-        if (Build.VERSION.SDK_INT >= 33) {
-            val checkPermission =
-                ContextCompat.checkSelfPermission(this@MainActivity, POST_NOTIFICATIONS)
-            if (checkPermission != PackageManager.PERMISSION_GRANTED) {
-                //动态申请
-                ActivityCompat.requestPermissions(
-                    this@MainActivity, arrayOf(POST_NOTIFICATIONS), 0
-                )
-            }
+        // notification permission
+        val checkPermission =
+            ContextCompat.checkSelfPermission(this@MainActivity, POST_NOTIFICATIONS)
+        if (checkPermission != PackageManager.PERMISSION_GRANTED) {
+            //动态申请
+            ActivityCompat.requestPermissions(
+                this@MainActivity, arrayOf(POST_NOTIFICATIONS), 0
+            )
         }
 
         if (isPreview) {

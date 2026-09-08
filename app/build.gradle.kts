@@ -16,9 +16,6 @@ android {
     defaultConfig {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
-    compileOptions {
-        isCoreLibraryDesugaringEnabled = true
-    }
     ksp {
         arg("room.incremental", "true")
         arg("room.schemaLocation", "$projectDir/schemas")
@@ -34,11 +31,6 @@ android {
         aidl = true
     }
     namespace = "io.nekohasekai.sagernet"
-    packaging {
-        jniLibs {
-            useLegacyPackaging = true
-        }
-    }
     androidResources {
         generateLocaleConfig = true
     }
@@ -99,8 +91,6 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     implementation("com.github.MatrixDev.Roomigrant:RoomigrantLib:0.3.4")
     ksp("com.github.MatrixDev.Roomigrant:RoomigrantCompiler:0.3.4")
-
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.3")
 }
 
 val verifyLibcore by tasks.registering {

@@ -9,11 +9,9 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.net.ConnectivityManager
 import android.net.Network
-import android.os.Build
 import android.os.PowerManager
 import android.os.StrictMode
 import android.os.UserManager
-import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import androidx.core.content.getSystemService
 import go.Seq
@@ -139,7 +137,7 @@ class SagerNet : Application(),
                     Intent(
                         application, MainActivity::class.java
                     ).setFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT),
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+                    PendingIntent.FLAG_IMMUTABLE
                 )
             }
         }
@@ -165,34 +163,31 @@ class SagerNet : Application(),
         }
 
         fun updateNotificationChannels() {
-            if (Build.VERSION.SDK_INT >= 26) @RequiresApi(26) {
-                val vpnNotificationPolicy = ServiceNotification.vpnNotificationChannelPolicy()
-                notification.createNotificationChannels(
-                    listOf(
-                        NotificationChannel(
-                            ServiceNotification.vpnNotificationChannel,
-                            application.getText(R.string.service_vpn),
-                            if (Build.VERSION.SDK_INT >= 28) vpnNotificationPolicy.importance
-                            else NotificationManager.IMPORTANCE_LOW
-                        ).apply {
-                            setLockscreenVisibility(vpnNotificationPolicy.lockscreenVisibility)
-                        },   // #1355
-                        NotificationChannel(
-                            "service-proxy",
-                            application.getText(R.string.service_proxy),
-                            NotificationManager.IMPORTANCE_LOW
-                        ), NotificationChannel(
-                            "service-subscription",
-                            application.getText(R.string.service_subscription),
-                            NotificationManager.IMPORTANCE_DEFAULT
-                        ), NotificationChannel(
-                            "connection-test",
-                            application.getText(R.string.connection_test),
-                            NotificationManager.IMPORTANCE_DEFAULT
-                        )
+            val vpnNotificationPolicy = ServiceNotification.vpnNotificationChannelPolicy()
+            notification.createNotificationChannels(
+                listOf(
+                    NotificationChannel(
+                        ServiceNotification.vpnNotificationChannel,
+                        application.getText(R.string.service_vpn),
+                        vpnNotificationPolicy.importance
+                    ).apply {
+                        setLockscreenVisibility(vpnNotificationPolicy.lockscreenVisibility)
+                    },   // #1355
+                    NotificationChannel(
+                        "service-proxy",
+                        application.getText(R.string.service_proxy),
+                        NotificationManager.IMPORTANCE_LOW
+                    ), NotificationChannel(
+                        "service-subscription",
+                        application.getText(R.string.service_subscription),
+                        NotificationManager.IMPORTANCE_DEFAULT
+                    ), NotificationChannel(
+                        "connection-test",
+                        application.getText(R.string.connection_test),
+                        NotificationManager.IMPORTANCE_DEFAULT
                     )
                 )
-            }
+            )
         }
 
         fun startService() = ContextCompat.startForegroundService(

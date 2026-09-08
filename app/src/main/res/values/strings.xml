@@ -547,8 +547,6 @@
     <string name="warp_generate">Generate Configuration</string>
     <string name="generating">Generating…</string>
     <string name="tun_implementation">TUN Implementation</string>
-    <string name="enable_hev_tun">Enable Hev TUN</string>
-    <string name="enable_hev_tun_summary">Use hev-socks5-tunnel to create the TUN device</string>
     <string name="destination_override">Override Destination</string>
     <string name="destination_override_summary">Use the sniffed domain to overwrite the destination
         address, not just for routing</string>

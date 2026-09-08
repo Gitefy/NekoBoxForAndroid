@@ -13,7 +13,7 @@ import kotlin.system.exitProcess
 private val Project.android get() = extensions.getByName<ApplicationExtension>("android")
 
 fun Project.requireMetadata(): Properties {
-    val file = rootProject.file("nb4a.properties")
+    val file = rootProject.file("asteria.properties")
     val props = Properties()
     if (file.exists()) {
         file.inputStream().use { props.load(it) }

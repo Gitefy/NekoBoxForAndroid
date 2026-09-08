@@ -8,7 +8,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED
-import android.os.Build
 import android.os.PowerManager
 import android.text.format.Formatter
 import android.widget.Toast
@@ -88,7 +87,43 @@ class ServiceNotification(
         ((service as Context).getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive,
     )
 
+    // Last values actually rendered into the notification. Rebuilding a
+    // Notification (RemoteViews + icon resources) and handing it to
+    // NotificationManager is one of the most expensive things this app does on a
+    // timer: it wakes SystemUI and the notification side of every listener every
+    // speed interval. While the connection is idle the rendered text does not
+    // change, so the whole rebuild can be skipped.
+    private var lastSpeedTxRateProxy = Long.MIN_VALUE
+    private var lastSpeedRxRateProxy = Long.MIN_VALUE
+    private var lastSpeedTxRateDirect = Long.MIN_VALUE
+    private var lastSpeedRxRateDirect = Long.MIN_VALUE
+    private var lastSpeedTxTotal = Long.MIN_VALUE
+    private var lastSpeedRxTotal = Long.MIN_VALUE
+
+    private fun speedRenderUnchanged(stats: SpeedDisplayData): Boolean {
+        if (lastSpeedTxRateProxy != stats.txRateProxy) return false
+        if (lastSpeedRxRateProxy != stats.rxRateProxy) return false
+        if (lastSpeedTxTotal != stats.txTotal) return false
+        if (lastSpeedRxTotal != stats.rxTotal) return false
+        if (showDirectSpeed) {
+            if (lastSpeedTxRateDirect != stats.txRateDirect) return false
+            if (lastSpeedRxRateDirect != stats.rxRateDirect) return false
+        }
+        return true
+    }
+
+    private fun rememberSpeed(stats: SpeedDisplayData) {
+        lastSpeedTxRateProxy = stats.txRateProxy
+        lastSpeedRxRateProxy = stats.rxRateProxy
+        lastSpeedTxRateDirect = stats.txRateDirect
+        lastSpeedRxRateDirect = stats.rxRateDirect
+        lastSpeedTxTotal = stats.txTotal
+        lastSpeedRxTotal = stats.rxTotal
+    }
+
     suspend fun postNotificationSpeedUpdate(stats: SpeedDisplayData) {
+        if (speedRenderUnchanged(stats)) return
+        rememberSpeed(stats)
         useBuilder {
             if (showDirectSpeed) {
                 val speedDetail = (service as Context).getString(
@@ -225,15 +260,11 @@ class ServiceNotification(
         useBuilder {
             if (destroyed) return@useBuilder
             try {
-                if (Build.VERSION.SDK_INT >= 34) {
-                    (service as Service).startForeground(
-                        notificationId,
-                        it.build(),
-                        FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED
-                    )
-                } else {
-                    (service as Service).startForeground(notificationId, it.build())
-                }
+                (service as Service).startForeground(
+                    notificationId,
+                    it.build(),
+                    FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED
+                )
             } catch (e: Exception) {
                 Toast.makeText(
                     SagerNet.application,

@@ -6,7 +6,6 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.ProxyInfo
-import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
 import io.nekohasekai.sagernet.*

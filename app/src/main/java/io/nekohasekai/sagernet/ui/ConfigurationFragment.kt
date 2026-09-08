@@ -2172,13 +2172,20 @@ class ConfigurationFragment @JvmOverloads constructor(
                     reloadProfiles()
                     return
                 }
-                configurationIdList.clear()
                 val lower = name.lowercase()
-                configurationIdList.addAll(configurationList.filter {
-                    it.value.displayName().lowercase().contains(lower) ||
-                            it.value.displayType().lowercase().contains(lower) ||
-                            it.value.displayAddress().lowercase().contains(lower)
-                }.keys)
+                configurationIdList.clear()
+                // Runs on every keystroke: Map.filter() would allocate an intermediate
+                // map plus a key collection, and lowercase() one copy per field per
+                // profile. Iterating in place and comparing case-insensitively keeps it
+                // allocation free.
+                configurationList.forEach { (id, entity) ->
+                    if (entity.displayName().contains(lower, ignoreCase = true) ||
+                        entity.displayType().contains(lower, ignoreCase = true) ||
+                        entity.displayAddress().contains(lower, ignoreCase = true)
+                    ) {
+                        configurationIdList.add(id)
+                    }
+                }
                 notifyDataSetChanged()
             }
 

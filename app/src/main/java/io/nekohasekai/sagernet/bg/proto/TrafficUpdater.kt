@@ -27,15 +27,23 @@ class TrafficUpdater(
         var hasTrafficDelta: Boolean = false,
     )
 
-    private fun updateOne(item: TrafficLooperData): TrafficLooperData {
+    /**
+     * Writes the diff of [item] into [out] instead of allocating a new holder.
+     */
+    private fun updateOne(item: TrafficLooperData, out: TrafficLooperData): TrafficLooperData {
         // last update
         val now = monotonicMillis()
         val interval = now - item.lastUpdate
         item.lastUpdate = now
+        out.tag = item.tag
         if (interval <= 0) {
             item.rxRate = 0
             item.txRate = 0
-            return TrafficLooperData(tag = item.tag)
+            out.rx = 0L
+            out.tx = 0L
+            out.rxRate = 0L
+            out.txRate = 0L
+            return out
         }
 
         // query
@@ -49,27 +57,32 @@ class TrafficUpdater(
         item.txRate = tx * 1000 / interval
 
         // return diff
-        return TrafficLooperData(
-            tag = item.tag,
-            rx = rx,
-            tx = tx,
-            rxRate = item.rxRate,
-            txRate = item.txRate,
-        )
+        out.rx = rx
+        out.tx = tx
+        out.rxRate = item.rxRate
+        out.txRate = item.txRate
+        return out
     }
 
+    // updateAll() runs on every traffic tick (down to 1s) and used to allocate a new
+    // map plus one diff holder per tag each time. Both are reused here so the steady
+    // state is allocation free.
+    private val diffByTag = HashMap<String, TrafficLooperData>()
+    private val queriedTags = HashSet<String>()
+
     fun updateAll() {
-        val updated = mutableMapOf<String, TrafficLooperData>() // diffs
+        queriedTags.clear()
         items.forEach { item ->
             item.hasTrafficDelta = false
             if (item.ignore) return@forEach
-            val diff = updated[item.tag]
+            val tag = item.tag
             // query a tag only once
-            if (diff == null) {
-                val newDiff = updateOne(item)
-                updated[item.tag] = newDiff
-                item.hasTrafficDelta = newDiff.rx != 0L || newDiff.tx != 0L
+            if (queriedTags.add(tag)) {
+                val diff = diffByTag.getOrPut(tag) { TrafficLooperData(tag = tag) }
+                updateOne(item, diff)
+                item.hasTrafficDelta = diff.rx != 0L || diff.tx != 0L
             } else {
+                val diff = diffByTag[tag]!!
                 item.rx += diff.rx
                 item.tx += diff.tx
                 item.rxRate = diff.rxRate
@@ -78,7 +91,5 @@ class TrafficUpdater(
                 item.lastUpdate = monotonicMillis()
             }
         }
-//        Logs.d(JavaUtil.gson.toJson(items))
-//        Logs.d(JavaUtil.gson.toJson(updated))
     }
 }

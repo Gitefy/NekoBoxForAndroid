@@ -413,8 +413,6 @@
     <string name="warp_generate">구성 생성</string>
     <string name="generating">생성 중…</string>
     <string name="tun_implementation">TUN 구현</string>
-    <string name="enable_hev_tun">Hev TUN 사용</string>
-    <string name="enable_hev_tun_summary">hev-socks5-tunnel로 TUN 장치 생성</string>
     <string name="destination_override">목적지 재정의</string>
     <string name="destination_override_summary">스니핑한 도메인을 사용하여 목적지 주소를 덮어씁니다 (라우팅뿐만 아니라)</string>
     <string name="resolve_destination">목적지 확인</string>

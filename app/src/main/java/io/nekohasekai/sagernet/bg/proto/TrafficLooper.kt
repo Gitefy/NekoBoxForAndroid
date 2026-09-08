@@ -40,7 +40,7 @@ class TrafficLooper
 
     private data class LoopSnapshot(
         val speed: SpeedDisplayData,
-        val trafficUpdates: ArrayList<TrafficData>,
+        val trafficUpdates: List<TrafficData>,
     )
 
     private suspend fun <T> withStateLock(block: suspend () -> T): T {
@@ -197,8 +197,15 @@ class TrafficLooper
                 continue
             }
 
+            // Resolved once per tick: containsValue() scans the whole callback map,
+            // and the value cannot change meaningfully within a single tick.
+            val mainActivityForeground = data.binder.callbackIdMap.containsValue(
+                SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
+            )
+
             if (delayMs <= 0L) {
-                if (data.state == BaseService.State.Connected) {
+                // Nobody is listening -> skip the selection query and the IPC round-trip.
+                if (mainActivityForeground && data.state == BaseService.State.Connected) {
                     val selections = proxy.currentUrlTestSelections()
                     data.binder.broadcast { callback ->
                         if (data.binder.callbackIdMap[callback] ==
@@ -210,7 +217,7 @@ class TrafficLooper
                 }
                 awaitUpdate(TrafficLoopPolicy.delayMillis(
                     delayMs,
-                    data.binder.callbackIdMap.containsValue(SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND),
+                    mainActivityForeground,
                     false,
                 ))
                 continue
@@ -243,7 +250,6 @@ class TrafficLooper
                             )
                             idMap[ent.id] = item
                             tagMap[tag] = item
-                            Logs.d("traffic count $tag to ${ent.id}")
                         }
                     }
                     if (proxy.config.mainUrlTestTag != null) {
@@ -276,13 +282,18 @@ class TrafficLooper
                     mainRx += it.rx - it.rxBase
                 }
 
-                val trafficUpdates = arrayListOf<TrafficData>()
-                if (profileTrafficStatistics) {
+                // The list is only ever consumed by the foreground broadcast below, so
+                // building it while nobody is watching is pure garbage per tick.
+                val trafficUpdates = if (profileTrafficStatistics && mainActivityForeground) {
+                    val updates = arrayListOf<TrafficData>()
                     idMap.forEach { (id, item) ->
                         if (id > 0L && item.hasTrafficDelta) {
-                            trafficUpdates.add(TrafficData(id = id, rx = item.rx, tx = item.tx))
+                            updates.add(TrafficData(id = id, rx = item.rx, tx = item.tx))
                         }
                     }
+                    updates
+                } else {
+                    emptyList()
                 }
                 val snapshot = LoopSnapshot(
                     speed = SpeedDisplayData(
@@ -296,11 +307,7 @@ class TrafficLooper
                     ),
                     trafficUpdates = trafficUpdates,
                 )
-                if (data.state == BaseService.State.Connected
-                    && data.binder.callbackIdMap.containsValue(
-                        SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
-                    )
-                ) {
+                if (mainActivityForeground && data.state == BaseService.State.Connected) {
                     data.binder.broadcast { callback ->
                         if (data.binder.callbackIdMap[callback] ==
                             SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
@@ -323,9 +330,6 @@ class TrafficLooper
                 if (listenPostSpeed) postNotificationSpeedUpdate(snapshot.speed)
             }
 
-            val mainActivityForeground = data.binder.callbackIdMap.containsValue(
-                SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
-            )
             awaitUpdate(
                 TrafficLoopPolicy.delayMillis(
                     configuredMillis = delayMs,

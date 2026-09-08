@@ -2,7 +2,6 @@ package io.nekohasekai.sagernet.bg
 
 import android.graphics.drawable.Icon
 import android.service.quicksettings.Tile
-import androidx.annotation.RequiresApi
 import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.aidl.ISagerNetService
@@ -10,7 +9,6 @@ import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.SagerDatabase
 import android.service.quicksettings.TileService as BaseTileService
 
-@RequiresApi(24)
 class TileService : BaseTileService(), SagerConnection.Callback {
     private val iconIdle by lazy { Icon.createWithResource(this, R.drawable.ic_service_idle) }
     private val iconBusy by lazy { Icon.createWithResource(this, R.drawable.ic_service_busy) }

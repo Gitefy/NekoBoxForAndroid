@@ -1,5 +1,6 @@
 package io.nekohasekai.sagernet.ui
 
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import androidx.lifecycle.lifecycleScope
@@ -11,6 +12,7 @@ import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.GroupManager
+import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.RouterGroup
 import io.nekohasekai.sagernet.database.RouterGroupRepository
 import io.nekohasekai.sagernet.database.RouterMember
@@ -36,40 +38,61 @@ class RouterGroupListFragment : PreferenceFragmentCompat() {
     }
 
     fun rebuild() {
-        val screen = preferenceManager.createPreferenceScreen(requireContext())
+        val context = requireContext()
+        val screen = preferenceManager.createPreferenceScreen(context)
         val groups = RouterGroupRepository.all()
 
         if (groups.isEmpty()) {
-            screen.addPreference(Preference(requireContext()).apply {
+            screen.addPreference(Preference(context).apply {
                 title = getString(R.string.router_empty_title)
                 summary = getString(R.string.router_empty_summary)
                 setIcon(R.drawable.ic_hardware_router)
                 setOnPreferenceClickListener {
-                    startActivity(Intent(requireContext(), RouterGroupSettingsActivity::class.java))
+                    startActivity(Intent(context, RouterGroupSettingsActivity::class.java))
                     true
                 }
             })
         } else {
-            val category = PreferenceCategory(requireContext()).apply {
+            val category = PreferenceCategory(context).apply {
                 title = getString(R.string.router_groups_title)
             }
             screen.addPreference(category)
-            groups.forEach { group -> category.addPreference(group.toPreference()) }
+
+            // rebuild() runs on the main thread (onCreatePreferences / onResume), so the
+            // per-group lookups are batched here: one query for all members and one for
+            // all displayed nodes instead of two queries per router group.
+            val membersByRouter = SagerDatabase.routerMemberDao.all().groupBy { it.routerId }
+            val selectedIds = groups.mapNotNull { it.selectedProxyId.takeIf { id -> id > 0 } }
+            val selectedProxies: Map<Long, ProxyEntity> =
+                if (selectedIds.isEmpty()) emptyMap()
+                else SagerDatabase.proxyDao.getEntities(selectedIds).associateBy { it.id }
+
+            groups.forEach { group ->
+                category.addPreference(
+                    group.toPreference(
+                        context,
+                        membersByRouter[group.id].orEmpty(),
+                        selectedProxies[group.selectedProxyId],
+                    )
+                )
+            }
         }
 
         preferenceScreen = screen
     }
 
-    private fun RouterGroup.toPreference(): Preference = Preference(requireContext()).apply {
+    private fun RouterGroup.toPreference(
+        context: Context,
+        members: List<RouterMember>,
+        selectedProxy: ProxyEntity?,
+    ): Preference = Preference(context).apply {
         title = name.ifBlank { stableTag }
         setIcon(R.drawable.ic_hardware_router)
-        val members = SagerDatabase.routerMemberDao.getByRouter(id)
-        val modeName = getString(
+        val modeName = context.getString(
             if (mode == RouterGroup.MODE_URL_TEST) R.string.router_mode_automatic
             else R.string.router_mode_manual
         )
-        val selectedProxy = if (selectedProxyId > 0) SagerDatabase.proxyDao.getById(selectedProxyId) else null
-        val selectedName = selectedProxy?.displayName() ?: getString(R.string.router_no_selection)
+        val selectedName = selectedProxy?.displayName() ?: context.getString(R.string.router_no_selection)
 
         summary = when {
             !enabled -> getString(R.string.router_group_disabled)
