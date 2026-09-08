@@ -1112,6 +1112,7 @@ fun buildConfig(
             if (!forTest) dns.servers.add(buildDnsServerOptions(
                 tag = "dns-remote",
                 address = it ?: throw Exception("No remote DNS, check your settings!"),
+                detour = remoteDnsDetour(forTest),
                 addressResolver = "dns-direct"
             ))
         }
@@ -1253,6 +1254,9 @@ fun buildConfig(
     }
 
 }
+
+internal fun remoteDnsDetour(forTest: Boolean): String? =
+    if (forTest) null else TAG_PROXY
 
 // buildDnsServerOptions converts the legacy sing-box DNS server address string
 // (used by NekoBox settings) into the sing-box 1.15+ typed DNS server format.

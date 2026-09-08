@@ -1,10 +1,17 @@
 package io.nekohasekai.sagernet.fmt
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class ConfigBuilderDnsTest {
+    @Test
+    fun remoteDnsUsesProxyDetourOutsideUrlTests() {
+        assertEquals(TAG_PROXY, remoteDnsDetour(false))
+        assertNull(remoteDnsDetour(true))
+    }
+
     @Test
     fun preservesDnsHttpsQueryInTypedPath() {
         val options = buildDnsServerOptions(
