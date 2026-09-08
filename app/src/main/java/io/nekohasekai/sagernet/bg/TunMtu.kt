@@ -26,9 +26,11 @@ internal fun tunPlatformConfig(
 ): TunPlatformConfig {
     val root = runCatching { JsonParser.parseString(optionsJson).asJsonObject }.getOrNull()
     val addresses = listOf("Inet4Address", "Inet6Address").flatMap { field ->
-        root?.getAsJsonArray(field)?.mapNotNull { entry -> parseTunAddress(entry.asString) }.orEmpty()
+        root?.get(field)?.takeIf { it.isJsonArray }?.asJsonArray
+            ?.mapNotNull { entry -> parseTunAddress(entry.asString) }
+            .orEmpty()
     }.ifEmpty { fallbackAddresses }
-    val dnsServers = root?.getAsJsonArray("DNSAddress")
+    val dnsServers = root?.get("DNSAddress")?.takeIf { it.isJsonArray }?.asJsonArray
         ?.mapNotNull { entry -> entry.asString.takeIf { it.isNotBlank() } }
         ?.ifEmpty { fallbackDnsServers }
         ?: fallbackDnsServers

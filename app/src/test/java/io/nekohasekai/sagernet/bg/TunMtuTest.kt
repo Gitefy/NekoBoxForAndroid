@@ -36,4 +36,16 @@ class TunMtuTest {
         assertEquals(fallback, result.addresses)
         assertEquals(listOf("172.19.0.2"), result.dnsServers)
     }
+
+    @Test
+    fun nullCoreAddressFamilyUsesAvailableFamily() {
+        val result = tunPlatformConfig(
+            """{"MTU":1420,"Inet4Address":null,"Inet6Address":["fdfe:dcba:9876::1/126"],"DNSAddress":null}""",
+            fallbackMtu = 9000,
+            fallbackAddresses = listOf(TunAddress("172.19.0.1", 30)),
+            fallbackDnsServers = listOf("172.19.0.2"),
+        )
+        assertEquals(listOf(TunAddress("fdfe:dcba:9876::1", 126)), result.addresses)
+        assertEquals(listOf("172.19.0.2"), result.dnsServers)
+    }
 }
