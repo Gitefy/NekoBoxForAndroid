@@ -7,9 +7,9 @@ import org.junit.Test
 
 class ConfigBuilderDnsTest {
     @Test
-    fun remoteDnsUsesProxyDetourOutsideUrlTests() {
-        assertEquals(TAG_PROXY, remoteDnsDetour(false))
-        assertNull(remoteDnsDetour(true))
+    fun remoteDnsUsesActiveProxyDetourOutsideUrlTests() {
+        assertEquals("active-proxy", remoteDnsDetour(false, "active-proxy"))
+        assertNull(remoteDnsDetour(true, "active-proxy"))
     }
 
     @Test
