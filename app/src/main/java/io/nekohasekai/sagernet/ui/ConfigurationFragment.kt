@@ -750,7 +750,13 @@ class ConfigurationFragment @JvmOverloads constructor(
             }
 
             R.id.action_new_ssr -> {
-                startActivity(Intent(requireActivity(), ShadowsocksRSettingsActivity::class.java))
+                // SSR is not supported by the sing-box 1.15 core; disable new
+                // SSR creation and tell the user instead of opening the editor.
+                MaterialAlertDialogBuilder(requireContext())
+                    .setTitle("Unsupported")
+                    .setMessage("SSR is not supported by the current sing-box 1.15 core.")
+                    .setPositiveButton(android.R.string.ok) { _, _ -> }
+                    .show()
             }
 
             R.id.action_new_vmess -> {

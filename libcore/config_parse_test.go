@@ -286,3 +286,77 @@ func TestWireGuardEndpointSchema(t *testing.T) {
 		t.Error("wireguard endpoint 'wg' is not reachable as outbound")
 	}
 }
+
+// snellConfig returns a minimal config with a single Snell outbound of the
+// given version. Used to verify which Snell versions the 1.15 core accepts.
+func snellConfig(version int) string {
+	return fmt.Sprintf(`{
+  "log": {"level": "info"},
+  "outbounds": [
+    {"type": "direct", "tag": "direct"},
+    {
+      "type": "snell",
+      "tag": "node-snell",
+      "server": "1.2.3.4",
+      "server_port": 443,
+      "version": %d,
+      "psk": "test-psk"
+    }
+  ],
+  "route": {"final": "direct"}
+}`, version)
+}
+
+// TestSnellSupportedVersions asserts the sing-box 1.15 core accepts Snell v4 and v6.
+func TestSnellSupportedVersions(t *testing.T) {
+	for _, v := range []int{4, 6} {
+		t.Run(fmt.Sprintf("v%d", v), func(t *testing.T) {
+			b, err := NewSingBoxInstance(snellConfig(v), nil)
+			if err != nil {
+				t.Fatalf("Snell v%d should be supported, NewSingBoxInstance failed: %v", v, err)
+			}
+			defer b.Close()
+		})
+	}
+}
+
+// TestSnellUnsupportedVersions asserts the core rejects legacy/incompatible
+// Snell versions (v1/v2/v3/v5). The app additionally blocks these before the
+// config build (see SnellBuildConfig.kt), surfacing a clear user-readable error.
+func TestSnellUnsupportedVersions(t *testing.T) {
+	for _, v := range []int{1, 2, 3, 5} {
+		t.Run(fmt.Sprintf("v%d", v), func(t *testing.T) {
+			_, err := NewSingBoxInstance(snellConfig(v), nil)
+			if err == nil {
+				t.Fatalf("Snell v%d should be rejected by the 1.15 core", v)
+			}
+		})
+	}
+}
+
+// TestSSRAssertUnsupported proves ShadowsocksR is not a recognized outbound in
+// the 1.15 core, which is why the app must surface a clear "SSR is not
+// supported by the current sing-box 1.15 core." error instead of emitting it.
+func TestSSRAssertUnsupported(t *testing.T) {
+	cfg := `{
+  "log": {"level": "info"},
+  "outbounds": [
+    {"type": "direct", "tag": "direct"},
+    {
+      "type": "shadowsocksr",
+      "tag": "node-ssr",
+      "server": "1.2.3.4",
+      "server_port": 8388,
+      "method": "aes-256-cfb",
+      "password": "test-password",
+      "protocol": "origin",
+      "obfs": "plain"
+    }
+  ],
+  "route": {"final": "direct"}
+}`
+	_, err := NewSingBoxInstance(cfg, nil)
+	if err == nil {
+		t.Fatal("shadowsocksr outbound should be rejected by the 1.15 core")
+	}
+}

@@ -73,16 +73,10 @@ fun JSONObject.parseShadowsocksR(): ShadowsocksRBean {
 }
 
 fun buildSingBoxOutboundShadowsocksRBean(bean: ShadowsocksRBean): SingBoxOptions.Outbound_ShadowsocksROptions {
-    return SingBoxOptions.Outbound_ShadowsocksROptions().apply {
-        type = "shadowsocksr"
-        server = bean.serverAddress
-        server_port = bean.serverPort
-        method = bean.method
-        password = bean.password
-        protocol = bean.protocol
-        protocol_param = bean.protocolParam
-        obfs = bean.obfs
-        obfs_param = bean.obfsParam
-        // do NOT set network field here
-    }
+    // The sing-box 1.15 core has no ShadowsocksR outbound, so building an SSR
+    // outbound must fail loudly with an actionable message rather than emit a
+    // "shadowsocksr" type the core silently rejects.
+    throw IllegalArgumentException(
+        "SSR is not supported by the current sing-box 1.15 core."
+    )
 }
