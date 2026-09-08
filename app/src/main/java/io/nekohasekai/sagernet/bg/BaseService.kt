@@ -439,6 +439,7 @@ class BaseService {
             data.connectingJob = data.binder.launch(start = CoroutineStart.LAZY) {
                 try {
                     data.notification = createNotification(ServiceNotification.genTitle(profile))
+                    data.notification!!.show()
 
                     Executable.killAll()    // clean up old processes
                     preInit()

@@ -10,7 +10,6 @@ import android.content.IntentFilter
 import android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED
 import android.os.PowerManager
 import android.text.format.Formatter
-import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import io.nekohasekai.sagernet.Action
@@ -22,7 +21,7 @@ import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.ktx.app
 import io.nekohasekai.sagernet.ktx.getColorAttr
-import io.nekohasekai.sagernet.ktx.runOnMainDispatcher
+import io.nekohasekai.sagernet.ktx.onMainDispatcher
 import io.nekohasekai.sagernet.ui.SwitchActivity
 import io.nekohasekai.sagernet.utils.Theme
 import kotlinx.coroutines.sync.Mutex
@@ -211,10 +210,6 @@ class ServiceNotification(
             addAction(Intent.ACTION_SCREEN_OFF)
         })
 
-        runOnMainDispatcher {
-            updateActions()
-            show()
-        }
     }
 
     private suspend fun updateActions() {
@@ -256,23 +251,17 @@ class ServiceNotification(
     }
 
 
-    private suspend fun show() =
+    suspend fun show() = onMainDispatcher {
+        updateActions()
         useBuilder {
             if (destroyed) return@useBuilder
-            try {
-                (service as Service).startForeground(
-                    notificationId,
-                    it.build(),
-                    FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED
-                )
-            } catch (e: Exception) {
-                Toast.makeText(
-                    SagerNet.application,
-                    "startForeground: $e",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
+            (service as Service).startForeground(
+                notificationId,
+                it.build(),
+                FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED
+            )
         }
+    }
 
     private suspend fun update() = useBuilder {
         if (destroyed) return@useBuilder
