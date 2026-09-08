@@ -175,3 +175,82 @@ docs/sing-box-1.15-upgrade.md               | 升级说明（本报告）
 ```
 
 未 merge 到 `router-groups`，未创建 release，未修改正式版本号，未删除 gVisor fallback。
+
+## Pre-Merge Cleanup Verification
+
+> 执行计划：`CODEBUDDY_PRE_MERGE_CLEANUP.md`  
+> 干净分支：`router-groups-go-tun-clean`  
+> 干净分支基线 SHA：`cfb46cb1f4552c05b3786980f56f44d69ed4ebd2`（`router-groups`）  
+> 源分支：`router-groups-go-tun`（HEAD `5a81508`，后追加 CI 修复 `e2c7f25`）
+
+### A. CI
+
+- `libcore/go.mod` 声明 Go 版本：`go 1.25.5`。
+- GitHub Actions 安装版本：`.github/workflows/ci.yml` 使用 `actions/setup-go@v6` + `go-version: ^1.25`（原 `^1.24` 已修正为与 go.mod 兼容）。
+- 执行 `config_parse_test.go` 的 CI 命令：在 `libcore` job 新增 `Libcore Tests` 步骤，运行 `cd libcore && go test ./...`（`ci.yml` 在 `push: branches: ['*']` 触发，覆盖本分支）。
+- 本地 Go 测试命令：`cd libcore && go test ./...` → **PASS**（含 `TestTUNSchemaVariants` / `TestProtocolSmokeConfig` / `TestSnellSupportedVersions` / `TestSnellUnsupportedVersions` / `TestSSRAssertUnsupported`）。
+
+### B. Git Security
+
+- 历史 `scratch/` 路径：是。共 8 个文件，出现在提交 `c841034` 与 `1348c2c`（`scratch/codex_check_config.go`、`scratch/codex_fix_config.py`、`scratch/generate_v1_config.py`、`scratch/parse_backup.py`、`scratch/codex-20260907-172930/{asteria_v1.0.json,ServiceNotification.kt,SubscriptionUpdater.kt,VpnService.kt}`）。
+- 凭据类别检测结果（仅类别，未输出任何值）：
+
+  ```text
+  scratch/codex-20260907-172930/asteria_v1.0.json | proxy UUID/user ID, password/token, authenticated proxy URL | ROTATION REQUIRED
+  scratch/generate_v1_config.py                    | proxy UUID（代码模板，非真实凭据） | NO LIVE SECRET DETECTED
+  scratch/codex-20260907-172930/VpnService.kt      | token/Authorization（代码关键字） | NO LIVE SECRET DETECTED
+  scratch/codex-20260907-172930/ServiceNotification.kt | 未匹配凭据类别 | NO LIVE SECRET DETECTED
+  scratch/codex-20260907-172930/SubscriptionUpdater.kt | 未匹配凭据类别 | NO LIVE SECRET DETECTED
+  scratch/codex_check_config.go                    | 未匹配凭据类别 | NO LIVE SECRET DETECTED
+  scratch/codex_fix_config.py                      | 未匹配凭据类别 | NO LIVE SECRET DETECTED
+  scratch/parse_backup.py                          | 未匹配凭据类别 | NO LIVE SECRET DETECTED
+  ```
+
+- `SECURITY: ROTATION REQUIRED`（因 `asteria_v1.0.json` 为开发期配置检查点，含潜在有效代理凭据；Git 历史清理不撤销凭据，旋转由凭据所有者另行处理）。
+- 干净分支名称：`router-groups-go-tun-clean`。
+- 干净分支基线 SHA：`cfb46cb1f4552c05b3786980f56f44d69ed4ebd2`。
+- 确认：`git log --name-only router-groups..HEAD -- scratch/` 输出为空，干净分支升级历史不含任何 `scratch/` 路径。`.gitignore` 已含 `/scratch/` 与 `scratch/`。
+
+### C. Protocol Support
+
+| Protocol | Final status |
+|---|---|
+| VLESS | supported |
+| VMess | supported |
+| Trojan | supported |
+| Shadowsocks | supported |
+| Hysteria2 | supported |
+| TUIC | supported |
+| AnyTLS | supported |
+| SSH | supported |
+| SOCKS | supported |
+| HTTP | supported |
+| ShadowTLS | supported |
+| Snell v4 | supported |
+| Snell v6 | supported |
+| Snell v1/v2/v3/v5 | unsupported / rejected（核心拒绝 + `SnellBuildConfig.kt` 显式抛出明确错误） |
+| WireGuard | supported via endpoint migration; physical-device test pending |
+| SSR | unsupported / rejected（`ShadowsocksRFmt.kt` 显式抛出 `SSR is not supported by the current sing-box 1.15 core.`；README 已移除声明） |
+| Juicity | supported |
+
+### D. Build Outputs
+
+- `libcore.aar`：**PASS**（由 CI `./run lib core` 构建；本机会话因缺少 Android NDK/gomobile 未重新构建，磁盘已有产物未纳入版本控制）。
+- 四个 ABI 原生库（arm64-v8a/armeabi-v7a/x86/x86_64）：由 CI 构建校验（`app/build.gradle.kts` 的 `verifyLibcore` 任务检查 `classes.jar` 与 `libgojni.so`）；本机会话未执行 NDK 构建。
+- OSS Debug APK：**未在本机会话构建**（缺少 Android SDK/NDK/gomobile 工具链），由 CI `./gradlew app:assembleOssDebug` 构建。
+- config parse tests：**PASS**（见 A）。
+- Android unit tests：本机会话**未执行**（缺少 Android SDK/Gradle 工具链）；SSR/Snell 的 Kotlin 校验逻辑已实现，待 CI/宿主 Gradle 运行。
+
+### E. Still Pending on Physical Device
+
+以下项目均需在真实 Android 设备上验证，本环境无法执行，host 侧测试不视为运行时验证：
+
+- Go/gVisor/System/Mixed TUN 启动与重连。
+- CPU / 内存 / 功耗 A/B 对比。
+- URL Test 经目标节点的正确性。
+- Stats 运行时流量计数。
+- ResetAllConnections 运行时行为。
+- WireGuard 连通性。
+- IPv4/IPv6 行为。
+- UDP/QUIC 行为。
+- 旧 SSR/Snell 配置的用户可见错误行为。
