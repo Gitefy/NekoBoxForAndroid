@@ -1297,7 +1297,15 @@ internal fun buildDnsServerOptions(
                     options._hack_config_map["server_port"] =
                         if (url.port != -1) url.port else 443
                     if (url.encodedPath.isNotBlank() && url.encodedPath != "/") {
-                        options._hack_config_map["path"] = url.encodedPath
+                        options._hack_config_map["path"] = buildString {
+                            append(url.encodedPath)
+                            if (url.encodedQuery != null) {
+                                append('?')
+                                append(url.encodedQuery)
+                            }
+                        }
+                    } else if (url.encodedQuery != null) {
+                        options._hack_config_map["path"] = "/?${url.encodedQuery}"
                     }
                     options._hack_config_map["tls"] = mapOf(
                         "enabled" to true,
@@ -1321,12 +1329,7 @@ internal fun buildDnsServerOptions(
                     }
                 }
                 else -> {
-                    // Unknown scheme: treat as plain UDP to avoid silently
-                    // emitting an unsupported legacy address.
-                    val (host, port) = parseDnsHostPort(address, 53)
-                    options._hack_config_map["type"] = "udp"
-                    options._hack_config_map["server"] = host
-                    options._hack_config_map["server_port"] = port
+                    require(false) { "unsupported DNS scheme: $scheme" }
                 }
             }
         }
@@ -1338,20 +1341,27 @@ private fun parseDnsHostPort(input: String, defaultPort: Int): Pair<String, Int>
     val s = input.trim()
     if (s.startsWith("[")) {
         val close = s.indexOf("]")
-        if (close == -1) return s to defaultPort
+        require(close > 1) { "invalid DNS host: $input" }
         val host = s.substring(1, close)
-        val port = if (s.length > close + 2 && s[close + 1] == ':') {
-            s.substring(close + 2).toIntOrNull() ?: defaultPort
+        val port = if (s.length > close + 1) {
+            require(s[close + 1] == ':') { "invalid DNS host: $input" }
+            s.substring(close + 2).toIntOrNull()
+                ?: error("invalid DNS port: $input")
         } else {
             defaultPort
         }
+        require(port in 1..65535) { "invalid DNS port: $input" }
         return host to port
     }
     val lastColon = s.lastIndexOf(":")
     val firstColon = s.indexOf(":")
     if (lastColon != -1 && firstColon == lastColon) {
         val port = s.substring(lastColon + 1).toIntOrNull()
-        if (port != null) return s.substring(0, lastColon) to port
+            ?: error("invalid DNS port: $input")
+        require(port in 1..65535) { "invalid DNS port: $input" }
+        require(s.substring(0, lastColon).isNotBlank()) { "invalid DNS host: $input" }
+        return s.substring(0, lastColon) to port
     }
+    require(s.isNotBlank() && !s.contains("://")) { "invalid DNS host: $input" }
     return s to defaultPort
 }
