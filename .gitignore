@@ -35,3 +35,8 @@ jniLibs/
 # Keystores and signing credentials
 *.keystore
 *.jks
+
+# Development scratch / checkpoint dumps (config exports, one-off scripts)
+/scratch/
+scratch/
+*.md.local
