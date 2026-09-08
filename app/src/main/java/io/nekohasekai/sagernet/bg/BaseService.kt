@@ -320,14 +320,15 @@ class BaseService {
 
             runOnMainDispatcher {
                 data.connectingJob?.cancelAndJoin() // ensure stop connecting first
-                withContext(Dispatchers.Default) {
+                coroutineScope {
                     killProcesses()
+                    val data = data
+                    if (data.closeReceiverRegistered) {
+                        unregisterReceiver(data.receiver)
+                        data.closeReceiverRegistered = false
+                    }
+                    data.proxy = null
                 }
-                if (data.closeReceiverRegistered) {
-                    unregisterReceiver(data.receiver)
-                    data.closeReceiverRegistered = false
-                }
-                data.proxy = null
 
                 // change the state
                 data.changeState(State.Stopped, msg)
@@ -434,7 +435,7 @@ class BaseService {
             }
 
             data.changeState(State.Connecting)
-            data.connectingJob = data.binder.launch(Dispatchers.Default, start = CoroutineStart.LAZY) {
+            data.connectingJob = data.binder.launch(start = CoroutineStart.LAZY) {
                 try {
                     val startedAt = SystemClock.elapsedRealtime()
                     val notification = onMainDispatcher {
