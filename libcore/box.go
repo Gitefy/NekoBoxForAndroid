@@ -29,9 +29,16 @@ import (
 
 var mainInstance *BoxInstance
 
+var buildRevision = "unknown"
+
 func VersionBox() string {
+	return formatVersionBox(constant.Version, buildRevision)
+}
+
+func formatVersionBox(coreVersion, revision string) string {
 	version := []string{
-		"sing-box: " + constant.Version,
+		"sing-box: " + coreVersion,
+		"revision: " + revision,
 		runtime.Version() + "@" + runtime.GOOS + "/" + runtime.GOARCH,
 	}
 
