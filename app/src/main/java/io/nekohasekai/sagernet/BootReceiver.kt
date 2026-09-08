@@ -22,27 +22,20 @@ class BootReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        // goAsync: the DataStore reads below used to run synchronously on the main
-        // thread inside onReceive; move the whole boot decision to the IO dispatcher.
-        val result = goAsync()
         runOnDefaultDispatcher {
-            try {
-                SubscriptionUpdater.reconfigureUpdater()
-
-                if (!DataStore.persistAcrossReboot) {   // sanity check
-                    enabled = false
-                    return@runOnDefaultDispatcher
-                }
-
-                val doStart = when (intent.action) {
-                    Intent.ACTION_LOCKED_BOOT_COMPLETED -> false // DataStore.directBootAware
-                    else -> SagerNet.user.isUserUnlocked
-                } && DataStore.selectedProxy > 0
-
-                if (doStart) SagerNet.startService()
-            } finally {
-                result.finish()
-            }
+            SubscriptionUpdater.reconfigureUpdater()
         }
+
+        if (!DataStore.persistAcrossReboot) {   // sanity check
+            enabled = false
+            return
+        }
+
+        val doStart = when (intent.action) {
+            Intent.ACTION_LOCKED_BOOT_COMPLETED -> false // DataStore.directBootAware
+            else -> SagerNet.user.isUserUnlocked
+        } && DataStore.selectedProxy > 0
+
+        if (doStart) SagerNet.startService()
     }
 }

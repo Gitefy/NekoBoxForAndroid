@@ -26,9 +26,7 @@ class RouterGroupListFragment : PreferenceFragmentCompat() {
 
     override fun onResume() {
         super.onResume()
-        // The reconcile pass below refreshes and rebuilds the screen; rebuilding once
-        // here as well just doubles the full Preference-screen reconstruction (each
-        // rebuild also issues several main-thread queries) on every resume.
+        rebuild()
         viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
                 GroupManager.reconcileRouterMembers(GroupManager.snapshotRouterMembers())

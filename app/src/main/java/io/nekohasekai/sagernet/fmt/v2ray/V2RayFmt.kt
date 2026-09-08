@@ -17,10 +17,6 @@ private val supportedKcpHeaderType = arrayOf(
     "none", "srtp", "utp", "wechat-video", "dtls", "wireguard", "dns"
 )
 
-// Gson is thread-safe and costly to construct; share one instance instead of
-// allocating a new one per vmess link parse / serialize.
-private val gson = Gson()
-
 data class VmessQRCode(
     var v: String = "",
     var ps: String = "",
@@ -379,7 +375,7 @@ fun parseV2RayN(link: String): VMessBean {
         return parseCsvVMess(result)
     }
     val bean = VMessBean()
-    val vmessQRCode = gson.fromJson(result, VmessQRCode::class.java)
+    val vmessQRCode = Gson().fromJson(result, VmessQRCode::class.java)
 
     // Although VmessQRCode fields are non null, looks like Gson may still create null fields
     if (TextUtils.isEmpty(vmessQRCode.add)
@@ -490,7 +486,7 @@ fun VMessBean.toV2rayN(): String {
         alpn = bean.alpn.replace("\n", ",")
         fp = bean.utlsFingerprint
     }.let {
-        NGUtil.encode(gson.toJson(it))
+        NGUtil.encode(Gson().toJson(it))
     }
 }
 
@@ -721,6 +717,7 @@ fun buildSingBoxOutboundStreamSettings(bean: StandardV2RayBean): V2RayTransportO
             // Merge xhttpExtra JSON config if present
             if (bean.xhttpExtra.isNotBlank()) {
                 try {
+                    val gson = Gson()
                     // Convert base config to JSON
                     val baseJson = JSONObject(gson.toJson(baseConfig))
                     // Parse extra config

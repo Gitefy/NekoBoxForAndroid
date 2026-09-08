@@ -177,7 +177,6 @@ object DataStore : OnPreferenceDataStoreChangeListener {
         for (key in DEPRECATED_SETTING_KEYS) {
             PublicDatabase.kvPairDao.delete(key)
         }
-        configurationStore.invalidateCache()
     }
 
 
