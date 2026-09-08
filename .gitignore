@@ -40,3 +40,6 @@ jniLibs/
 /scratch/
 scratch/
 *.md.local
+
+# gomobile-matsuri source installed by libcore/init.sh
+/libcore/gomobile/
