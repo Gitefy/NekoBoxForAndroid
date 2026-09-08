@@ -173,7 +173,7 @@ class BaseService {
                     data!!.proxy!!.box,
                     DataStore.connectionTestURL,
                     DataStore.connectionTestTimeout,
-                    data!!.proxy!!.config.mainUrlTestTag.orEmpty(),
+                    data!!.proxy!!.config.connectionTestTargetTag.orEmpty(),
                 )
             } catch (e: Exception) {
                 error(Protocols.genFriendlyMsg(e.readableMessage))
@@ -320,16 +320,14 @@ class BaseService {
 
             runOnMainDispatcher {
                 data.connectingJob?.cancelAndJoin() // ensure stop connecting first
-                // we use a coroutineScope here to allow clean-up in parallel
-                coroutineScope {
+                withContext(Dispatchers.Default) {
                     killProcesses()
-                    val data = data
-                    if (data.closeReceiverRegistered) {
-                        unregisterReceiver(data.receiver)
-                        data.closeReceiverRegistered = false
-                    }
-                    data.proxy = null
                 }
+                if (data.closeReceiverRegistered) {
+                    unregisterReceiver(data.receiver)
+                    data.closeReceiverRegistered = false
+                }
+                data.proxy = null
 
                 // change the state
                 data.changeState(State.Stopped, msg)
@@ -436,10 +434,16 @@ class BaseService {
             }
 
             data.changeState(State.Connecting)
-            data.connectingJob = data.binder.launch(start = CoroutineStart.LAZY) {
+            data.connectingJob = data.binder.launch(Dispatchers.Default, start = CoroutineStart.LAZY) {
                 try {
-                    data.notification = createNotification(ServiceNotification.genTitle(profile))
-                    data.notification!!.show()
+                    val startedAt = SystemClock.elapsedRealtime()
+                    val notification = onMainDispatcher {
+                        createNotification(ServiceNotification.genTitle(profile)).also {
+                            data.notification = it
+                        }
+                    }
+                    notification.show()
+                    val notificationReadyAt = SystemClock.elapsedRealtime()
 
                     Executable.killAll()    // clean up old processes
                     preInit()
@@ -455,11 +459,15 @@ class BaseService {
                     data.changeState(State.Connected)
 
                     lateInit()
+                    Logs.i("$tag startup completed in ${SystemClock.elapsedRealtime() - startedAt} ms " +
+                        "(notification=${notificationReadyAt - startedAt} ms)")
                 } catch (_: CancellationException) { // if the job was cancelled, it is canceller's responsibility to call stopRunner
                 } catch (_: UnknownHostException) {
                     stopRunner(false, getString(R.string.invalid_server))
                 } catch (e: PluginManager.PluginNotFoundException) {
-                    Toast.makeText(this@Interface, e.readableMessage, Toast.LENGTH_SHORT).show()
+                    onMainDispatcher {
+                        Toast.makeText(this@Interface, e.readableMessage, Toast.LENGTH_SHORT).show()
+                    }
                     Logs.w(e)
                     data.binder.missingPlugin(e.plugin)
                     stopRunner(false, null)

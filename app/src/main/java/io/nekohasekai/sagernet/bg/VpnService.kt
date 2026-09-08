@@ -27,6 +27,20 @@ class VpnService : BaseVpnService(),
         const val PRIVATE_VLAN6_CLIENT = "fdfe:dcba:9876::1"
         const val PRIVATE_VLAN6_ROUTER = "fdfe:dcba:9876::2"
 
+        internal fun tunAddresses(ipv6Mode: Int): List<TunAddress> = when (ipv6Mode) {
+            IPv6Mode.DISABLE -> listOf(TunAddress(PRIVATE_VLAN4_CLIENT, 30))
+            IPv6Mode.ONLY -> listOf(TunAddress(PRIVATE_VLAN6_CLIENT, 126))
+            else -> listOf(
+                TunAddress(PRIVATE_VLAN4_CLIENT, 30),
+                TunAddress(PRIVATE_VLAN6_CLIENT, 126),
+            )
+        }
+
+        internal fun tunDnsServers(addresses: List<TunAddress>): List<String> = buildList {
+            if (addresses.any { ':' !in it.host }) add(PRIVATE_VLAN4_ROUTER)
+            if (addresses.any { ':' in it.host }) add(PRIVATE_VLAN6_ROUTER)
+        }
+
     }
 
     var conn: ParcelFileDescriptor? = null
@@ -85,21 +99,24 @@ class VpnService : BaseVpnService(),
     }
 
     fun startVpn(tunOptionsJson: String, tunPlatformOptionsJson: String): Int {
-        return establishTun(tunMtu(tunOptionsJson, DataStore.mtu))
+        val fallbackAddresses = tunAddresses(DataStore.ipv6Mode)
+        return establishTun(tunPlatformConfig(
+            tunOptionsJson,
+            DataStore.mtu,
+            fallbackAddresses,
+            tunDnsServers(fallbackAddresses),
+        ))
     }
 
-    fun establishTun(mtu: Int = DataStore.mtu): Int {
+    internal fun establishTun(platformConfig: TunPlatformConfig): Int {
         val builder = Builder().setConfigureIntent(SagerNet.configureIntent(this))
             .setSession(getString(R.string.app_name))
-            .setMtu(mtu)
-        val ipv6Mode = DataStore.ipv6Mode
+            .setMtu(platformConfig.mtu)
+        val hasIpv4 = platformConfig.addresses.any { ':' !in it.host }
+        val hasIpv6 = platformConfig.addresses.any { ':' in it.host }
 
-        // address
-        builder.addAddress(PRIVATE_VLAN4_CLIENT, 30)
-        if (ipv6Mode != IPv6Mode.DISABLE) {
-            builder.addAddress(PRIVATE_VLAN6_CLIENT, 126)
-        }
-        builder.addDnsServer(PRIVATE_VLAN4_ROUTER)
+        platformConfig.addresses.forEach { builder.addAddress(it.host, it.prefixLength) }
+        platformConfig.dnsServers.forEach(builder::addDnsServer)
 
         // route
         if (DataStore.bypassLan) {
@@ -107,15 +124,17 @@ class VpnService : BaseVpnService(),
                 val subnet = Subnet.fromString(it)!!
                 builder.addRoute(subnet.address.hostAddress!!, subnet.prefixSize)
             }
-            builder.addRoute(PRIVATE_VLAN4_ROUTER, 32)
-            builder.addRoute(FAKEDNS_VLAN4_CLIENT, 15)
+            if (hasIpv4) {
+                builder.addRoute(PRIVATE_VLAN4_ROUTER, 32)
+                builder.addRoute(FAKEDNS_VLAN4_CLIENT, 15)
+            }
             // https://issuetracker.google.com/issues/149636790
-            if (ipv6Mode != IPv6Mode.DISABLE) {
+            if (hasIpv6) {
                 builder.addRoute("2000::", 3)
             }
         } else {
-            builder.addRoute("0.0.0.0", 0)
-            if (ipv6Mode != IPv6Mode.DISABLE) {
+            if (hasIpv4) builder.addRoute("0.0.0.0", 0)
+            if (hasIpv6) {
                 builder.addRoute("::", 0)
             }
         }

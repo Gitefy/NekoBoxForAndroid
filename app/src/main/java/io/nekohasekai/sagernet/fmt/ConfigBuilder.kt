@@ -171,6 +171,7 @@ class ConfigBuildResult(
     /** Union of all proxy IDs belonging to any Router group (selector or urltest). Used by
      *  TrafficLooper to avoid suppressing independent Router node traffic statistics. */
     val routerAllMemberIds: Set<Long> = emptySet(),
+    val connectionTestTargetTag: String? = null,
 ) {
     data class IndexEntity(var chain: LinkedHashMap<Int, ProxyEntity>)
 }
@@ -335,6 +336,7 @@ fun buildConfig(
     var routerMemberIds: Map<String, Set<Long>> = emptyMap()
     var routerUrlTestTags: Map<Long, String> = emptyMap()
     var mainUrlTestTag: String? = null
+    var connectionTestTargetTag: String? = null
 
     return MyOptions().apply {
 	if (!forTest) {
@@ -411,14 +413,7 @@ fun buildConfig(
                 // inbound domain strategy are emitted as route rule actions below.
                 auto_route = true
                 strict_route = DataStore.strictRoute
-                address = when (ipv6Mode) {
-                    IPv6Mode.DISABLE -> listOf(VpnService.PRIVATE_VLAN4_CLIENT + "/28")
-                    IPv6Mode.ONLY -> listOf(VpnService.PRIVATE_VLAN6_CLIENT + "/126")
-                    else -> listOf(
-                        VpnService.PRIVATE_VLAN4_CLIENT + "/28",
-                        VpnService.PRIVATE_VLAN6_CLIENT + "/126"
-                    )
-                }
+                address = VpnService.tunAddresses(ipv6Mode).map { "${it.host}/${it.prefixLength}" }
             })
             inbounds.add(Inbound_MixedOptions().apply {
                 type = "mixed"
@@ -790,7 +785,7 @@ fun buildConfig(
 
         // Router membership must not change the legacy main selection or outbound=0.
         val mainProxyTag = if (buildSelector) TAG_PROXY else tagMap[proxy.id] ?: TAG_PROXY
-        mainUrlTestTag = mainProxyTag
+        connectionTestTargetTag = mainProxyTag
 
         // 在应用用户规则之前检查全局模式
         if (!forTest && DataStore.globalMode) {
@@ -1250,8 +1245,9 @@ fun buildConfig(
             routerSelectorTags,
             routerMemberIds,
             routerUrlTestTags,
-            mainUrlTestTag,
-            allRouterMemberIds,
+            mainUrlTestTag = mainUrlTestTag,
+            routerAllMemberIds = allRouterMemberIds,
+            connectionTestTargetTag = connectionTestTargetTag,
         )
     }
 

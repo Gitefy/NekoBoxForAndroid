@@ -28,6 +28,7 @@ func TestURLTestDetourUsesExplicitTargetOrConfiguredDefault(t *testing.T) {
 		want string
 	}{
 		{name: "explicit", tag: "target", want: "target"},
+		{name: "explicit overrides final", tag: "first", want: "first"},
 		{name: "configured default", tag: "", want: "target"},
 	} {
 		t.Run(target.name, func(t *testing.T) {

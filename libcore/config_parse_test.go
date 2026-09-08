@@ -3,8 +3,9 @@ package libcore
 import (
 	"encoding/json"
 	"fmt"
-	"runtime"
 	"testing"
+
+	"github.com/sagernet/sing-tun"
 )
 
 // makeTUNConfig returns a minimal sing-box config with the given tun stack and
@@ -246,8 +247,8 @@ func TestProtocolSmokeConfig(t *testing.T) {
 }
 
 func TestWireGuardEndpointSchema(t *testing.T) {
-	if runtime.GOOS != "android" {
-		t.Skip("WireGuard endpoint creation requires gVisor; run on Android or with -tags with_gvisor")
+	if !tun.WithGVisor {
+		t.Skip("WireGuard endpoint creation requires -tags with_gvisor,with_wireguard")
 	}
 	cfg := `{
   "log": {"level": "info"},
@@ -284,6 +285,14 @@ func TestWireGuardEndpointSchema(t *testing.T) {
 	// Android app routes traffic to WireGuard after the 1.15 endpoint migration).
 	if _, ok := b.Outbound().Outbound("wg"); !ok {
 		t.Error("wireguard endpoint 'wg' is not reachable as outbound")
+	}
+	dialer, err := urlTestDetourWithTarget(b, "wg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, _ := b.Outbound().Outbound("wg")
+	if dialer != endpoint {
+		t.Fatal("explicit WireGuard URL test target resolved to an auxiliary outbound")
 	}
 }
 

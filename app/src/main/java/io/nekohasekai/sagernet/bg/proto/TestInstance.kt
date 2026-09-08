@@ -33,7 +33,7 @@ class TestInstance(profile: ProxyEntity, val link: String, private val timeout: 
                         }
                         c.tryResume(
                             Libcore.urlTestWithTarget(
-                                box, link, timeout, config.mainUrlTestTag.orEmpty()
+                                box, link, timeout, config.connectionTestTargetTag.orEmpty()
                             )
                         )
                     } catch (e: Exception) {
