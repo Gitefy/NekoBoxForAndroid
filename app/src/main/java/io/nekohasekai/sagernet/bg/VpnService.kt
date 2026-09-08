@@ -5,7 +5,6 @@ import android.annotation.SuppressLint
 import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.ProxyInfo
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
 import io.nekohasekai.sagernet.*
@@ -128,8 +127,7 @@ class VpnService : BaseVpnService(),
         val packageName = packageName
         val proxyApps = DataStore.proxyApps
         var bypass = DataStore.bypass
-        val workaroundSYSTEM = false /* DataStore.tunImplementation == TunImplementation.SYSTEM */
-        val needBypassRootUid = workaroundSYSTEM || data.proxy!!.config.trafficMap.values.any {
+        val needBypassRootUid = data.proxy!!.config.trafficMap.values.any {
             it[0].hysteriaBean?.protocol == HysteriaBean.PROTOCOL_FAKETCP
         }
 
@@ -184,18 +182,6 @@ class VpnService : BaseVpnService(),
             } else {
                 Logs.d("Add allow: ${added.joinToString(", ")}")
             }
-        }
-
-        if (DataStore.appendHttpProxy) {
-            builder.setHttpProxy(
-                ProxyInfo.buildDirectProxy(
-                    LOCALHOST,
-                    DataStore.mixedPort,
-                    DataStore.httpProxyBypass.lines().mapNotNull { line ->
-                        line.trim().takeIf { it.isNotBlank() && !it.startsWith("#") }
-                    },
-                )
-            )
         }
 
         metered = DataStore.meteredNetwork
