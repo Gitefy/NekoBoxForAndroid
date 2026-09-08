@@ -31,7 +31,11 @@ class TestInstance(profile: ProxyEntity, val link: String, private val timeout: 
                             // wait for plugin start
                             delay(500)
                         }
-                        c.tryResume(Libcore.urlTest(box, link, timeout))
+                        c.tryResume(
+                            Libcore.urlTestWithTarget(
+                                box, link, timeout, config.mainUrlTestTag.orEmpty()
+                            )
+                        )
                     } catch (e: Exception) {
                         c.tryResumeWithException(e)
                     }

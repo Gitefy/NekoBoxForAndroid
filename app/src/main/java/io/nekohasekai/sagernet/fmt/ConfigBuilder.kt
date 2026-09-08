@@ -334,6 +334,7 @@ fun buildConfig(
     var routerSelectorTags: Map<String, String> = emptyMap()
     var routerMemberIds: Map<String, Set<Long>> = emptyMap()
     var routerUrlTestTags: Map<Long, String> = emptyMap()
+    var mainUrlTestTag: String? = null
 
     return MyOptions().apply {
 	if (!forTest) {
@@ -789,6 +790,7 @@ fun buildConfig(
 
         // Router membership must not change the legacy main selection or outbound=0.
         val mainProxyTag = if (buildSelector) TAG_PROXY else tagMap[proxy.id] ?: TAG_PROXY
+        mainUrlTestTag = mainProxyTag
 
         // 在应用用户规则之前检查全局模式
         if (!forTest && DataStore.globalMode) {
@@ -1248,7 +1250,7 @@ fun buildConfig(
             routerSelectorTags,
             routerMemberIds,
             routerUrlTestTags,
-            null,
+            mainUrlTestTag,
             allRouterMemberIds,
         )
     }

@@ -314,6 +314,16 @@ func (b *BoxInstance) RefreshURLTestFor(groupTag string) bool {
 }
 
 func UrlTest(i *BoxInstance, link string, timeout int32) (latency int32, err error) {
+	return urlTest(i, link, timeout, "")
+}
+
+// UrlTestWithTarget measures link through the outbound or endpoint identified by targetTag.
+// An empty targetTag uses the configuration's declared default outbound.
+func UrlTestWithTarget(i *BoxInstance, link string, timeout int32, targetTag string) (latency int32, err error) {
+	return urlTest(i, link, timeout, targetTag)
+}
+
+func urlTest(i *BoxInstance, link string, timeout int32, targetTag string) (latency int32, err error) {
 	defer device.DeferPanicToError("box.UrlTest", func(err_ error) { err = err_ })
 
 	ctx := context.Background()
@@ -323,7 +333,7 @@ func UrlTest(i *BoxInstance, link string, timeout int32) (latency int32, err err
 		defer cancel()
 	}
 
-	detour, err := urlTestDetour(i)
+	detour, err := urlTestDetourWithTarget(i, targetTag)
 	if err != nil {
 		return 0, err
 	}
@@ -343,39 +353,33 @@ func UrlTest(i *BoxInstance, link string, timeout int32) (latency int32, err err
 //   - a test instance: that instance's default outbound, i.e. the node under test;
 //   - no instance: the default outbound of the running main instance;
 //   - no instance at all: the system network (direct).
-//
-// Since sing-box 1.15 some protocols (WireGuard) are endpoints instead of
-// outbounds, so a proxy endpoint is picked when no proxy outbound exists.
 func urlTestDetour(i *BoxInstance) (N.Dialer, error) {
+	return urlTestDetourWithTarget(i, "")
+}
+
+// urlTestDetourWithTarget resolves a caller-specified outbound or endpoint.
+// sing-box's outbound manager shares this namespace with endpoints.
+func urlTestDetourWithTarget(i *BoxInstance, targetTag string) (N.Dialer, error) {
 	if i == nil {
 		i = mainInstance
 	}
 	if i == nil {
+		if targetTag != "" {
+			return nil, fmt.Errorf("URL test target %q requires an active box instance", targetTag)
+		}
 		return N.SystemDialer, nil
 	}
-	if outbound := i.proxyOutbound(); outbound != nil {
+	if targetTag != "" {
+		outbound, loaded := i.Outbound().Outbound(targetTag)
+		if !loaded {
+			return nil, fmt.Errorf("URL test target %q not found", targetTag)
+		}
 		return outbound, nil
-	}
-	if endpoints := i.Endpoint().Endpoints(); len(endpoints) > 0 {
-		return endpoints[0], nil
 	}
 	if outbound := i.Outbound().Default(); outbound != nil {
 		return outbound, nil
 	}
-	return nil, errors.New("no outbound to test in the box instance")
-}
-
-// proxyOutbound returns the first outbound that actually proxies, skipping the
-// direct / block / dns helper outbounds the app always appends.
-func (b *BoxInstance) proxyOutbound() adapter.Outbound {
-	for _, outbound := range b.Outbound().Outbounds() {
-		switch outbound.Type() {
-		case "direct", "block", "dns":
-			continue
-		}
-		return outbound
-	}
-	return nil
+	return nil, errors.New("URL test configuration has no default outbound")
 }
 
 var protectCloser io.Closer
