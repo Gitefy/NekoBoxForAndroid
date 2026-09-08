@@ -11,7 +11,7 @@
 
 | 组件 | 版本 / Commit |
 |---|---|
-| sing-box | `cf69a007cd45311fbd5d7bafe39e5eda3267089f` (`Add go TUN stack`) |
+| sing-box | `05f7bc1aac0cc7297259249142481f8a6c1a0d73` (官方 SagerNet/sing-box，tree `0260b326f9919fc8a6a52c43f7f545a677f7d7b2`，等价原 starifly commit) |
 | sing | `v0.9.4-0.20260908053243-3e69d072c058` |
 | sing-tun | `v0.9.1-0.20260908051822-65ba32b917d5` |
 | gvisor | `v0.0.0-20260727.0-sing-box-mod.1`（显式固定，见下方说明） |

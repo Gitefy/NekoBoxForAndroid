@@ -21,7 +21,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
       - name: Golang Status
-        run: find buildScript libcore/*.sh | xargs cat | sha1sum > golang_status
+        run: find buildScript libcore -type f -name '*.sh' | xargs cat | sha1sum > golang_status
       - name: Libcore Status
         run: git ls-files libcore | xargs cat | sha1sum > libcore_status
       - name: LibCore Cache
@@ -34,7 +34,10 @@ jobs:
       - name: Install Golang
         uses: actions/setup-go@v6
         with:
-          go-version: ^1.25
+          go-version: '1.25.5'
+          cache-dependency-path: libcore/go.sum
+      - name: Fetch Core Sources
+        run: bash buildScript/lib/core/get_source.sh
       - name: Native Build
         if: steps.cache.outputs.cache-hit != 'true'
         run: ./run lib core
@@ -56,7 +59,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
       - name: Golang Status
-        run: find buildScript libcore/*.sh | xargs cat | sha1sum > golang_status
+        run: find buildScript libcore -type f -name '*.sh' | xargs cat | sha1sum > golang_status
       - name: Libcore Status
         run: git ls-files libcore | xargs cat | sha1sum > libcore_status
       - name: LibCore Cache
