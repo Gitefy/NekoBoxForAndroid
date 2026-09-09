@@ -380,11 +380,14 @@ class ConfigurationFragment @JvmOverloads constructor(
     }
 
     val updateSelectedCallback = object : ViewPager2.OnPageChangeCallback() {
-        override fun onPageScrolled(
-            position: Int, positionOffset: Float, positionOffsetPixels: Int
-        ) {
-            if (adapter.groupList.size > position) {
-                DataStore.selectedGroup = adapter.groupList[position].id
+        // Persist only on settle: onPageScrolled fires every animation frame and
+        // used to flush a KV write per frame into the writer thread.
+        override fun onPageSelected(position: Int) {
+            if (::adapter.isInitialized && adapter.groupList.size > position) {
+                val id = adapter.groupList[position].id
+                if (DataStore.selectedGroup != id) {
+                    DataStore.selectedGroup = id
+                }
             }
         }
     }
@@ -1074,6 +1077,13 @@ class ConfigurationFragment @JvmOverloads constructor(
         var proxyN = 0
         val finishedN = AtomicInteger(0)
 
+        // Coalesce per-node completions: with connectionTestConcurrent workers
+        // each node used to post a main-thread refresh + notification update.
+        // Now the counter/notification go through immediately (cheap), but the
+        // dialog TextView rebuild is throttled to one per window.
+        private val dialogThrottleMs = 200L
+        private val lastDialogRefreshMs = AtomicLong(0L)
+
         fun update(profile: ProxyEntity) {
             if (dialogStatus.get() != 2) {
                 results.add(profile)
@@ -1089,6 +1099,14 @@ class ConfigurationFragment @JvmOverloads constructor(
                 )
                 if (status >= 1) return@runOnMainDispatcher
                 if (!isAdded) return@runOnMainDispatcher
+
+                val now = SystemClock.elapsedRealtime()
+                val isLast = progress >= proxyN
+                if (!isLast && now - lastDialogRefreshMs.get() < dialogThrottleMs) {
+                    binding.progress.text = "$progress / $proxyN"
+                    return@runOnMainDispatcher
+                }
+                lastDialogRefreshMs.set(now)
 
                 // refresh dialog
 
@@ -2009,12 +2027,32 @@ class ConfigurationFragment @JvmOverloads constructor(
 
             private fun getItemAt(index: Int) = getItem(configurationIdList[index])
 
-            private fun hasMiddleRow(p: ProxyEntity): Boolean {
-                val showTraffic = p.rx + p.tx != 0L
+            // Row-address cache: displayAddress() builds "host:port" via
+            // wrapIPV6Host on every call, and bind() + hasMiddleRow() each
+            // computed it per row per bind. Keyed by entity id + bean name +
+            // address-relevant fields; invalidated on row update/remove/reload.
+            private val rowAddressCache = mutableMapOf<Long, Pair<String, String>>()
+
+            fun rowAddress(p: ProxyEntity): String {
+                val key = p.id
                 val bean = p.requireBean()
+                val fingerprint = (bean.name ?: "") + "|" + bean.serverAddress + "|" + bean.serverPort
+                val cached = rowAddressCache[key]
+                if (cached != null && cached.first == fingerprint) return cached.second
                 val address = if (alwaysShowAddress && bean.name.isNotBlank()) {
                     bean.displayAddress()
                 } else ""
+                rowAddressCache[key] = fingerprint to address
+                return address
+            }
+
+            private fun invalidateRowAddress(id: Long) {
+                rowAddressCache.remove(id)
+            }
+
+            private fun hasMiddleRow(p: ProxyEntity): Boolean {
+                val showTraffic = p.rx + p.tx != 0L
+                val address = rowAddress(p)
                 return !((!showTraffic || p.status <= 0) && address.isBlank())
             }
 
@@ -2391,6 +2429,7 @@ class ConfigurationFragment @JvmOverloads constructor(
                             cachedProfile.dirty != updatedProfile.dirty ||
                             cachedProfile.displayName() != updatedProfile.displayName()
                     configurationList[profile.id] = updatedProfile
+                    invalidateRowAddress(profile.id)
                     if (noTraffic && !contentChanged) return@runOnMainDispatcher
 
                     val newHasMiddleRow = hasMiddleRow(updatedProfile)
@@ -2435,6 +2474,7 @@ class ConfigurationFragment @JvmOverloads constructor(
                     if (!isAdded || !::configurationListView.isInitialized) return@runOnMainDispatcher
                     configurationIdList.removeAt(index)
                     configurationList.remove(profileId)
+                    invalidateRowAddress(profileId)
                     notifyItemRemoved(index)
                     refreshFromPosition(index - 1)
                 }
@@ -2507,6 +2547,7 @@ class ConfigurationFragment @JvmOverloads constructor(
                     configurationList.putAll(newProfileMap)
                     configurationIdList.clear()
                     configurationIdList.addAll(newProfileIds)
+                    rowAddressCache.clear()
                     notifyDataSetChanged()
 
                     if (selectedProfileIndex != -1) {
@@ -2773,9 +2814,14 @@ class ConfigurationFragment @JvmOverloads constructor(
                     )
                 }
 
-                var address = if (pf.alwaysShowAddress && bean.name.isNotBlank()) {
-                    bean.displayAddress()
-                } else ""
+                // Shared with hasMiddleRow() via the adapter row-address cache:
+                // one displayAddress() computation per row per content change.
+                var address = adapter?.rowAddress(proxyEntity) ?: run {
+                    val beanAddress = proxyEntity.requireBean()
+                    if (pf.alwaysShowAddress && beanAddress.name.isNotBlank()) {
+                        beanAddress.displayAddress()
+                    } else ""
+                }
                 if (showTraffic && address.length >= 30) {
                     address = address.substring(0, 27) + "..."
                 }

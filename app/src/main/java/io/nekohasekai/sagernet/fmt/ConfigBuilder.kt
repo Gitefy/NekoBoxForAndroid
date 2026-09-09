@@ -159,12 +159,14 @@ private fun sanitizeDnsEntry(value: String): String {
     return value.filterNot { it.isISOControl() }.trim()
 }
 
+private val dnsHostsWhitespaceRegex = "\\s+".toRegex()
+
 private fun parseDnsHosts(value: String): Map<String, List<String>> {
     val hosts = linkedMapOf<String, MutableList<String>>()
     value.lineSequence().forEach { line ->
         val trimmed = line.trim()
         if (trimmed.isEmpty() || trimmed.startsWith("#")) return@forEach
-        val tokens = trimmed.split("\\s+".toRegex())
+        val tokens = trimmed.split(dnsHostsWhitespaceRegex)
         if (tokens.size < 2) return@forEach
         val domain = tokens.first()
         val addresses = tokens.drop(1).filter { it.isIpAddress() }
@@ -174,15 +176,33 @@ private fun parseDnsHosts(value: String): Map<String, List<String>> {
     return hosts.mapValues { (_, addresses) -> addresses.distinct() }
 }
 
+// serverHostOf parses custom ConfigBean JSON on every call; buildConfig invokes
+// it per hop per profile, so identical beans re-parse repeatedly. Cache by bean
+// content hash; ConfigBean.config is immutable per entity load.
+private val serverHostCache = object : LinkedHashMap<Int, String?>(128, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, String?>): Boolean {
+        return size > 512
+    }
+}
+private val serverHostCacheLock = Any()
+
 private fun serverHostOf(bean: AbstractBean): String? {
     val fallback = bean.serverAddress?.takeIf { it.isNotBlank() }
     if (bean is ConfigBean) {
-        return try {
+        val cacheKey = bean.config.hashCode()
+        synchronized(serverHostCacheLock) {
+            if (serverHostCache.containsKey(cacheKey)) return serverHostCache[cacheKey]
+        }
+        val parsed = try {
             val map = gson.fromJson(bean.config, mutableMapOf<String, Any>().javaClass)
             map["server"]?.toString()?.takeIf { it.isNotBlank() } ?: fallback
         } catch (_: Exception) {
             fallback
         }
+        synchronized(serverHostCacheLock) {
+            serverHostCache[cacheKey] = parsed
+        }
+        return parsed
     }
     return fallback
 }

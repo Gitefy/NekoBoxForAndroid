@@ -9,10 +9,11 @@ import android.os.Looper
 import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.ktx.Logs
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.actor
-import kotlinx.coroutines.runBlocking
 
 object DefaultNetworkListener {
     private sealed class NetworkMessage {
@@ -28,7 +29,14 @@ object DefaultNetworkListener {
         class Lost(val network: Network) : NetworkMessage()
     }
 
-    private val networkActor = GlobalScope.actor<NetworkMessage>(Dispatchers.Unconfined) {
+    // Dedicated scope on Default: the old GlobalScope.actor(Unconfined) inherited
+    // the sender's thread, so heavy listener work (getLinkProperties, connection
+    // resets, urltest refresh) could land on the main thread or the system
+    // ConnectivityThread. Actor confinement keeps all state transitions on one
+    // background thread and never borrows the caller's.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    @OptIn(kotlinx.coroutines.ObsoleteCoroutinesApi::class)
+    private val networkActor = scope.actor<NetworkMessage>(capacity = Channel.UNLIMITED) {
         val listeners = mutableMapOf<Any, (Network?) -> Unit>()
         var network: Network? = null
         val pendingRequests = arrayListOf<NetworkMessage.Get>()
@@ -79,19 +87,23 @@ object DefaultNetworkListener {
 
     suspend fun stop(key: Any) = networkActor.send(NetworkMessage.Stop(key))
 
-    // NB: this runs in ConnectivityThread
+    // NB: this runs in ConnectivityThread — never block it. trySend never
+    // suspends; the actor's UNLIMITED buffer absorbs bursts (capability flaps)
+    // and the actor drains them on Dispatchers.Default.
     private object Callback : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) =
-            runBlocking { networkActor.send(NetworkMessage.Put(network)) }
+        override fun onAvailable(network: Network) {
+            networkActor.trySend(NetworkMessage.Put(network))
+        }
 
         override fun onCapabilitiesChanged(
             network: Network, networkCapabilities: NetworkCapabilities
         ) { // it's a good idea to refresh capabilities
-            runBlocking { networkActor.send(NetworkMessage.Update(network)) }
+            networkActor.trySend(NetworkMessage.Update(network))
         }
 
-        override fun onLost(network: Network) =
-            runBlocking { networkActor.send(NetworkMessage.Lost(network)) }
+        override fun onLost(network: Network) {
+            networkActor.trySend(NetworkMessage.Lost(network))
+        }
     }
 
     private val request = NetworkRequest.Builder().apply {
