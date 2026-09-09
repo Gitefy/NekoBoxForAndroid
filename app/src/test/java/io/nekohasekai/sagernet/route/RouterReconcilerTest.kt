@@ -150,6 +150,47 @@ class RouterReconcilerTest {
         )
     }
 
+    @Test
+    fun membershipChangedDetectsProxyIdSetAndOrderDiffs() {
+        val previous = mapOf(
+            1L to listOf(RouterMemberSnapshot(10, "a"), RouterMemberSnapshot(20, "b")),
+            2L to listOf(RouterMemberSnapshot(30, "c")),
+        )
+        assertFalse(
+            routerMembershipChanged(
+                previous,
+                mapOf(
+                    1L to listOf(RouterMemberSnapshot(10, "a"), RouterMemberSnapshot(20, "b")),
+                    2L to listOf(RouterMemberSnapshot(30, "c")),
+                ),
+            ),
+        )
+        assertTrue(
+            routerMembershipChanged(
+                previous,
+                mapOf(
+                    1L to listOf(RouterMemberSnapshot(10, "a"), RouterMemberSnapshot(21, "b")),
+                    2L to listOf(RouterMemberSnapshot(30, "c")),
+                ),
+            ),
+        )
+        assertTrue(
+            routerMembershipChanged(
+                previous,
+                mapOf(
+                    1L to listOf(RouterMemberSnapshot(20, "b"), RouterMemberSnapshot(10, "a")),
+                    2L to listOf(RouterMemberSnapshot(30, "c")),
+                ),
+            ),
+        )
+        assertTrue(
+            routerMembershipChanged(
+                previous,
+                mapOf(1L to listOf(RouterMemberSnapshot(10, "a"), RouterMemberSnapshot(20, "b"))),
+            ),
+        )
+    }
+
     private fun group(
         id: Long,
         sources: Set<Long>,

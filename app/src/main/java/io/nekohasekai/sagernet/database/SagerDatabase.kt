@@ -39,7 +39,10 @@ abstract class SagerDatabase : RoomDatabase() {
             SagerNet.application.getDatabasePath(Key.DB_PROFILE).parentFile?.mkdirs()
             Room.databaseBuilder(SagerNet.application, SagerDatabase::class.java, Key.DB_PROFILE)
 //                .addMigrations(*SagerDatabase_Migrations.build())
-                .setJournalMode(JournalMode.TRUNCATE)
+                // WAL avoids full-file checkpoints that TRUNCATE forces on every commit;
+                // large subscription writes stay off the critical path of list/reload reads.
+                .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
+                // Still required until UI call sites finish moving off the main thread.
                 .allowMainThreadQueries()
                 .enableMultiInstanceInvalidation()
                 .setQueryExecutor { GlobalScope.launch { it.run() } }

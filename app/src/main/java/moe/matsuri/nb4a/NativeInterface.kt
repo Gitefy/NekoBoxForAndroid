@@ -7,12 +7,12 @@ import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.bg.ServiceNotification
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.SagerDatabase
+import io.nekohasekai.sagernet.database.routerStableId
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.app
 import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
 import io.nekohasekai.sagernet.utils.PackageCache
 import io.nekohasekai.sagernet.route.routerNodeKey
-import io.nekohasekai.sagernet.route.routerStableIdOrFallback
 import libcore.BoxPlatformInterface
 import libcore.Libcore
 import libcore.NB4AInterface
@@ -94,7 +94,7 @@ class NativeInterface : BoxPlatformInterface, NB4AInterface {
                         selectedProxyId = id,
                         selectedNodeKey = routerNodeKey(
                             selected.groupId,
-                            routerStableIdOrFallback(selected.uuid, selected.id),
+                            selected.routerStableId(),
                         ),
                     )
                 }

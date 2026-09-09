@@ -1,6 +1,7 @@
 package io.nekohasekai.sagernet.database
 
 import io.nekohasekai.sagernet.GroupType
+import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.bg.SubscriptionUpdater
 import io.nekohasekai.sagernet.fmt.AbstractBean
 import io.nekohasekai.sagernet.fmt.toUniversalLink
@@ -13,6 +14,7 @@ import io.nekohasekai.sagernet.route.RouterNodeSnapshot
 import io.nekohasekai.sagernet.route.RouterReconcileGroup
 import io.nekohasekai.sagernet.route.RouterReconciler
 import io.nekohasekai.sagernet.route.danglingRouterMemberProxyIds
+import io.nekohasekai.sagernet.route.routerMembershipChanged
 import io.nekohasekai.sagernet.route.routerStableIdOrFallback
 import io.nekohasekai.sagernet.route.routerNodeKey
 
@@ -146,13 +148,24 @@ object GroupManager {
     }
 
     suspend fun reconcileRouterMembers(previous: RouterRefreshSnapshot) {
+        val nextMembers = reconcileRouterMembersInternal(previous) ?: return
+        if (!DataStore.serviceState.started) return
+        if (!routerMembershipChanged(previous.membersByRouterId, nextMembers)) return
+        Logs.d("Router membership changed; requesting full service reload")
+        SagerNet.reloadServiceFully()
+    }
+
+    private suspend fun reconcileRouterMembersInternal(
+        previous: RouterRefreshSnapshot,
+    ): Map<Long, List<RouterMemberSnapshot>>? {
         // Keep the old selected ID until reconciliation can resolve it through the snapshot.
         cleanupDanglingRouterMembers(clearInvalidSelections = false)
         val routers = SagerDatabase.routerGroupDao.all()
             .filter { it.stableTag.isNotBlank() }
         if (routers.isEmpty()) {
             cleanupDanglingRouterMembers()
-            return
+            // Dangling cleanup may have removed members; compare against empty membership.
+            return emptyMap()
         }
 
         val groups = routers.mapNotNull { router ->
@@ -172,11 +185,16 @@ object GroupManager {
         }
         if (groups.isEmpty()) {
             cleanupDanglingRouterMembers()
-            return
+            val aliveProxyIds = SagerDatabase.proxyDao.getAll().mapTo(HashSet()) { it.id }
+            return previous.membersByRouterId.mapValues { (_, members) ->
+                members.filter { it.proxyId in aliveProxyIds }
+            }
         }
 
         val sourceGroups = SagerDatabase.groupDao.allGroups().associateBy { it.id }
-        val nodes = SagerDatabase.proxyDao.getAll().mapNotNull { proxy ->
+        val proxies = SagerDatabase.proxyDao.getAll()
+        val proxyIds = proxies.mapTo(HashSet(proxies.size)) { it.id }
+        val nodes = proxies.mapNotNull { proxy ->
             runCatching {
                 RouterNodeSnapshot(
                     id = proxy.id,
@@ -200,7 +218,10 @@ object GroupManager {
                 SagerDatabase.routerGroupDao.setLastError(router.id, result.error)
             }
             cleanupDanglingRouterMembers()
-            return
+            // Preserve path: membership only shrinks via dangling cleanup already applied.
+            return previous.membersByRouterId.mapValues { (_, members) ->
+                members.filter { it.proxyId in proxyIds }
+            }
         }
 
         val matchedAt = System.currentTimeMillis()
@@ -208,6 +229,7 @@ object GroupManager {
         // detect concurrent configuration or source changes inside the synchronized block.
         val snapshotMatchConfigs = routers.associate { it.id to it.matchConfig }
         val snapshotSourceGroupIds = groups.associate { it.routerId to it.sourceGroupIds.sorted() }
+        val writtenMembers = LinkedHashMap<Long, List<RouterMemberSnapshot>>()
         synchronized(RouterGroupRepository.routerSyncLock) {
             SagerDatabase.instance.runInTransaction {
                 result.membersByRouterId.forEach { (routerId, members) ->
@@ -221,10 +243,12 @@ object GroupManager {
                     val computedSources = snapshotSourceGroupIds[routerId]
                     if (computedMatchConfig != null && computedMatchConfig != freshRouter.matchConfig) {
                         Logs.w("Router ${freshRouter.stableTag}: matchConfig changed during reconcile, skipping stale members")
+                        writtenMembers[routerId] = previous.membersByRouterId[routerId].orEmpty()
                         return@forEach
                     }
                     if (computedSources != null && computedSources != freshSources) {
                         Logs.w("Router ${freshRouter.stableTag}: sources changed during reconcile, skipping stale members")
+                        writtenMembers[routerId] = previous.membersByRouterId[routerId].orEmpty()
                         return@forEach
                     }
                     SagerDatabase.routerMemberDao.replaceMembers(
@@ -257,11 +281,17 @@ object GroupManager {
                         selectedNodeKey = selectedNodeKey,
                         lastError = lastError,
                     )
+                    writtenMembers[routerId] = members
                 }
                 cleanupDanglingRouterMembers()
             }
         }
         iterator { routerGroupsUpdated() }
+        // Include routers that were not rewritten so membership comparison stays complete.
+        previous.membersByRouterId.keys.forEach { routerId ->
+            writtenMembers.putIfAbsent(routerId, previous.membersByRouterId[routerId].orEmpty())
+        }
+        return writtenMembers
     }
 
     fun markRouterRefreshFailed(sourceGroupId: Long, message: String) {

@@ -134,9 +134,9 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
         val profileTrafficStatistics =
             findPreference<SwitchPreference>(Key.PROFILE_TRAFFIC_STATISTICS)!!
         val speedInterval = findPreference<SimpleMenuPreference>(Key.SPEED_INTERVAL)!!
-        profileTrafficStatistics.isEnabled = speedInterval.value.toString() != "0"
-        speedInterval.setOnPreferenceChangeListener { _, newValue ->
-            profileTrafficStatistics.isEnabled = newValue.toString() != "0"
+        // Traffic collection is independent of UI speed refresh (TrafficLoopPolicy).
+        profileTrafficStatistics.onPreferenceChangeListener = reloadListener
+        speedInterval.setOnPreferenceChangeListener { _, _ ->
             needReload()
             true
         }

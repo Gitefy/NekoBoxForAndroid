@@ -18,6 +18,7 @@ import io.nekohasekai.sagernet.bg.proto.ProxyInstance
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.RouterGroup
 import io.nekohasekai.sagernet.database.SagerDatabase
+import io.nekohasekai.sagernet.database.routerStableId
 import io.nekohasekai.sagernet.ktx.*
 import io.nekohasekai.sagernet.plugin.PluginManager
 import io.nekohasekai.sagernet.route.RouterRuntimeMode
@@ -25,7 +26,6 @@ import io.nekohasekai.sagernet.route.RouterSelection
 import io.nekohasekai.sagernet.route.RouterSelectionPlan
 import io.nekohasekai.sagernet.route.RouterSelectionRequest
 import io.nekohasekai.sagernet.route.routerNodeKey
-import io.nekohasekai.sagernet.route.routerStableIdOrFallback
 import io.nekohasekai.sagernet.utils.DefaultNetworkListener
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
@@ -59,11 +59,13 @@ class BaseService {
         val receiver = broadcastReceiver { ctx, intent ->
             when (intent.action) {
                 Intent.ACTION_SHUTDOWN -> service.persistStats()
-                Action.RELOAD -> service.reload(
-                    intent.getStringExtra(Action.EXTRA_ROUTER_TAG),
-                    intent.getLongExtra(Action.EXTRA_ROUTER_PROXY_ID, 0L).takeIf { it > 0L },
-                    intent.getBooleanExtra(Action.EXTRA_FORCE_FULL_RELOAD, false),
-                )
+                Action.RELOAD -> runOnDefaultDispatcher {
+                    service.reload(
+                        intent.getStringExtra(Action.EXTRA_ROUTER_TAG),
+                        intent.getLongExtra(Action.EXTRA_ROUTER_PROXY_ID, 0L).takeIf { it > 0L },
+                        intent.getBooleanExtra(Action.EXTRA_FORCE_FULL_RELOAD, false),
+                    )
+                }
                 // Action.SWITCH_WAKE_LOCK -> runOnDefaultDispatcher { service.switchWakeLock() }
                 PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED -> {
                     if (SagerNet.power.isDeviceIdleMode) {
@@ -85,13 +87,14 @@ class BaseService {
                     }
                 }
 
-                else -> service.stopRunner()
+                else -> runOnDefaultDispatcher { service.stopRunner() }
             }
         }
         var closeReceiverRegistered = false
 
         val binder = Binder(this)
         var connectingJob: Job? = null
+        @Volatile var urlTestRefreshJob: Job? = null
 
         fun changeState(s: State, msg: String? = null) {
             if (state == s && msg == null) return
@@ -263,27 +266,33 @@ class BaseService {
             if (!runningProxy.isInitialized() || !runningProxy.box.selectOutboundFor(plan.selectorTag, plan.targetTag)) {
                 return false
             }
-            val selected = SagerDatabase.proxyDao.getById(proxyId) ?: return false
-            SagerDatabase.routerGroupDao.updateSelection(
-                routerId = router.id,
-                selectedProxyId = proxyId,
-                selectedNodeKey = routerNodeKey(
-                    selected.groupId,
-                    routerStableIdOrFallback(selected.uuid, selected.id),
-                ),
-            )
+            // Runtime switch already succeeded. A DB miss must not fall through to full VPN reload.
+            runCatching {
+                val selected = SagerDatabase.proxyDao.getById(proxyId)
+                    ?: error("proxy $proxyId missing after router hot-switch")
+                SagerDatabase.routerGroupDao.updateSelection(
+                    routerId = router.id,
+                    selectedProxyId = proxyId,
+                    selectedNodeKey = routerNodeKey(
+                        selected.groupId,
+                        selected.routerStableId(),
+                    ),
+                )
+            }.onFailure { error ->
+                Logs.w(
+                    "Router hot-switch persisted selection failed for $routerTag; keeping runtime selection",
+                    error,
+                )
+            }
             return true
         }
 
         fun canReloadSelector(): Boolean {
-            if ((data.proxy?.config?.selectorGroupId ?: -1L) < 0) return false
+            val selectorGroupId = data.proxy?.config?.selectorGroupId ?: -1L
+            if (selectorGroupId < 0L) return false
             val ent = SagerDatabase.proxyDao.getById(DataStore.selectedProxy) ?: return false
-            val tmpBox = ProxyInstance(ent)
-            tmpBox.buildConfigTmp()
-            if (tmpBox.lastSelectorGroupId == data.proxy?.lastSelectorGroupId) {
-                return true
-            }
-            return false
+            // Same selector group => hot-switch only. Avoid a full temporary buildConfig.
+            return ent.groupId == selectorGroupId
         }
 
         suspend fun startProcesses() {
@@ -296,6 +305,8 @@ class BaseService {
         }
 
         fun killProcesses() {
+            data.urlTestRefreshJob?.cancel()
+            data.urlTestRefreshJob = null
             data.proxy?.close()
             wakeLock?.apply {
                 release()
@@ -320,15 +331,16 @@ class BaseService {
 
             runOnMainDispatcher {
                 data.connectingJob?.cancelAndJoin() // ensure stop connecting first
-                coroutineScope {
+                // Close box / stop traffic looper off the main thread to avoid ANR on stop.
+                withContext(Dispatchers.Default) {
                     killProcesses()
-                    val data = data
-                    if (data.closeReceiverRegistered) {
-                        unregisterReceiver(data.receiver)
-                        data.closeReceiverRegistered = false
-                    }
-                    data.proxy = null
                 }
+                val data = data
+                if (data.closeReceiverRegistered) {
+                    unregisterReceiver(data.receiver)
+                    data.closeReceiverRegistered = false
+                }
+                data.proxy = null
 
                 // change the state
                 data.changeState(State.Stopped, msg)
@@ -373,8 +385,12 @@ class BaseService {
                         }
                         val runningProxy = data.proxy
                         if (data.state == State.Connected && runningProxy?.isInitialized() == true) {
-                            data.binder.launch(Dispatchers.IO) {
+                            // Debounce flapping networks so multi-router urltest bursts coalesce.
+                            data.urlTestRefreshJob?.cancel()
+                            data.urlTestRefreshJob = data.binder.launch(Dispatchers.IO) {
+                                delay(URL_TEST_NETWORK_REFRESH_DEBOUNCE_MS)
                                 if (data.state != State.Connected || data.proxy !== runningProxy) return@launch
+                                if (!runningProxy.isInitialized()) return@launch
                                 runningProxy.config.routerUrlTestTags.values.distinct().forEach {
                                     runningProxy.box.refreshURLTestFor(it)
                                 }
@@ -438,12 +454,21 @@ class BaseService {
             data.connectingJob = data.binder.launch(start = CoroutineStart.LAZY) {
                 try {
                     val startedAt = SystemClock.elapsedRealtime()
+                    val notificationTitle = onDefaultDispatcher {
+                        ServiceNotification.genTitle(profile)
+                    }
                     val notification = onMainDispatcher {
-                        createNotification(ServiceNotification.genTitle(profile)).also {
+                        createNotification(notificationTitle).also {
                             data.notification = it
                         }
                     }
-                    notification.show()
+                    if (!notification.show()) {
+                        stopRunner(
+                            false,
+                            "${getString(R.string.service_failed)}foreground service",
+                        )
+                        return@launch
+                    }
                     val notificationReadyAt = SystemClock.elapsedRealtime()
 
                     Executable.killAll()    // clean up old processes
@@ -489,6 +514,10 @@ class BaseService {
             data.connectingJob?.start()
             return Service.START_NOT_STICKY
         }
+    }
+
+    companion object {
+        private const val URL_TEST_NETWORK_REFRESH_DEBOUNCE_MS = 1_500L
     }
 
 }

@@ -33,6 +33,17 @@ internal fun danglingRouterMemberProxyIds(
     currentProxyIds: Set<Long>,
 ): Set<Long> = members.map { it.proxyId }.filterNot(currentProxyIds::contains).toSet()
 
+/** True when any router's ordered proxy-id membership differs between two snapshots. */
+internal fun routerMembershipChanged(
+    previous: Map<Long, List<RouterMemberSnapshot>>,
+    next: Map<Long, List<RouterMemberSnapshot>>,
+): Boolean {
+    val routerIds = previous.keys + next.keys
+    return routerIds.any { routerId ->
+        previous[routerId].orEmpty().map { it.proxyId } != next[routerId].orEmpty().map { it.proxyId }
+    }
+}
+
 private data class StableNodeKey(val sourceGroupId: Long?, val stableId: String)
 
 object RouterReconciler {

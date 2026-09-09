@@ -21,6 +21,7 @@ import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.ktx.app
 import io.nekohasekai.sagernet.ktx.getColorAttr
+import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.onMainDispatcher
 import io.nekohasekai.sagernet.ui.SwitchActivity
 import io.nekohasekai.sagernet.utils.Theme
@@ -251,15 +252,26 @@ class ServiceNotification(
     }
 
 
-    suspend fun show() = onMainDispatcher {
+    /**
+     * Promote the service to foreground. Returns false when FGS promotion fails so
+     * callers abort startup instead of continuing with a non-foreground VPN/proxy.
+     */
+    suspend fun show(): Boolean = onMainDispatcher {
+        if (destroyed) return@onMainDispatcher false
         updateActions()
-        useBuilder {
-            if (destroyed) return@useBuilder
-            (service as Service).startForeground(
-                notificationId,
-                it.build(),
-                FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED
-            )
+        try {
+            useBuilder {
+                if (destroyed) return@useBuilder
+                (service as Service).startForeground(
+                    notificationId,
+                    it.build(),
+                    FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED
+                )
+            }
+            !destroyed
+        } catch (error: Exception) {
+            Logs.w("startForeground failed; aborting service start", error)
+            false
         }
     }
 

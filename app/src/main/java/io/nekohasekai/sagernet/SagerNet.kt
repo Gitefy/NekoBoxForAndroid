@@ -11,6 +11,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.os.PowerManager
 import android.os.StrictMode
+import android.os.SystemClock
 import android.os.UserManager
 import androidx.core.content.ContextCompat
 import androidx.core.content.getSystemService
@@ -28,6 +29,7 @@ import libcore.Libcore
 import moe.matsuri.nb4a.NativeInterface
 import moe.matsuri.nb4a.net.LocalResolverImpl
 import moe.matsuri.nb4a.utils.JavaUtil
+import java.util.concurrent.atomic.AtomicLong
 import moe.matsuri.nb4a.utils.cleanWebview
 import java.io.File
 import androidx.work.Configuration as WorkConfiguration
@@ -114,12 +116,20 @@ class SagerNet : Application(),
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-
+        // UI_HIDDEN fires often; FreeOSMemory can spike CPU without proven battery wins.
+        // Cooldown keeps the safety valve without thrashing on every background transition.
+        val now = SystemClock.elapsedRealtime()
+        val previous = lastForceGcElapsedRealtime.get()
+        if (now - previous < FORCE_GC_COOLDOWN_MS) return
+        if (!lastForceGcElapsedRealtime.compareAndSet(previous, now)) return
         Libcore.forceGc()
     }
 
     @SuppressLint("InlinedApi")
     companion object {
+
+        private const val FORCE_GC_COOLDOWN_MS = 60_000L
+        private val lastForceGcElapsedRealtime = AtomicLong(0L)
 
         lateinit var application: SagerNet
 

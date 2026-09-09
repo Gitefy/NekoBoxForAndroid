@@ -1,10 +1,7 @@
 package io.nekohasekai.sagernet.fmt
 
 import io.nekohasekai.sagernet.database.RuleEntity
-import io.nekohasekai.sagernet.database.RouterGroup
-import io.nekohasekai.sagernet.route.RouterRuntimeException
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class RouterRouteSemanticTest {
@@ -64,31 +61,24 @@ class RouterRouteSemanticTest {
     }
 
     @Test
-    fun missingGroupReferenceThrowsInsteadOfFallingBack() {
-        val error = assertThrows(RouterRuntimeException::class.java) {
-            resolveRouteOutbound(RuleEntity(outbound = 0, routerGroupId = 404), "main", profileTags, routerTags)
-        }
-        assertEquals(404L, error.groupId)
-        assertEquals(RouterRuntimeException.Reason.MISSING, error.reason)
-    }
-
-    @Test
-    fun disabledAndEmptyReferencedGroupsHaveSpecificErrors() {
-        val groups = listOf(
-            RouterGroup(id = 1, stableTag = "router.disabled", name = "Disabled", enabled = false),
-            RouterGroup(id = 2, stableTag = "router.empty", name = "Empty", enabled = true),
+    fun missingDisabledOrEmptyRouterFallsBackToLegacyOutbound() {
+        // Unbuilt router tags (missing / disabled / empty) must not abort config build.
+        assertEquals(
+            "main",
+            resolveRouteOutbound(RuleEntity(outbound = 0, routerGroupId = 404), "main", profileTags, routerTags),
         )
-        val disabled = assertThrows(RouterRuntimeException::class.java) {
-            validateRouterReferences(listOf(RuleEntity(routerGroupId = 1)), groups, emptySet())
-        }
-        assertEquals("Disabled", disabled.groupName)
-        assertEquals(RouterRuntimeException.Reason.DISABLED, disabled.reason)
-
-        val empty = assertThrows(RouterRuntimeException::class.java) {
-            validateRouterReferences(listOf(RuleEntity(routerGroupId = 2)), groups, emptySet())
-        }
-        assertEquals("Empty", empty.groupName)
-        assertEquals(RouterRuntimeException.Reason.EMPTY, empty.reason)
+        assertEquals(
+            "legacy-google",
+            resolveRouteOutbound(RuleEntity(outbound = 11, routerGroupId = 1), "main", profileTags, emptyMap()),
+        )
+        assertEquals(
+            TAG_BYPASS,
+            resolveRouteOutbound(RuleEntity(outbound = -1, routerGroupId = 2), "main", profileTags, emptyMap()),
+        )
+        assertEquals(
+            TAG_BLOCK,
+            resolveRouteOutbound(RuleEntity(outbound = -2, routerGroupId = 2), "main", profileTags, emptyMap()),
+        )
     }
 
     @Test

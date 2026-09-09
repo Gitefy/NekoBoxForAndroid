@@ -1,7 +1,6 @@
 package io.nekohasekai.sagernet.bg
 
 import android.Manifest
-import android.annotation.SuppressLint
 import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -19,6 +18,13 @@ import android.net.VpnService as BaseVpnService
 class VpnService : BaseVpnService(),
     BaseService.Interface {
 
+    override var wakeLock: PowerManager.WakeLock? = null
+
+    override fun acquireWakeLock() {
+        wakeLock = SagerNet.power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "sagernet:vpn")
+            .apply { acquire(WAKE_LOCK_TIMEOUT_MS) }
+    }
+
     companion object {
 
         const val PRIVATE_VLAN4_CLIENT = "172.19.0.1"
@@ -26,6 +32,7 @@ class VpnService : BaseVpnService(),
         const val FAKEDNS_VLAN4_CLIENT = "198.18.0.0"
         const val PRIVATE_VLAN6_CLIENT = "fdfe:dcba:9876::1"
         const val PRIVATE_VLAN6_ROUTER = "fdfe:dcba:9876::2"
+        private const val WAKE_LOCK_TIMEOUT_MS = 30L * 60L * 1000L
 
         internal fun tunAddresses(ipv6Mode: Int): List<TunAddress> = when (ipv6Mode) {
             IPv6Mode.DISABLE -> listOf(TunAddress(PRIVATE_VLAN4_CLIENT, 30))
@@ -52,14 +59,6 @@ class VpnService : BaseVpnService(),
     override suspend fun startProcesses() {
         DataStore.vpnService = this
         super.startProcesses() // launch proxy instance
-    }
-
-    override var wakeLock: PowerManager.WakeLock? = null
-
-    @SuppressLint("WakelockTimeout")
-    override fun acquireWakeLock() {
-        wakeLock = SagerNet.power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "sagernet:vpn")
-            .apply { acquire() }
     }
 
     @Suppress("EXPERIMENTAL_API_USAGE")

@@ -38,7 +38,6 @@ import io.nekohasekai.sagernet.ktx.mkPort
 import io.nekohasekai.sagernet.route.RouterRuntime
 import io.nekohasekai.sagernet.route.RouterFilterConfig
 import io.nekohasekai.sagernet.route.RouterRuntimeGroup
-import io.nekohasekai.sagernet.route.RouterRuntimeException
 import io.nekohasekai.sagernet.route.RouterRuntimeMode
 import io.nekohasekai.sagernet.utils.PackageCache
 import moe.matsuri.nb4a.*
@@ -82,37 +81,17 @@ internal fun resolveRouteOutbound(
     routerTagsById: Map<Long, String>,
     primaryProxyId: Long = Long.MIN_VALUE
 ): String {
+    // Prefer a built Router outbound when present. Missing, disabled, or empty Router
+    // groups intentionally fall back to the rule's legacy outbound so VPN startup is
+    // not blocked by temporarily unavailable strategy groups.
     if (rule.routerGroupId > 0L) {
-        return routerTagsById[rule.routerGroupId]
-            ?: throw RouterRuntimeException(
-                rule.routerGroupId,
-                "",
-                RouterRuntimeException.Reason.MISSING,
-            )
+        routerTagsById[rule.routerGroupId]?.let { return it }
     }
     return when (val outId = rule.outbound) {
         0L -> mainProxyTag
         -1L -> TAG_BYPASS
         -2L -> TAG_BLOCK
         else -> if (outId == primaryProxyId) mainProxyTag else proxyTags[outId] ?: ""
-    }
-}
-
-internal fun validateRouterReferences(
-    rules: Iterable<RuleEntity>,
-    groups: Iterable<RouterGroup>,
-    builtRouterIds: Set<Long>,
-) {
-    val groupsById = groups.associateBy { it.id }
-    rules.asSequence().map { it.routerGroupId }.filter { it > 0 }.distinct().forEach { id ->
-        val group = groupsById[id]
-            ?: throw RouterRuntimeException(id, "", RouterRuntimeException.Reason.MISSING)
-        if (!group.enabled) {
-            throw RouterRuntimeException(id, group.name, RouterRuntimeException.Reason.DISABLED)
-        }
-        if (id !in builtRouterIds) {
-            throw RouterRuntimeException(id, group.name, RouterRuntimeException.Reason.EMPTY)
-        }
     }
 }
 
@@ -335,6 +314,8 @@ fun buildConfig(
     var routerSelectorTags: Map<String, String> = emptyMap()
     var routerMemberIds: Map<String, Set<Long>> = emptyMap()
     var routerUrlTestTags: Map<Long, String> = emptyMap()
+    // Main outbound is always selector or a single chain (never urltest). Router urltest
+    // winners are tracked via routerUrlTestTags / TrafficLooper selections instead.
     var mainUrlTestTag: String? = null
     var connectionTestTargetTag: String? = null
 
@@ -768,7 +749,8 @@ fun buildConfig(
         val routerTagsById = routerGroups.mapNotNull { router ->
             router.stableTag.takeIf(builtRouterTags::contains)?.let { router.id to it }
         }.toMap()
-        validateRouterReferences(extraRules, allRouterGroups, routerTagsById.keys)
+        // Rules that still point at missing/disabled/empty Router groups fall back to
+        // legacy outbound inside resolveRouteOutbound; do not abort config build here.
         routerSelectorTags = routerOutbounds
             .filterIsInstance<Outbound_SelectorOptions>()
             .mapNotNull { outbound ->
