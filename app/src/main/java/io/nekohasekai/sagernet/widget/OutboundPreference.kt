@@ -10,6 +10,7 @@ import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.SagerDatabase
+import io.nekohasekai.sagernet.ktx.dbOffMain
 import moe.matsuri.nb4a.ui.SimpleMenuPreference
 
 class OutboundPreference
@@ -86,8 +87,9 @@ class OutboundPreference
         if (value == VALUE_SELECT_ROUTER) {
             val routerId = DataStore.routeOutboundRouter
             if (routerId > 0) {
-                return SagerDatabase.routerGroupDao.getById(routerId)?.name
-                    ?: context.getString(R.string.router_reference_invalid)
+                return dbOffMain {
+                    SagerDatabase.routerGroupDao.getById(routerId)?.name
+                } ?: context.getString(R.string.router_reference_invalid)
             }
         }
         return super.getSummary()

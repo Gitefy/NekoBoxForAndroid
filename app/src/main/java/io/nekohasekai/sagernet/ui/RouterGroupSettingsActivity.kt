@@ -24,6 +24,7 @@ import io.nekohasekai.sagernet.database.RouterGroupRepository
 import io.nekohasekai.sagernet.database.RouterGroupValidationException
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.database.displayNameOrFallback
+import io.nekohasekai.sagernet.ktx.dbOffMain
 import io.nekohasekai.sagernet.ktx.onMainDispatcher
 import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
 import io.nekohasekai.sagernet.route.RouterFilterConfig
@@ -82,9 +83,13 @@ class RouterGroupSettingsActivity : ThemedActivity(R.layout.layout_settings_acti
         private var sourceOrder = emptyList<Long>()
 
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
-            val group = routerId.takeIf { it > 0 }?.let(RouterGroupRepository::get)
+            val group = dbOffMain {
+                routerId.takeIf { it > 0 }?.let(RouterGroupRepository::get)
+            }
             val filter = group?.matchConfig?.let(RouterFilterConfig::fromJson) ?: RouterFilterConfig()
-            val subscriptions = SagerDatabase.groupDao.allGroups().filter { it.type == GroupType.SUBSCRIPTION }
+            val subscriptions = dbOffMain {
+                SagerDatabase.groupDao.allGroups().filter { it.type == GroupType.SUBSCRIPTION }
+            }
             sourceOrder = subscriptions.map { it.id }
             val screen = preferenceManager.createPreferenceScreen(requireContext())
             name = EditTextPreference(requireContext()).nonPersistent().apply {
@@ -112,7 +117,9 @@ class RouterGroupSettingsActivity : ThemedActivity(R.layout.layout_settings_acti
                 title = getString(R.string.router_group_sources)
                 entries = subscriptions.map { it.displayName() }.toTypedArray()
                 entryValues = subscriptions.map { it.id.toString() }.toTypedArray()
-                values = RouterGroupRepository.sourceIds(routerId).map(Long::toString).toSet()
+                values = dbOffMain {
+                    RouterGroupRepository.sourceIds(routerId)
+                }.map(Long::toString).toSet()
                 summaryProvider = Preference.SummaryProvider<MultiSelectListPreference> { pref ->
                     val selectedNames = pref.values.mapNotNull { subMap[it] }
                     if (selectedNames.isEmpty()) {
@@ -134,8 +141,10 @@ class RouterGroupSettingsActivity : ThemedActivity(R.layout.layout_settings_acti
             selected = ListPreference(requireContext()).nonPersistent().apply {
                 key = "router_select_node"
                 title = getString(R.string.router_select_node)
-                val members = SagerDatabase.routerMemberDao.getByRouter(routerId)
-                    .mapNotNull { SagerDatabase.proxyDao.getById(it.proxyId) }
+                val members = dbOffMain {
+                    SagerDatabase.routerMemberDao.getByRouter(routerId)
+                        .mapNotNull { SagerDatabase.proxyDao.getById(it.proxyId) }
+                }
                 entries = members.map { proxy ->
                     val subName = subMap[proxy.groupId.toString()]
                     if (!subName.isNullOrBlank()) "[${subName}] ${proxy.displayNameOrFallback().trim()}"

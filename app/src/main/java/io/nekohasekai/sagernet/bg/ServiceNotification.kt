@@ -20,6 +20,7 @@ import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.ktx.app
+import io.nekohasekai.sagernet.ktx.dbOffMain
 import io.nekohasekai.sagernet.ktx.getColorAttr
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.onMainDispatcher
@@ -70,7 +71,9 @@ class ServiceNotification(
             ent: ProxyEntity?,
             showProfileInNotification: Boolean = DataStore.showProfileInNotification,
             showGroupInNotification: Boolean = DataStore.showGroupInNotification,
-            groupNameProvider: (Long) -> String? = { SagerDatabase.groupDao.getById(it)?.displayName() },
+            // groupNameProvider performs a Room query; callers on the main thread
+            // must pass a dispatcher-backed implementation (see BaseService).
+            groupNameProvider: (Long) -> String? = { dbOffMain { SagerDatabase.groupDao.getById(it)?.displayName() } },
             fallbackAppName: String = SagerNet.application.getString(R.string.app_name),
         ): String {
             if (ent == null || !showProfileInNotification) {

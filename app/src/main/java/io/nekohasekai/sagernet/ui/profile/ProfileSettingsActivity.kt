@@ -86,7 +86,7 @@ abstract class ProfileSettingsActivity<T : AbstractBean>(
     abstract fun T.init()
     abstract fun T.serialize()
 
-    val proxyEntity by lazy { SagerDatabase.proxyDao.getById(DataStore.editingId) }
+    val proxyEntity by lazy { dbOffMain { SagerDatabase.proxyDao.getById(DataStore.editingId) } }
     protected var isSubscription by Delegates.notNull<Boolean>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -116,6 +116,14 @@ abstract class ProfileSettingsActivity<T : AbstractBean>(
                     DataStore.editingGroup = proxyEntity!!.groupId
                     (proxyEntity!!.requireBean() as T).init()
                 }
+
+                // Menu visibility depends on group queries; resolve once off-main.
+                canMoveToBasicGroup = DataStore.editingId != 0L &&
+                        runCatching {
+                            SagerDatabase.groupDao.getById(DataStore.editingGroup)?.type == GroupType.BASIC &&
+                                    SagerDatabase.groupDao.allGroups()
+                                        .filter { it.type == GroupType.BASIC }.size > 1
+                        }.getOrDefault(false)
 
                 onMainDispatcher {
                     supportFragmentManager.beginTransaction()
@@ -151,14 +159,13 @@ abstract class ProfileSettingsActivity<T : AbstractBean>(
 
     val child by lazy { supportFragmentManager.findFragmentById(R.id.settings) as MyPreferenceFragmentCompat }
 
+    /** Whether the "move to group" menu entry is allowed; computed off-main in onCreate. */
+    private var canMoveToBasicGroup = false
+
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.profile_config_menu, menu)
         menu.findItem(R.id.action_move)?.apply {
-            if (DataStore.editingId != 0L // not new profile
-                && SagerDatabase.groupDao.getById(DataStore.editingGroup)?.type == GroupType.BASIC // not in subscription group
-                && SagerDatabase.groupDao.allGroups()
-                    .filter { it.type == GroupType.BASIC }.size > 1 // have other basic group
-            ) isVisible = true
+            isVisible = canMoveToBasicGroup
         }
         menu.findItem(R.id.action_create_shortcut)?.apply {
             if (DataStore.editingId != 0L) {
@@ -331,39 +338,44 @@ abstract class ProfileSettingsActivity<T : AbstractBean>(
 
             R.id.action_move -> {
                 val activity = requireActivity() as ProfileSettingsActivity<*>
-                val view = LinearLayout(context).apply {
-                    val ent = activity.proxyEntity!!
-                    orientation = LinearLayout.VERTICAL
+                runOnDefaultDispatcher {
+                    val view = LinearLayout(context).apply {
+                        val ent = activity.proxyEntity!!
+                        orientation = LinearLayout.VERTICAL
 
-                    SagerDatabase.groupDao.allGroups()
-                        .filter { it.type == GroupType.BASIC && it.id != ent.groupId }
-                        .forEach { group ->
-                            LayoutGroupItemBinding.inflate(layoutInflater, this, true).apply {
-                                edit.isVisible = false
-                                options.isVisible = false
-                                groupName.text = group.displayName()
-                                groupUpdate.text = getString(R.string.move)
-                                groupUpdate.setOnClickListener {
-                                    runOnDefaultDispatcher {
-                                        val oldGroupId = ent.groupId
-                                        val newGroupId = group.id
-                                        ent.groupId = newGroupId
-                                        ProfileManager.updateProfile(ent)
-                                        GroupManager.postUpdate(oldGroupId) // reload
-                                        GroupManager.postUpdate(newGroupId)
-                                        DataStore.editingGroup = newGroupId // post switch animation
-                                        runOnMainDispatcher {
-                                            activity.finish()
+                        SagerDatabase.groupDao.allGroups()
+                            .filter { it.type == GroupType.BASIC && it.id != ent.groupId }
+                            .forEach { group ->
+                                LayoutGroupItemBinding.inflate(layoutInflater, this, true).apply {
+                                    edit.isVisible = false
+                                    options.isVisible = false
+                                    groupName.text = group.displayName()
+                                    groupUpdate.text = getString(R.string.move)
+                                    groupUpdate.setOnClickListener {
+                                        runOnDefaultDispatcher {
+                                            val oldGroupId = ent.groupId
+                                            val newGroupId = group.id
+                                            ent.groupId = newGroupId
+                                            ProfileManager.updateProfile(ent)
+                                            GroupManager.postUpdate(oldGroupId) // reload
+                                            GroupManager.postUpdate(newGroupId)
+                                            DataStore.editingGroup = newGroupId // post switch animation
+                                            runOnMainDispatcher {
+                                                activity.finish()
+                                            }
                                         }
                                     }
                                 }
                             }
-                        }
+                    }
+                    val scrollView = ScrollView(context).apply {
+                        addView(view)
+                    }
+                    onMainDispatcher {
+                        if (activity.isFinishing || activity.isDestroyed) return@onMainDispatcher
+                        MaterialAlertDialogBuilder(activity).setView(scrollView).show()
+                    }
                 }
-                val scrollView = ScrollView(context).apply {
-                    addView(view)
-                }
-                MaterialAlertDialogBuilder(activity).setView(scrollView).show()
                 true
             }
 

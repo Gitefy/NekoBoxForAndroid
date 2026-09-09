@@ -187,7 +187,13 @@ class BackupFragment : ToolbarFragment(R.layout.layout_backup) {
     ): ByteArray {
         val out = BackupSerializer.exportDatabase(SagerDatabase.instance, profile, rule).apply {
             if (setting) {
-                BackupSerializer.putParcelableArray(this, "settings", PublicDatabase.kvPairDao.all())
+                // Dump from the mirror, not a fresh synchronous DB scan, so the
+                // export path honors the no-main-thread-query invariant.
+                BackupSerializer.putParcelableArray(
+                    this,
+                    "settings",
+                    DataStore.configurationStore.cachedAll(),
+                )
             }
         }
 
@@ -295,7 +301,7 @@ class BackupFragment : ToolbarFragment(R.layout.layout_backup) {
         }
     }
 
-    fun finishImport(
+    suspend fun finishImport(
         content: JSONObject, profile: Boolean, rule: Boolean, setting: Boolean
     ) {
         KryoConverters.withStrictDeserialization {
@@ -564,6 +570,11 @@ class BackupFragment : ToolbarFragment(R.layout.layout_backup) {
                     PublicDatabase.kvPairDao.reset()
                     PublicDatabase.kvPairDao.insert(decodedSettings)
                 }
+                // Push the restore winner into the mirror so the UI and the
+                // :bg process converge without a restart. finishImport callers
+                // already run off the main thread; the durable rows land on IO.
+                DataStore.configurationStore.restore(decodedSettings)
+                // Mirror of profileCacheStore holds editing drafts only; nothing to merge.
             }
         }
     }

@@ -60,16 +60,36 @@ data class RuleEntity(
     }
 
     fun displayOutbound(): String {
+        // Resolved lazily; bind paths on the main thread must use [displayOutboundCached].
+        return displayOutbound(
+            routerName = { SagerDatabase.routerGroupDao.getById(routerGroupId)?.name },
+            profileName = { ProfileManager.getProfile(outbound)?.displayName() },
+        )
+    }
+
+    /**
+     * Bind-time variant with preloaded names: RouteFragment resolves them once
+     * per reload on a background dispatcher so RecyclerView never queries.
+     */
+    fun displayOutboundCached(routerNames: Map<Long, String>, profileNames: Map<Long, String>): String {
+        return displayOutbound(
+            routerName = { routerNames[routerGroupId] },
+            profileName = { profileNames[outbound] },
+        )
+    }
+
+    private fun displayOutbound(
+        routerName: () -> String?,
+        profileName: () -> String?,
+    ): String {
         if (routerGroupId > 0L) {
-            return SagerDatabase.routerGroupDao.getById(routerGroupId)?.name
-                ?: app.getString(R.string.router_reference_invalid)
+            return routerName() ?: app.getString(R.string.router_reference_invalid)
         }
         return when (outbound) {
             0L -> app.getString(R.string.route_proxy)
             -1L -> app.getString(R.string.route_bypass)
             -2L -> app.getString(R.string.route_block)
-            else -> ProfileManager.getProfile(outbound)?.displayName()
-                ?: app.getString(R.string.error_title)
+            else -> profileName() ?: app.getString(R.string.error_title)
         }
     }
 

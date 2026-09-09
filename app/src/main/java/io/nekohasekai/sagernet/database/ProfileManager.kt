@@ -7,6 +7,7 @@ import io.nekohasekai.sagernet.fmt.AbstractBean
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.app
 import io.nekohasekai.sagernet.ktx.applyDefaultValues
+import io.nekohasekai.sagernet.ktx.dbOffMain
 import java.io.IOException
 import java.sql.SQLException
 import java.util.*
@@ -137,7 +138,7 @@ object ProfileManager {
     fun getProfile(profileId: Long): ProxyEntity? {
         if (profileId == 0L) return null
         return try {
-            SagerDatabase.proxyDao.getById(profileId)
+            dbOffMain { SagerDatabase.proxyDao.getById(profileId) }
         } catch (ex: SQLiteCantOpenDatabaseException) {
             throw IOException(ex)
         } catch (ex: SQLException) {
@@ -149,7 +150,7 @@ object ProfileManager {
     fun getProfiles(profileIds: List<Long>): List<ProxyEntity> {
         if (profileIds.isEmpty()) return listOf()
         return try {
-            SagerDatabase.proxyDao.getEntities(profileIds)
+            dbOffMain { SagerDatabase.proxyDao.getEntities(profileIds) }
         } catch (ex: SQLiteCantOpenDatabaseException) {
             throw IOException(ex)
         } catch (ex: SQLException) {

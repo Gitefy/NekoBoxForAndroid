@@ -1,17 +1,89 @@
 package io.nekohasekai.sagernet.database.preference
 
 import androidx.preference.PreferenceDataStore
+import io.nekohasekai.sagernet.ktx.Logs
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
+/**
+ * PreferenceDataStore backed by a Room `KeyValuePair` table.
+ *
+ * Since Android 16 targets must not touch SQLite on the main thread, the store
+ * keeps a [KvMemoryCache] mirror of the table:
+ *
+ * - Reads are served from memory only, so preference getters are safe from any
+ *   thread without `allowMainThreadQueries`.
+ * - Writes update the mirror synchronously (read-your-writes for every later
+ *   getter, including listener callbacks) and are persisted FIFO on a single
+ *   writer thread.
+ * - The owning Room database observes `KeyValuePair` invalidations on its own
+ *   thread (own-process commits and multi-instance invalidation from the other
+ *   process) and merges them into the same mirror; local in-flight writes stay
+ *   authoritative until the DB layer acknowledges them.
+ *
+ * The mirror is primed once at store construction. That single blocking table
+ * read replaces the previous per-read synchronous queries and only ever runs
+ * during process startup, before any UI is drawn.
+ */
 @Suppress("MemberVisibilityCanBePrivate", "unused")
-open class RoomPreferenceDataStore(private val kvPairDao: KeyValuePair.Dao) :
-    PreferenceDataStore() {
+open class RoomPreferenceDataStore(
+    private val kvPairDao: KeyValuePair.Dao,
+    private val invalidationSource: InvalidationSource? = null,
+    private val tableSnapshot: () -> List<KeyValuePair> = kvPairDao::all,
+) : PreferenceDataStore() {
 
-    fun getBoolean(key: String) = kvPairDao[key]?.boolean
-    fun getFloat(key: String) = kvPairDao[key]?.float
-    fun getInt(key: String) = kvPairDao[key]?.long?.toInt()
-    fun getLong(key: String) = kvPairDao[key]?.long
-    fun getString(key: String) = kvPairDao[key]?.string
-    fun getStringSet(key: String) = kvPairDao[key]?.stringSet
+    private val cache = KvMemoryCache()
+    private val writer: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "kv-store-writer").apply { isDaemon = true }
+    }
+
+    init {
+        // One-time mirror prime; replaces per-read synchronous queries.
+        runBlocking(Dispatchers.IO) {
+            runCatching { cache.merge(tableSnapshot()) }.onFailure { Logs.w(it) }
+        }
+        invalidationSource?.onInvalidate { tables ->
+            if ("KeyValuePair" in tables) {
+                runCatching { cache.merge(tableSnapshot()) }.onFailure { Logs.w(it) }
+            }
+        }
+    }
+
+    fun getBoolean(key: String) = cache.get(key)?.boolean
+    fun getFloat(key: String) = cache.get(key)?.float
+    fun getInt(key: String) = cache.get(key)?.long?.toInt()
+    fun getLong(key: String) = cache.get(key)?.long
+    fun getString(key: String) = cache.get(key)?.string
+    fun getStringSet(key: String) = cache.get(key)?.stringSet
+
+    /** Authoritative mirror snapshot; no database access. */
+    fun cachedAll(): List<KeyValuePair> = cache.snapshot()
+
+    /**
+     * Re-read the whole (small) table into the mirror. Call before reading
+     * settings that may have been written by the other process and whose
+     * invalidation may not have propagated yet (service start/reload).
+     */
+    suspend fun syncNow() = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        cache.merge(tableSnapshot())
+    }
+
+    /**
+     * Restore path. Runs inside `Dispatchers.Default` work (BackupFragment),
+     * so a blocking dispatcher hop is cheaper than restructuring the whole
+     * caller chain into suspend.
+     */
+    fun restore(rows: List<KeyValuePair>) {
+        cache.prime(rows)
+        runBlocking(Dispatchers.IO) {
+            kvPairDao.reset()
+            if (rows.isNotEmpty()) kvPairDao.insert(rows)
+            cache.merge(kvPairDao.all())
+        }
+    }
+
     fun reset() = kvPairDao.reset()
 
     override fun getBoolean(key: String, defValue: Boolean) = getBoolean(key) ?: defValue
@@ -33,39 +105,59 @@ open class RoomPreferenceDataStore(private val kvPairDao: KeyValuePair.Dao) :
 
     fun putLong(key: String, value: Long?) = if (value == null) remove(key) else putLong(key, value)
     override fun putBoolean(key: String, value: Boolean) {
-        kvPairDao.put(KeyValuePair(key).put(value))
-        fireChangeListener(key)
+        putValue(key, KeyValuePair(key).put(value))
     }
 
     override fun putFloat(key: String, value: Float) {
-        kvPairDao.put(KeyValuePair(key).put(value))
-        fireChangeListener(key)
+        putValue(key, KeyValuePair(key).put(value))
     }
 
     override fun putInt(key: String, value: Int) {
-        kvPairDao.put(KeyValuePair(key).put(value.toLong()))
-        fireChangeListener(key)
+        putValue(key, KeyValuePair(key).put(value.toLong()))
     }
 
     override fun putLong(key: String, value: Long) {
-        kvPairDao.put(KeyValuePair(key).put(value))
-        fireChangeListener(key)
+        putValue(key, KeyValuePair(key).put(value))
     }
 
     override fun putString(key: String, value: String?) = if (value == null) remove(key) else {
-        kvPairDao.put(KeyValuePair(key).put(value))
-        fireChangeListener(key)
+        putValue(key, KeyValuePair(key).put(value))
     }
 
     override fun putStringSet(key: String, values: MutableSet<String>?) =
         if (values == null) remove(key) else {
-            kvPairDao.put(KeyValuePair(key).put(values))
-            fireChangeListener(key)
+            putValue(key, KeyValuePair(key).put(values))
         }
 
     fun remove(key: String) {
-        kvPairDao.delete(key)
+        cache.delete(key)
         fireChangeListener(key)
+        writer.execute {
+            try {
+                kvPairDao.delete(key)
+            } catch (e: Exception) {
+                Logs.w("Failed to delete preference $key", e)
+            } finally {
+                cache.writeCommitted(key, null)
+            }
+        }
+    }
+
+    private fun putValue(key: String, pair: KeyValuePair) {
+        cache.put(pair)
+        fireChangeListener(key)
+        writer.execute {
+            try {
+                kvPairDao.put(pair)
+            } catch (e: Exception) {
+                // The mirror keeps the optimistic value; DB failures surface on the
+                // next sync (startup, service start, invalidation) instead of
+                // crashing the caller that merely toggled a preference.
+                Logs.w("Failed to persist preference $key", e)
+            } finally {
+                cache.writeCommitted(key, pair)
+            }
+        }
     }
 
     private val listeners = HashSet<OnPreferenceDataStoreChangeListener>()
@@ -86,5 +178,14 @@ open class RoomPreferenceDataStore(private val kvPairDao: KeyValuePair.Dao) :
         synchronized(listeners) {
             listeners.remove(listener)
         }
+    }
+
+    /**
+     * Change-feed from the owning Room database. Production sources subscribe
+     * on the database's own invalidation thread; the observer must never run
+     * on the main thread because a mirror refresh still performs a table read.
+     */
+    fun interface InvalidationSource {
+        fun onInvalidate(observe: (tables: Set<String>) -> Unit)
     }
 }

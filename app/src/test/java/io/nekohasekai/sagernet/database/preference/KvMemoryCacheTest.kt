@@ -1,0 +1,126 @@
+package io.nekohasekai.sagernet.database.preference
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * P01 regression coverage for [KvMemoryCache].
+ *
+ * The cache is what lets Room drop `allowMainThreadQueries`: getters must be
+ * served from memory, writers must observe read-your-writes synchronously,
+ * and cross-process DB snapshots must never clobber local in-flight writes.
+ */
+class KvMemoryCacheTest {
+
+    private fun row(key: String, value: String): KeyValuePair =
+        KeyValuePair(key).put(value)
+
+    @Test
+    fun readsAreServedFromMemoryAfterPrime() {
+        val cache = KvMemoryCache()
+        assertFalse(cache.isPrimed)
+
+        cache.prime(listOf(row("a", "1"), row("b", "2")))
+        assertTrue(cache.isPrimed)
+        assertEquals("1", cache.get("a")?.string)
+        assertEquals("2", cache.get("b")?.string)
+        assertNull(cache.get("missing"))
+    }
+
+    @Test
+    fun localPutsAreImmediatelyVisible() {
+        val cache = KvMemoryCache()
+        cache.prime(emptyList())
+
+        cache.put(row("k", "v"))
+        assertEquals("v", cache.get("k")?.string)
+        assertTrue(cache.hasPending("k"))
+
+        cache.writeCommitted("k", row("k", "v"))
+        assertEquals("v", cache.get("k")?.string)
+        assertFalse(cache.hasPending("k"))
+    }
+
+    @Test
+    fun deleteIsImmediatelyVisibleAndSurvivesRequery() {
+        val cache = KvMemoryCache()
+        cache.prime(listOf(row("k", "v")))
+
+        cache.delete("k")
+        assertNull(cache.get("k"))
+
+        cache.writeCommitted("k", null)
+        assertNull(cache.get("k"))
+        assertFalse(cache.hasPending("k"))
+    }
+
+    @Test
+    fun resetClearsLocalStateInstantly() {
+        val cache = KvMemoryCache()
+        cache.prime(listOf(row("a", "1"), row("b", "2")))
+
+        cache.reset()
+        assertTrue(cache.snapshot().isEmpty())
+        assertTrue(cache.hasPending(KvMemoryCache.PENDING_RESET))
+        assertNull(cache.get("a"))
+
+        cache.writeCommitted(KvMemoryCache.PENDING_RESET, null)
+        assertFalse(cache.hasPending(KvMemoryCache.PENDING_RESET))
+    }
+
+    @Test
+    fun remoteSnapshotDoesNotClobberInFlightWrites() {
+        val cache = KvMemoryCache()
+        cache.prime(listOf(row("stable", "old")))
+
+        // Local write still in flight (not yet acknowledged by the DB layer).
+        cache.put(row("stable", "new"))
+        cache.put(row("local-only", "x"))
+
+        // Other process wrote "other" and rewrote "stable" with a stale copy.
+        cache.merge(listOf(row("stable", "old"), row("other", "o")))
+
+        assertEquals("new", cache.get("stable")?.string)
+        assertEquals("x", cache.get("local-only")?.string)
+        assertEquals("o", cache.get("other")?.string)
+    }
+
+    @Test
+    fun remoteSnapshotRemovesKeysDeletedElsewhere() {
+        val cache = KvMemoryCache()
+        cache.prime(listOf(row("a", "1"), row("gone", "x")))
+
+        cache.merge(listOf(row("a", "1")))
+        assertNull(cache.get("gone"))
+        assertEquals("1", cache.get("a")?.string)
+    }
+
+    @Test
+    fun inFlightResetDefeatsRemoteSnapshot() {
+        val cache = KvMemoryCache()
+        cache.prime(listOf(row("a", "1")))
+
+        cache.reset()
+        // Stale full-table snapshot arriving between reset and commit.
+        cache.merge(listOf(row("a", "1"), row("b", "2")))
+
+        assertTrue(cache.snapshot().isEmpty())
+        cache.writeCommitted(KvMemoryCache.PENDING_RESET, null)
+        assertTrue(cache.snapshot().isEmpty())
+    }
+
+    @Test
+    fun snapshotExposesReadYourWritesStateForDumps() {
+        val cache = KvMemoryCache()
+        cache.prime(listOf(row("a", "1")))
+
+        cache.put(row("b", "2"))
+        cache.delete("a")
+
+        val dumped = cache.snapshot().associate { it.key to it.string }
+        assertEquals(mapOf("b" to "2"), dumped)
+    }
+}

@@ -7,6 +7,7 @@ import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.aidl.ISagerNetService
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.SagerDatabase
+import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
 import android.service.quicksettings.TileService as BaseTileService
 
 class TileService : BaseTileService(), SagerConnection.Callback {
@@ -30,9 +31,13 @@ class TileService : BaseTileService(), SagerConnection.Callback {
     }
 
     override fun cbSelectorUpdate(id: Long) {
-        val profile = SagerDatabase.proxyDao.getById(id) ?: return
-        val title = if (DataStore.showProfileInNotification) profile.displayName() else getString(R.string.app_name)
-        updateTile(BaseService.State.Connected, title)
+        // Binder thread; keep the DB read off the tile UI work entirely.
+        runOnDefaultDispatcher {
+            val profile = SagerDatabase.proxyDao.getById(id) ?: return@runOnDefaultDispatcher
+            val title =
+                if (DataStore.showProfileInNotification) profile.displayName() else getString(R.string.app_name)
+            updateTile(BaseService.State.Connected, title)
+        }
     }
 
     override fun onStartListening() {

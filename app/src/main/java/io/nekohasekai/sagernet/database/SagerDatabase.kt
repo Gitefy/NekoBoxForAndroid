@@ -10,9 +10,6 @@ import io.nekohasekai.sagernet.Key
 import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.fmt.KryoConverters
 import io.nekohasekai.sagernet.fmt.gson.GsonConverters
-import kotlinx.coroutines.DelicateCoroutinesApi
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.launch
 
 @Database(
     entities = [ProxyGroup::class, ProxyEntity::class, RuleEntity::class, RouterGroup::class, RouterMember::class, RouterGroupSource::class],
@@ -33,7 +30,6 @@ import kotlinx.coroutines.launch
 abstract class SagerDatabase : RoomDatabase() {
 
     companion object {
-        @OptIn(DelicateCoroutinesApi::class)
         @Suppress("EXPERIMENTAL_API_USAGE")
         val instance by lazy {
             SagerNet.application.getDatabasePath(Key.DB_PROFILE).parentFile?.mkdirs()
@@ -42,10 +38,9 @@ abstract class SagerDatabase : RoomDatabase() {
                 // WAL avoids full-file checkpoints that TRUNCATE forces on every commit;
                 // large subscription writes stay off the critical path of list/reload reads.
                 .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
-                // Still required until UI call sites finish moving off the main thread.
-                .allowMainThreadQueries()
                 .enableMultiInstanceInvalidation()
-                .setQueryExecutor { GlobalScope.launch { it.run() } }
+                .setQueryExecutor(DbExecutors.sagerQuery)
+                .setTransactionExecutor(DbExecutors.sagerTransaction)
                 .build()
         }
 

@@ -13,6 +13,7 @@ import io.nekohasekai.sagernet.database.preference.OnPreferenceDataStoreChangeLi
 import io.nekohasekai.sagernet.database.preference.PublicDatabase
 import io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore
 import io.nekohasekai.sagernet.ktx.boolean
+import io.nekohasekai.sagernet.ktx.dbOffMain
 import io.nekohasekai.sagernet.ktx.int
 import io.nekohasekai.sagernet.ktx.long
 import io.nekohasekai.sagernet.ktx.parsePort
@@ -30,7 +31,10 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     @Volatile
     var mixedInboundAuthed: Boolean = false
 
-    val configurationStore = RoomPreferenceDataStore(PublicDatabase.kvPairDao)
+    val configurationStore = RoomPreferenceDataStore(
+        PublicDatabase.kvPairDao,
+        invalidationSource = PublicDatabase.invalidationSource,
+    )
     val profileCacheStore = RoomPreferenceDataStore(TempDatabase.profileCacheDao)
 
     // last used, but may not be running
@@ -50,40 +54,46 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     fun currentGroupId(): Long {
         val currentSelected = configurationStore.getLong(Key.PROFILE_GROUP, -1)
         if (currentSelected > 0L) return currentSelected
-        val groups = SagerDatabase.groupDao.allGroups()
-        if (groups.isNotEmpty()) {
-            val groupId = groups[0].id
+        // Bootstrap path (fresh install / settings reset): never block main thread
+        // with a synchronous Room call.
+        return dbOffMain {
+            val groups = SagerDatabase.groupDao.allGroups()
+            if (groups.isNotEmpty()) {
+                val groupId = groups[0].id
+                selectedGroup = groupId
+                return@dbOffMain groupId
+            }
+            val groupId = SagerDatabase.groupDao.createGroup(ProxyGroup(ungrouped = true))
             selectedGroup = groupId
-            return groupId
+            groupId
         }
-        val groupId = SagerDatabase.groupDao.createGroup(ProxyGroup(ungrouped = true))
-        selectedGroup = groupId
-        return groupId
     }
 
     fun currentGroup(): ProxyGroup {
         var group: ProxyGroup? = null
         val currentSelected = configurationStore.getLong(Key.PROFILE_GROUP, -1)
         if (currentSelected > 0L) {
-            group = SagerDatabase.groupDao.getById(currentSelected)
+            group = dbOffMain { SagerDatabase.groupDao.getById(currentSelected) }
         }
         if (group != null) return group
-        val groups = SagerDatabase.groupDao.allGroups()
-        if (groups.isEmpty()) {
-            group = ProxyGroup(ungrouped = true).apply {
-                id = SagerDatabase.groupDao.createGroup(this)
+        return dbOffMain {
+            val groups = SagerDatabase.groupDao.allGroups()
+            if (groups.isEmpty()) {
+                ProxyGroup(ungrouped = true).apply {
+                    id = SagerDatabase.groupDao.createGroup(this)
+                }
+            } else {
+                groups[0]
+            }.also {
+                selectedGroup = it.id
             }
-        } else {
-            group = groups[0]
         }
-        selectedGroup = group.id
-        return group
     }
 
     fun selectedGroupForImport(): Long {
         val current = currentGroup()
         if (current.type == GroupType.BASIC) return current.id
-        val groups = SagerDatabase.groupDao.allGroups()
+        val groups = dbOffMain { SagerDatabase.groupDao.allGroups() }
         return groups.find { it.type == GroupType.BASIC }!!.id
     }
 
@@ -174,8 +184,10 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     }
 
     fun sanitizeDeprecatedPreferences() {
+        // Cache-aware removal: mirrors the change instantly and persists async,
+        // so this stays safe on the main thread (SettingsPreferenceFragment).
         for (key in DEPRECATED_SETTING_KEYS) {
-            PublicDatabase.kvPairDao.delete(key)
+            configurationStore.remove(key)
         }
     }
 

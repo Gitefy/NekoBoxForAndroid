@@ -129,8 +129,17 @@ class RouteFragment : ToolbarFragment(R.layout.layout_route), Toolbar.OnMenuItem
     inner class RuleAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>(), ProfileManager.RuleListener, UndoSnackbarManager.Interface<RuleEntity> {
 
         val ruleList = ArrayList<RuleEntity>()
+
+        /** Preloaded display names so bind() never queries (P01). */
+        var routerNames: Map<Long, String> = emptyMap()
+        var profileNames: Map<Long, String> = emptyMap()
+
         suspend fun reload() {
             val rules = ProfileManager.getRules()
+            routerNames = SagerDatabase.routerGroupDao.all()
+                .associate { it.id to (it.name ?: "") }
+            profileNames = ProfileManager.getProfiles(rules.map { it.outbound }.filter { it > 0 })
+                .associate { it.id to it.displayName() }
             ruleListView.post {
                 ruleList.clear()
                 ruleList.addAll(rules)
@@ -284,7 +293,7 @@ class RouteFragment : ToolbarFragment(R.layout.layout_route), Toolbar.OnMenuItem
                 rule = ruleEntity
                 profileName.text = rule.displayName()
                 profileType.text = rule.mkSummary()
-                routeOutbound.text = rule.displayOutbound()
+                routeOutbound.text = rule.displayOutboundCached(routerNames, profileNames)
 
                 // 根据路由类型设置文字颜色
                 val colorRes = when (rule.outbound) {

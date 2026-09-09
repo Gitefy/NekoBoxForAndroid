@@ -214,14 +214,21 @@ class BaseService {
             routerProxyId: Long? = null,
             forceFullReload: Boolean = false,
         ) {
+            // Invoked from RELOAD broadcast on Dispatchers.Default and from binder;
+            // never assume a worker thread, but keep the fast paths allocation-free.
             if (DataStore.selectedProxy == 0L) {
                 stopRunner(false, (this as Context).getString(R.string.profile_empty))
                 return
             }
             val routerReloadRequested = routerTag != null && routerProxyId != null
-            if (routerReloadRequested && trySelectRouter(routerTag!!, routerProxyId!!)) return
+            if (routerReloadRequested && dbOffMain {
+                    trySelectRouter(routerTag!!, routerProxyId!!)
+                }
+            ) return
             if (!forceFullReload && !routerReloadRequested && canReloadSelector()) {
-                val ent = SagerDatabase.proxyDao.getById(DataStore.selectedProxy)
+                val ent = dbOffMain {
+                    SagerDatabase.proxyDao.getById(DataStore.selectedProxy)
+                }
                 val tag = data.proxy!!.config.profileTagMap[ent?.id] ?: ""
                 if (tag.isNotBlank() && ent != null) {
                     // select from GUI
@@ -423,16 +430,7 @@ class BaseService {
 
             val data = data
             if (data.state != State.Stopped) return Service.START_NOT_STICKY
-            val profile = SagerDatabase.proxyDao.getById(DataStore.selectedProxy)
             this as Context
-            if (profile == null) { // gracefully shutdown: https://stackoverflow.com/q/47337857/2245107
-                data.notification = createNotification("")
-                stopRunner(false, getString(R.string.profile_empty))
-                return Service.START_NOT_STICKY
-            }
-
-            val proxy = ProxyInstance(profile, this)
-            data.proxy = proxy
             BootReceiver.enabled = DataStore.persistAcrossReboot
             if (!data.closeReceiverRegistered) {
                 val filter = IntentFilter().apply {
@@ -454,6 +452,23 @@ class BaseService {
             data.connectingJob = data.binder.launch(start = CoroutineStart.LAZY) {
                 try {
                     val startedAt = SystemClock.elapsedRealtime()
+                    // Profile lookup and config build are too heavy for the main
+                    // thread (P01): load the profile, build config and start the
+                    // core on Dispatchers.Default; only notification and state
+                    // changes stay on Main.
+                    val profile = onDefaultDispatcher {
+                        runCatching { SagerDatabase.proxyDao.getById(DataStore.selectedProxy) }
+                            .getOrNull()
+                    }
+                    if (profile == null) { // gracefully shutdown: https://stackoverflow.com/q/47337857/2245107
+                        onMainDispatcher {
+                            data.notification = createNotification("")
+                            stopRunner(false, getString(R.string.profile_empty))
+                        }
+                        return@launch
+                    }
+                    val proxy = ProxyInstance(profile, this@Interface)
+                    data.proxy = proxy
                     val notificationTitle = onDefaultDispatcher {
                         ServiceNotification.genTitle(profile)
                     }
@@ -471,17 +486,19 @@ class BaseService {
                     }
                     val notificationReadyAt = SystemClock.elapsedRealtime()
 
-                    Executable.killAll()    // clean up old processes
-                    preInit()
-                    proxy.init()
-                    DataStore.currentProfile = profile.id
+                    onDefaultDispatcher {
+                        Executable.killAll()    // clean up old processes
+                        preInit()
+                        proxy.init()
+                        DataStore.currentProfile = profile.id
 
-                    proxy.processes = GuardedProcessPool {
-                        Logs.w(it)
-                        stopRunner(false, it.readableMessage)
+                        proxy.processes = GuardedProcessPool {
+                            Logs.w(it)
+                            stopRunner(false, it.readableMessage)
+                        }
+
+                        startProcesses()
                     }
-
-                    startProcesses()
                     data.changeState(State.Connected)
 
                     lateInit()

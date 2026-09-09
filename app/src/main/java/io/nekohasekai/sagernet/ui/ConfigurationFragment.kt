@@ -826,12 +826,14 @@ class ConfigurationFragment @JvmOverloads constructor(
             }
 
             R.id.action_update_subscription -> {
-                val group = DataStore.currentGroup()
-                if (group.type != GroupType.SUBSCRIPTION) {
-                    snackbar(R.string.group_not_subscription).show()
-                    Logs.e("onMenuItemClick: Group(${group.displayName()}) is not subscription")
-                } else {
-                    runOnLifecycleDispatcher {
+                runOnLifecycleDispatcher {
+                    val group = DataStore.currentGroup()
+                    if (group.type != GroupType.SUBSCRIPTION) {
+                        onMainDispatcher {
+                            snackbar(R.string.group_not_subscription).show()
+                            Logs.e("onMenuItemClick: Group(${group.displayName()}) is not subscription")
+                        }
+                    } else {
                         GroupUpdater.startUpdate(group, true)
                     }
                 }
@@ -984,22 +986,28 @@ class ConfigurationFragment @JvmOverloads constructor(
             }
 
             R.id.action_switch_group_view -> {
-                // Toggle between router-groups view and subscription groups view
-                val hasRouterGroups = runCatching {
-                    io.nekohasekai.sagernet.database.RouterGroupRepository.all().isNotEmpty()
-                }.getOrDefault(false)
-                if (!hasRouterGroups) {
-                    snackbar(getString(R.string.router_empty_title)).show()
-                } else {
-                    DataStore.viewModeRouterGroups = !DataStore.viewModeRouterGroups
-                    // Update the menu item title to reflect the new state
-                    val newTitle = if (DataStore.viewModeRouterGroups) {
-                        R.string.switch_to_subscription_view
-                    } else {
-                        R.string.switch_to_router_group_view
+                // Toggle between router-groups view and subscription groups view.
+                // Menu clicks arrive on the main thread; the eligibility query and
+                // the heavy reload both run off-main.
+                runOnLifecycleDispatcher {
+                    val hasRouterGroups = runCatching {
+                        RouterGroupRepository.all().isNotEmpty()
+                    }.getOrDefault(false)
+                    onMainDispatcher {
+                        if (!hasRouterGroups) {
+                            snackbar(getString(R.string.router_empty_title)).show()
+                        } else {
+                            DataStore.viewModeRouterGroups = !DataStore.viewModeRouterGroups
+                            // Update the menu item title to reflect the new state
+                            val newTitle = if (DataStore.viewModeRouterGroups) {
+                                R.string.switch_to_subscription_view
+                            } else {
+                                R.string.switch_to_router_group_view
+                            }
+                            toolbar.menu.findItem(R.id.action_switch_group_view)?.setTitle(newTitle)
+                            adapter.reload(now = true)
+                        }
                     }
-                    toolbar.menu.findItem(R.id.action_switch_group_view)?.setTitle(newTitle)
-                    adapter.reload(now = true)
                 }
                 return true
             }
