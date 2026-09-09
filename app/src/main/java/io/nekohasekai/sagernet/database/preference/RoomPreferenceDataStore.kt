@@ -136,7 +136,7 @@ open class RoomPreferenceDataStore(
             try {
                 kvPairDao.delete(key)
             } catch (e: Exception) {
-                Logs.w("Failed to delete preference $key", e)
+                Logs.w(e) { "Failed to delete preference $key" }
             } finally {
                 cache.writeCommitted(key, null)
             }
@@ -153,7 +153,7 @@ open class RoomPreferenceDataStore(
                 // The mirror keeps the optimistic value; DB failures surface on the
                 // next sync (startup, service start, invalidation) instead of
                 // crashing the caller that merely toggled a preference.
-                Logs.w("Failed to persist preference $key", e)
+                Logs.w(e) { "Failed to persist preference $key" }
             } finally {
                 cache.writeCommitted(key, pair)
             }

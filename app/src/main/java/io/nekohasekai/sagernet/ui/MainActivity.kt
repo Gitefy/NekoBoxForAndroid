@@ -175,7 +175,7 @@ class MainActivity : ThemedActivity(),
                 task.setExcludeFromRecents(hide)
             }
         } catch (e: Exception) {
-            Logs.w("Failed to set excludeFromRecents: ${e.message}")
+            Logs.w({ "Failed to set excludeFromRecents: ${e.message}" })
         }
     }
 

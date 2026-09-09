@@ -47,4 +47,12 @@ class LogsGateTest {
         Logs.d({ error("debug message must not be evaluated") })
         Logs.i({ error("info message must not be evaluated") })
     }
+
+    @Test
+    fun lazyExceptionOverloadSkipsMessageAndStackTrace() {
+        Logs.setLevelProvider { 0 }
+        val boom = RuntimeException("boom")
+        Logs.w(boom) { error("warn message must not be evaluated") }
+        Logs.d(boom) { error("debug message must not be evaluated") }
+    }
 }

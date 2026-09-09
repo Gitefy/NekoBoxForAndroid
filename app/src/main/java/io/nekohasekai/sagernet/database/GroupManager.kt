@@ -242,12 +242,12 @@ object GroupManager {
                     val computedMatchConfig = snapshotMatchConfigs[routerId]
                     val computedSources = snapshotSourceGroupIds[routerId]
                     if (computedMatchConfig != null && computedMatchConfig != freshRouter.matchConfig) {
-                        Logs.w("Router ${freshRouter.stableTag}: matchConfig changed during reconcile, skipping stale members")
+                        Logs.w({ "Router ${freshRouter.stableTag}: matchConfig changed during reconcile, skipping stale members" })
                         writtenMembers[routerId] = previous.membersByRouterId[routerId].orEmpty()
                         return@forEach
                     }
                     if (computedSources != null && computedSources != freshSources) {
-                        Logs.w("Router ${freshRouter.stableTag}: sources changed during reconcile, skipping stale members")
+                        Logs.w({ "Router ${freshRouter.stableTag}: sources changed during reconcile, skipping stale members" })
                         writtenMembers[routerId] = previous.membersByRouterId[routerId].orEmpty()
                         return@forEach
                     }

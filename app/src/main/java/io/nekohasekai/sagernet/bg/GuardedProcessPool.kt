@@ -56,7 +56,7 @@ class GuardedProcessPool(private val onFatal: suspend (IOException) -> Unit) : C
                             "$cmdName exits too fast (exit code: $exitCode)"
                         )
 
-                        exitCode == 128 + OsConstants.SIGKILL -> Logs.w("$cmdName was killed")
+                        exitCode == 128 + OsConstants.SIGKILL -> Logs.w({ "$cmdName was killed" })
                         else -> Logs.w(IOException("$cmdName unexpectedly exits with code $exitCode"))
                     }
                     Logs.i({ "restart process: ${Commandline.toString(cmd)} (last exit code: $exitCode)" })
@@ -65,7 +65,7 @@ class GuardedProcessPool(private val onFatal: suspend (IOException) -> Unit) : C
                     onRestartCallback?.invoke()
                 }
             } catch (e: IOException) {
-                Logs.w("error occurred. stop guard: ${Commandline.toString(cmd)}")
+                Logs.w({ "error occurred. stop guard: ${Commandline.toString(cmd)}" })
                 GlobalScope.launch(Dispatchers.Main) { onFatal(e) }
             } finally {
                 if (running) withContext(NonCancellable) {  // clean-up cannot be cancelled

@@ -214,7 +214,7 @@ fun buildConfig(
 
     fun ProxyEntity.resolveChainInternal(visited: MutableSet<Long> = HashSet()): MutableList<ProxyEntity> {
         if (!visited.add(id)) {
-            Logs.w("Detected cyclic proxy chain involving proxy $id")
+            Logs.w({ "Detected cyclic proxy chain involving proxy $id" })
             return mutableListOf()
         }
         val bean = requireBean()

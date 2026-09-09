@@ -26,10 +26,10 @@ object Executable {
             }.split(Character.MIN_VALUE, limit = 2).first())
             if (EXECUTABLES.contains(exe.name) || (alsoKillBg && exe.name.endsWith(":bg"))) try {
                 Os.kill(process.name.toInt(), OsConstants.SIGKILL)
-                Logs.w("SIGKILL ${exe.name} (${process.name}) succeed")
+                Logs.w({ "SIGKILL ${exe.name} (${process.name}) succeed" })
             } catch (e: ErrnoException) {
                 if (e.errno != OsConstants.ESRCH) {
-                    Logs.w("SIGKILL ${exe.absolutePath} (${process.name}) failed")
+                    Logs.w({ "SIGKILL ${exe.absolutePath} (${process.name}) failed" })
                     Logs.w(e)
                 }
             }

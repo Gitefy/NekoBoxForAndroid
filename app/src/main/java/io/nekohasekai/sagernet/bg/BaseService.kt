@@ -242,7 +242,7 @@ class BaseService {
             when {
                 s == State.Stopped -> startRunner()
                 s.canStop -> stopRunner(true)
-                else -> Logs.w("Illegal state $s when invoking use")
+                else -> Logs.w({ "Illegal state $s when invoking use" })
             }
         }
 

@@ -115,6 +115,11 @@ object Logs {
         Libcore.nekoLogPrintln("[Warning] [${mkTag()}] $message" + "\n" + exception.stackTraceToString())
     }
 
+    fun w(exception: Throwable, message: () -> String) {
+        if (level() < 1) return
+        Libcore.nekoLogPrintln("[Warning] [${mkTag()}] ${message()}" + "\n" + exception.stackTraceToString())
+    }
+
     fun w(exception: Throwable) {
         if (level() < 1) return
         Libcore.nekoLogPrintln("[Warning] [${mkTag()}] " + exception.stackTraceToString())
