@@ -38,9 +38,13 @@ class RouterGroupListFragment : PreferenceFragmentCompat() {
     }
 
     fun rebuild() {
+        // onCreatePreferences runs inside Fragment.onCreate, before onCreateView:
+        // there is no view yet, so viewLifecycleOwner is illegal here. Bind the
+        // load to the fragment lifecycle and guard UI work with isAdded instead.
+        if (!isAdded) return
         val context = requireContext()
         rebuildJob?.cancel()
-        rebuildJob = viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+        rebuildJob = lifecycleScope.launch(Dispatchers.IO) {
             val snapshot = runCatching { loadRouterListSnapshot() }.getOrElse { error ->
                 Logs.w("Unable to load Router groups", error)
                 RouterListSnapshot(emptyList(), emptyMap(), emptyMap())
@@ -50,6 +54,12 @@ class RouterGroupListFragment : PreferenceFragmentCompat() {
                 bindRouterList(context, snapshot)
             }
         }
+    }
+
+    override fun onDestroyView() {
+        rebuildJob?.cancel()
+        rebuildJob = null
+        super.onDestroyView()
     }
 
     private data class RouterListSnapshot(
@@ -131,7 +141,7 @@ class RouterGroupListFragment : PreferenceFragmentCompat() {
     }
 
     private fun showNodeSelectionDialog(group: RouterGroup, members: List<RouterMember>) {
-        viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+        lifecycleScope.launch(Dispatchers.IO) {
             val proxies = SagerDatabase.proxyDao.getEntities(members.map { it.proxyId })
             val proxyMap = proxies.associateBy { it.id }
             val orderedProxies = members.mapNotNull { proxyMap[it.proxyId] }
@@ -149,7 +159,7 @@ class RouterGroupListFragment : PreferenceFragmentCompat() {
                     .setTitle(group.name.ifBlank { group.stableTag })
                     .setSingleChoiceItems(items, currentIndex) { dialog, which ->
                         val chosen = orderedProxies[which]
-                        viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+                        lifecycleScope.launch(Dispatchers.IO) {
                             runCatching {
                                 RouterGroupRepository.select(group.id, chosen.id)
                             }.onSuccess { updated ->
