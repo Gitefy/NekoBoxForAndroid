@@ -102,7 +102,7 @@ class NativeInterface : BoxPlatformInterface, NB4AInterface {
             return
         }
         if (selectorTag != "proxy") {
-            Logs.d("other selector: $selectorTag")
+            Logs.d({ "other selector: $selectorTag" })
             return
         }
         Libcore.resetAllConnections(true)

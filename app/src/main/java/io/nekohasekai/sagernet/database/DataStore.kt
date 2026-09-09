@@ -13,6 +13,7 @@ import io.nekohasekai.sagernet.database.preference.OnPreferenceDataStoreChangeLi
 import io.nekohasekai.sagernet.database.preference.PublicDatabase
 import io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore
 import io.nekohasekai.sagernet.ktx.boolean
+import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.dbOffMain
 import io.nekohasekai.sagernet.ktx.int
 import io.nekohasekai.sagernet.ktx.long
@@ -36,6 +37,15 @@ object DataStore : OnPreferenceDataStoreChangeListener {
         invalidationSource = PublicDatabase.invalidationSource,
     )
     val profileCacheStore = RoomPreferenceDataStore(TempDatabase.profileCacheDao)
+
+    init {
+        // One-way edge DataStore -> Logs: the log gate reads the log level
+        // straight from the in-memory KV mirror, so level flips in either
+        // process are visible without a listener round-trip.
+        Logs.setLevelProvider {
+            configurationStore.getString(Key.LOG_LEVEL)?.toIntOrNull() ?: 0
+        }
+    }
 
     // last used, but may not be running
     var currentProfile by configurationStore.long(Key.PROFILE_CURRENT)

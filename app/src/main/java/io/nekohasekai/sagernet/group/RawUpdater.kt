@@ -127,13 +127,13 @@ object RawUpdater : GroupUpdater() {
                 SubscriptionFilterMode.EXCLUDE -> proxies.filterNot { regex.containsMatchIn(it.displayName()) }
                 else -> proxies
             }
-            Logs.d("After filter (mode=$filterMode): ${proxies.size}")
+            Logs.d({ "After filter (mode=$filterMode): ${proxies.size}" })
         }
 
         val exists = SagerDatabase.proxyDao.getByGroup(proxyGroup.id)
         val duplicate = ArrayList<String>()
         if (subscription.deduplication) {
-            Logs.d("Before deduplication: ${proxies.size}")
+            Logs.d({ "Before deduplication: ${proxies.size}" })
             val uniqueProxies = LinkedHashSet<Protocols.Deduplication>()
             val uniqueNames = HashMap<Protocols.Deduplication, String>()
             for (_proxy in proxies) {
@@ -163,13 +163,13 @@ object RawUpdater : GroupUpdater() {
         val stableIds = IdentityHashMap<AbstractBean, String>()
         proxies.forEach { stableIds[it] = it.routerStableIdentity() }
 
-        Logs.d("New profiles: ${proxies.size}")
+        Logs.d({ "New profiles: ${proxies.size}" })
 
         val nameMap = proxies.associateBy { bean ->
             bean.displayName()
         }
 
-        Logs.d("Unique profiles: ${nameMap.size}")
+        Logs.d({ "Unique profiles: ${nameMap.size}" })
 
         val toDelete = ArrayList<ProxyEntity>()
         val toReplace = exists.mapNotNull { entity ->
@@ -180,8 +180,8 @@ object RawUpdater : GroupUpdater() {
             }
         }.toMap()
 
-        Logs.d("toDelete profiles: ${toDelete.size}")
-        Logs.d("toReplace profiles: ${toReplace.size}")
+        Logs.d({ "toDelete profiles: ${toDelete.size}" })
+        Logs.d({ "toReplace profiles: ${toReplace.size}" })
 
         val toUpdate = ArrayList<ProxyEntity>()
         val added = mutableListOf<String>()
@@ -206,7 +206,7 @@ object RawUpdater : GroupUpdater() {
                         toUpdate.add(entity)
                         updated[entity.displayName()] = name
 
-                        Logs.d("Updated profile: $name")
+                        Logs.d({ "Updated profile: $name" })
                     }
 
                     entity.userOrder != userOrder || existingStableId != entity.uuid -> {
@@ -214,11 +214,11 @@ object RawUpdater : GroupUpdater() {
                         toUpdate.add(entity)
                         entity.userOrder = userOrder
 
-                        Logs.d("Reordered profile: $name")
+                        Logs.d({ "Reordered profile: $name" })
                     }
 
                     else -> {
-                        Logs.d("Ignored profile: $name")
+                        Logs.d({ "Ignored profile: $name" })
                     }
                 }
             } else {
@@ -231,20 +231,20 @@ object RawUpdater : GroupUpdater() {
                         uuid = stableIds[bean] ?: bean.routerStableIdentity()
                     })
                 added.add(name)
-                Logs.d("Inserted profile: $name")
+                Logs.d({ "Inserted profile: $name" })
             }
             userOrder++
         }
 
         SagerDatabase.proxyDao.updateProxy(toUpdate).also {
-            Logs.d("Updated profiles: $it")
+            Logs.d({ "Updated profiles: $it" })
         }
 
         toDelete.forEach { proxy ->
             SagerDatabase.routerMemberDao.deleteByProxy(proxy.id)
         }
         SagerDatabase.proxyDao.deleteProxy(toDelete).also {
-            Logs.d("Deleted profiles: $it")
+            Logs.d({ "Deleted profiles: $it" })
         }
 
         val existCount = SagerDatabase.proxyDao.countByGroup(proxyGroup.id).toInt()

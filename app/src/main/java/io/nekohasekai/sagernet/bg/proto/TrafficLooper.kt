@@ -82,7 +82,7 @@ class TrafficLooper
                 }
             }
         }
-        Logs.d("finally traffic post done")
+        Logs.d({ "finally traffic post done" })
     }
 
     fun start() {
@@ -97,7 +97,7 @@ class TrafficLooper
     }
 
     private suspend fun selectMainLocked(id: Long, statsTag: String = TAG_PROXY) {
-        Logs.d("select traffic count $TAG_PROXY to $id, old id is $selectorNowId")
+        Logs.d({ "select traffic count $TAG_PROXY to $id, old id is $selectorNowId" })
         val oldData = idMap[selectorNowId]
         val newData = idMap[id] ?: return
         oldData?.apply {

@@ -386,7 +386,7 @@ class BaseService {
                         upstreamInterfaceName = link.interfaceName
                     }
                     if (networkChanged || (oldName != null && upstreamInterfaceName != null && oldName != upstreamInterfaceName)) {
-                        Logs.d("Network changed: $oldName -> $upstreamInterfaceName")
+                        Logs.d({ "Network changed: $oldName -> $upstreamInterfaceName" })
                         if (DataStore.networkChangeResetConnections) {
                             Libcore.resetAllConnections(true)
                         }
@@ -502,8 +502,10 @@ class BaseService {
                     data.changeState(State.Connected)
 
                     lateInit()
-                    Logs.i("$tag startup completed in ${SystemClock.elapsedRealtime() - startedAt} ms " +
-                        "(notification=${notificationReadyAt - startedAt} ms)")
+                    Logs.i({
+                        "$tag startup completed in ${SystemClock.elapsedRealtime() - startedAt} ms " +
+                            "(notification=${notificationReadyAt - startedAt} ms)"
+                    })
                 } catch (_: CancellationException) { // if the job was cancelled, it is canceller's responsibility to call stopRunner
                 } catch (_: UnknownHostException) {
                     stopRunner(false, getString(R.string.invalid_server))

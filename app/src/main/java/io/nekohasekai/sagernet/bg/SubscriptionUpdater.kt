@@ -65,7 +65,7 @@ object SubscriptionUpdater {
             var subscriptions =
                 SagerDatabase.groupDao.subscriptions().filter { it.subscription!!.autoUpdate }
             if (!DataStore.serviceState.connected) {
-                Logs.d("work: not connected")
+                Logs.d({ "work: not connected" })
                 subscriptions = subscriptions.filter { !it.subscription!!.updateWhenConnectedOnly }
             }
 
@@ -73,10 +73,10 @@ object SubscriptionUpdater {
                 val subscription = profile.subscription!!
 
                 if (((System.currentTimeMillis() / 1000).toInt() - subscription.lastUpdated) < subscription.autoUpdateDelay * 60) {
-                    Logs.d("work: not updating " + profile.displayName())
+                    Logs.d({ "work: not updating " + profile.displayName() })
                     continue
                 }
-                Logs.d("work: updating " + profile.displayName())
+                Logs.d({ "work: updating " + profile.displayName() })
 
                 notification.setContentText(
                     applicationContext.getString(

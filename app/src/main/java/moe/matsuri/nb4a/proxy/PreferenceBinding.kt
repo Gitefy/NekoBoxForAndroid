@@ -46,7 +46,7 @@ class PreferenceBinding(
         val f = try {
             bean!!.javaClass.getField(fieldName)
         } catch (e: Exception) {
-            Logs.d("binding no field: ${e.readableMessage}")
+            Logs.d({ "binding no field: ${e.readableMessage}" })
             return
         }
         when (type) {
@@ -62,7 +62,7 @@ class PreferenceBinding(
         val f = try {
             bean!!.javaClass.getField(fieldName) ?: return
         } catch (e: Exception) {
-            Logs.d("binding no field: ${e.readableMessage}")
+            Logs.d({ "binding no field: ${e.readableMessage}" })
             return
         }
         val value = f.get(bean)

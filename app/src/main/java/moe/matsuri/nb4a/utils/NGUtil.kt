@@ -92,12 +92,12 @@ object NGUtil {
         try {
             return Base64.decode(text, Base64.NO_WRAP).toString(charset("UTF-8"))
         } catch (e: Exception) {
-            Logs.i( "Parse base64 standard failed $e")
+            Logs.i({ "Parse base64 standard failed $e" })
         }
         try {
             return Base64.decode(text, Base64.NO_WRAP.or(Base64.URL_SAFE)).toString(charset("UTF-8"))
         } catch (e: Exception) {
-            Logs.i( "Parse base64 url safe failed $e")
+            Logs.i({ "Parse base64 url safe failed $e" })
         }
         return null
     }

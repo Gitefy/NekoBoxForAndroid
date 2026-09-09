@@ -196,9 +196,9 @@ class VpnService : BaseVpnService(),
             }
 
             if (bypass) {
-                Logs.d("Add bypass: ${added.joinToString(", ")}")
+                Logs.d({ "Add bypass: ${added.joinToString(", ")}" })
             } else {
-                Logs.d("Add allow: ${added.joinToString(", ")}")
+                Logs.d({ "Add allow: ${added.joinToString(", ")}" })
             }
         }
 

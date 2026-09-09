@@ -26,7 +26,7 @@ class ProxyInstance(profile: ProxyEntity, var service: BaseService.Interface? = 
         super.buildConfig()
         lastSelectorGroupId = super.config.selectorGroupId
         //
-        if (notTmp) Logs.d("Built proxy configuration: ${config.profileTagMap.size} profiles")
+        if (notTmp) Logs.d({ "Built proxy configuration: ${config.profileTagMap.size} profiles" })
     }
 
     // only use this in temporary instance

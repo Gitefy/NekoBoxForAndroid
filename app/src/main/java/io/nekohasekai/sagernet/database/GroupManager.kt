@@ -151,7 +151,7 @@ object GroupManager {
         val nextMembers = reconcileRouterMembersInternal(previous) ?: return
         if (!DataStore.serviceState.started) return
         if (!routerMembershipChanged(previous.membersByRouterId, nextMembers)) return
-        Logs.d("Router membership changed; requesting full service reload")
+        Logs.d({ "Router membership changed; requesting full service reload" })
         SagerNet.reloadServiceFully()
     }
 

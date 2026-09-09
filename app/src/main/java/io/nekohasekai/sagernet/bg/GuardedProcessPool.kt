@@ -59,7 +59,7 @@ class GuardedProcessPool(private val onFatal: suspend (IOException) -> Unit) : C
                         exitCode == 128 + OsConstants.SIGKILL -> Logs.w("$cmdName was killed")
                         else -> Logs.w(IOException("$cmdName unexpectedly exits with code $exitCode"))
                     }
-                    Logs.i("restart process: ${Commandline.toString(cmd)} (last exit code: $exitCode)")
+                    Logs.i({ "restart process: ${Commandline.toString(cmd)} (last exit code: $exitCode)" })
                     start()
                     running = true
                     onRestartCallback?.invoke()
@@ -87,7 +87,7 @@ class GuardedProcessPool(private val onFatal: suspend (IOException) -> Unit) : C
         env: MutableMap<String, String> = mutableMapOf(),
         onRestartCallback: (suspend () -> Unit)? = null
     ) {
-        Logs.i("start process: ${Commandline.toString(cmd)}")
+        Logs.i({ "start process: ${Commandline.toString(cmd)}" })
         Guard(cmd, env).apply {
             start() // if start fails, IOException will be thrown directly
             launch { looper(onRestartCallback) }
