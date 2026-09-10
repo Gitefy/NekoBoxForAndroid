@@ -18,7 +18,6 @@ import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.bg.Executable
 import io.nekohasekai.sagernet.database.*
 import io.nekohasekai.sagernet.database.preference.KeyValuePair
-import io.nekohasekai.sagernet.database.preference.PublicDatabase
 import io.nekohasekai.sagernet.databinding.LayoutBackupBinding
 import io.nekohasekai.sagernet.databinding.LayoutImportBinding
 import io.nekohasekai.sagernet.databinding.LayoutProgressBinding
@@ -566,14 +565,16 @@ class BackupFragment : ToolbarFragment(R.layout.layout_backup) {
                 GroupManager.cleanupDanglingRouterMembers()
             }
             if (decodedSettings != null) {
-                PublicDatabase.instance.runInTransaction {
-                    PublicDatabase.kvPairDao.reset()
-                    PublicDatabase.kvPairDao.insert(decodedSettings)
+                // Single settings-restore authority (S1-B3): the store fences
+                // whatever the writer queue already holds, replaces the table
+                // in one transaction and blocks until the durable result. The
+                // previous duplicate out-of-band PublicDatabase write is gone.
+                val restored = DataStore.configurationStore.restore(decodedSettings)
+                if (!restored.success) {
+                    throw IllegalStateException(
+                        "Settings restore failed: ${restored.failures.firstOrNull()?.reason ?: "unknown"}",
+                    )
                 }
-                // Push the restore winner into the mirror so the UI and the
-                // :bg process converge without a restart. finishImport callers
-                // already run off the main thread; the durable rows land on IO.
-                DataStore.configurationStore.restore(decodedSettings)
                 // Mirror of profileCacheStore holds editing drafts only; nothing to merge.
             }
         }

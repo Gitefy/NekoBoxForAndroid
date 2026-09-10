@@ -100,29 +100,39 @@ object Logs {
         Libcore.nekoLogPrintln("[Info] [${mkTag()}] $message" + "\n" + exception.stackTraceToString())
     }
 
+    private fun safeLog(prefix: String, message: String) {
+        try {
+            Libcore.nekoLogPrintln("[$prefix] [${mkTag()}] $message")
+        } catch (_: Throwable) {
+            // JVM unit-test host has no libcore JNI; keep writer tasks alive
+            // and surface the line on stderr instead of killing the thread.
+            try { System.err.println("[$prefix] $message") } catch (_: Throwable) {}
+        }
+    }
+
     fun w(message: String) {
         if (level() < 1) return
-        Libcore.nekoLogPrintln("[Warning] [${mkTag()}] $message")
+        safeLog("Warning", message)
     }
 
     fun w(message: () -> String) {
         if (level() < 1) return
-        Libcore.nekoLogPrintln("[Warning] [${mkTag()}] ${message()}")
+        safeLog("Warning", message())
     }
 
     fun w(message: String, exception: Throwable) {
         if (level() < 1) return
-        Libcore.nekoLogPrintln("[Warning] [${mkTag()}] $message" + "\n" + exception.stackTraceToString())
+        safeLog("Warning", "$message\n${exception.stackTraceToString()}")
     }
 
     fun w(exception: Throwable, message: () -> String) {
         if (level() < 1) return
-        Libcore.nekoLogPrintln("[Warning] [${mkTag()}] ${message()}" + "\n" + exception.stackTraceToString())
+        safeLog("Warning", "${message()}\n${exception.stackTraceToString()}")
     }
 
     fun w(exception: Throwable) {
         if (level() < 1) return
-        Libcore.nekoLogPrintln("[Warning] [${mkTag()}] " + exception.stackTraceToString())
+        safeLog("Warning", exception.stackTraceToString())
     }
 
     fun e(message: String) {

@@ -21,12 +21,17 @@ import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
 import androidx.appcompat.widget.SwitchCompat
+import androidx.lifecycle.lifecycleScope
 import com.google.android.material.textfield.TextInputEditText
 import java.io.File
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 
 class SettingsPreferenceFragment : PreferenceFragmentCompat() {
 
     private lateinit var isProxyApps: SwitchPreference
+    /** S1-B3: guards against a second "reset settings" click while awaiting the durable fence. */
+    private var settingsResetInProgress = false
 
     private lateinit var globalCustomConfig: EditConfigPreference
 
@@ -200,8 +205,30 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
                 setMessage(R.string.reset_settings_message)
                 setNegativeButton(R.string.no, null)
                 setPositiveButton(R.string.yes) { _, _ ->
-                    DataStore.configurationStore.reset()
-                    triggerFullRestart(requireContext())
+                    // S1-B3: settings reset must reach its durable terminal
+                    // state before the app restarts; a failure must not be
+                    // reported as a successful reset. Double-clicks during the
+                    // await are ignored.
+                    if (settingsResetInProgress) return@setPositiveButton
+                    settingsResetInProgress = true
+                    viewLifecycleOwner.lifecycleScope.launch {
+                        try {
+                            val result = DataStore.configurationStore.reset()
+                            if (result.success) {
+                                triggerFullRestart(requireContext())
+                            } else {
+                                settingsResetInProgress = false
+                                MessageStore.showMessage(
+                                    "Settings reset failed: ${result.failures.firstOrNull()?.reason ?: "unknown"}",
+                                )
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            settingsResetInProgress = false
+                            MessageStore.showMessage(e.readableMessage)
+                        }
+                    }
                 }
             }.show()
             true

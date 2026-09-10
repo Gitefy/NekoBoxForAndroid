@@ -47,6 +47,10 @@ class KvMemoryCache {
     private val lastCommittedGenerations = HashMap<String, Long>()
     private var generationCounter = 0L
     private var pendingReset = false
+    /** Fence token of a whole-table operation currently in flight, if any. */
+    private var pendingFullTableToken: Long? = null
+    /** Read-order watermark: snapshots older than the last committed fence lose. */
+    private var lastCommittedFullTableEpoch = Long.MIN_VALUE
     @Volatile
     private var primed = false
 
@@ -98,8 +102,15 @@ class KvMemoryCache {
     }
 
     private fun mergeLocked(authoritative: List<KeyValuePair>, readEpoch: Long) {
-        if (pendingReset) {
-            // A local reset is in flight; it wins over remote state until it commits.
+        if (pendingReset || pendingFullTableToken != null) {
+            // A local reset or whole-table fence is in flight; it wins over
+            // remote state until it commits/aborts and the ordered realign runs.
+            return
+        }
+        if (readEpoch < lastCommittedFullTableEpoch) {
+            // The snapshot predates a whole-table fence (committed or aborted
+            // per the hold-then-realign policy); applying it would roll the
+            // optimistic table back before the store's ordered fresh read.
             return
         }
         val remoteKeys = HashSet<String>(authoritative.size)
@@ -113,6 +124,65 @@ class KvMemoryCache {
 
     private fun isLocallyNewer(key: String, readEpoch: Long): Boolean =
         key in pendingKeys || (lastCommittedGenerations[key] ?: Long.MIN_VALUE) > readEpoch
+
+    /**
+     * Begin a whole-table fence for a runtime restore/reset. Advances the same
+     * monotonic clock as keyed generations, replaces the mirror with the
+     * caller's rows (deep-copied), supersedes all pre-fence pending keyed
+     * state (their later ACKs become stale no-ops), and registers the token as
+     * pending so snapshot merges cannot interleave until commit/abort.
+     *
+     * Returns the fence token. [commitFullTableFence]/[abortFullTableFence]
+     * only apply when handed the currently pending token; stale callbacks from
+     * superseded fences are ignored and never clobber a newer fence.
+     */
+    fun beginFullTableFence(optimisticRows: List<KeyValuePair>): Long = lock.write {
+        val token = ++generationCounter
+        values.clear()
+        for (row in optimisticRows) values[row.key] = copiedRow(row)
+        pendingKeys.clear()
+        pendingGenerations.clear()
+        pendingReset = false
+        pendingFullTableToken = token
+        primed = true
+        token
+    }
+
+    /**
+     * Publish the committed whole-table rows for the fence started with
+     * [fenceToken]. Post-fence keyed mutations (puts and delete tombstones)
+     * admitted while the fence was in flight are replayed on top and stay
+     * pending. Stamps the read-order watermark so snapshots captured before
+     * this fence can never roll it back.
+     */
+    fun commitFullTableFence(fenceToken: Long, authoritativeRows: List<KeyValuePair>) = lock.write {
+        if (pendingFullTableToken != fenceToken) return@write
+        pendingFullTableToken = null
+        // Snapshot post-fence optimistic state BEFORE replacing: a present row
+        // is a post-fence PUT, an absent key is a post-fence DELETE tombstone.
+        val postFenceKeys = HashSet(pendingKeys)
+        val postFenceRows = LinkedHashMap<String, KeyValuePair>()
+        for (key in postFenceKeys) values[key]?.let { postFenceRows[key] = it }
+        values.clear()
+        for (row in authoritativeRows) values[row.key] = copiedRow(row)
+        // Replay puts; tombstoned keys stay absent from the committed table.
+        for ((key, row) in postFenceRows) values[key] = row
+        for (key in postFenceKeys) if (key !in postFenceRows) values.remove(key)
+        lastCommittedFullTableEpoch = maxOf(lastCommittedFullTableEpoch, fenceToken)
+    }
+
+    /**
+     * End the fence started with [fenceToken] without publishing rows (the
+     * whole-table DB write failed). The optimistic rows stay visible; the
+     * stale-snapshot guard is advanced to the aborted token so snapshots
+     * captured before the fence cannot realign it, while the fresh ordered
+     * read scheduled by the store (epoch == fenceToken) can.
+     */
+    fun abortFullTableFence(fenceToken: Long) = lock.write {
+        if (pendingFullTableToken != fenceToken) return@write
+        pendingFullTableToken = null
+        lastCommittedFullTableEpoch = maxOf(lastCommittedFullTableEpoch, fenceToken)
+    }
 
     fun get(key: String): KeyValuePair? = lock.read { values[key] }
 
@@ -146,6 +216,19 @@ class KvMemoryCache {
         val generation = ++generationCounter
         pendingGenerations[key] = generation
         generation
+    }
+
+    /**
+     * Undo an optimistic mutation whose writer task was rejected at admission
+     * (for example the executor refusing the job). Only honored for the exact
+     * [generation]; restores [previous] or removes the key when nothing was
+     * there before, so no phantom pending state can outlive the process.
+     */
+    fun revertPendingMutation(key: String, generation: Long, previous: KeyValuePair?) = lock.write {
+        if (pendingGenerations[key] != generation) return@write
+        pendingKeys.remove(key)
+        pendingGenerations.remove(key)
+        if (previous == null) values.remove(key) else values[key] = previous
     }
 
     fun reset() = lock.write {

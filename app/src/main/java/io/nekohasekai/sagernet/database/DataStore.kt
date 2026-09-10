@@ -35,6 +35,10 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     val configurationStore = RoomPreferenceDataStore(
         PublicDatabase.kvPairDao,
         invalidationSource = PublicDatabase.invalidationSource,
+        // Whole-table restore/reset fences must be atomic per database; each
+        // store explicitly names its own transaction runner (TempDatabase
+        // intentionally keeps the default direct runner).
+        restoreTransaction = { block -> PublicDatabase.instance.runInTransaction(block) },
     )
     val profileCacheStore = RoomPreferenceDataStore(TempDatabase.profileCacheDao)
 
