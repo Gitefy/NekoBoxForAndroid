@@ -1,208 +1,293 @@
-# 当前工作单：S1-B3-WRITE-QUEUE-DURABILITY-BARRIER（DRAFT — 设计待网页 ChatGPT 确认，未实现）
+# 当前工作单：S1-B3-WRITE-QUEUE-DURABILITY-BARRIER（REVISED DRAFT v2 — 待最终设计确认，未实现）
 
-状态：DRAFTED / AWAITING_DESIGN_CONFIRMATION。
+状态：DRAFTED / DESIGN_CHANGES_REQUIRED（v2 已按 DESIGN_REVIEW_RECEIPT 全部 12 条修订；implementation_authorized=false）。
 Owner：Cursor。
-独立审计：网页 ChatGPT（固定 GitHub SHA；本单先做**设计确认**，确认前禁止实现）。
+独立审计：网页 ChatGPT（固定 GitHub SHA；v1 设计被 CHANGES_REQUIRED 退回，本 v2 待**一次最终设计确认**）。
 base_code_sha：`1e140ca720a54dfa42cc37235484af7faae499bf`（S1-B2 accepted candidate，CI PASS）。
-上一工作单：S1-B2-CONFIRM-SEMANTICS-CLOSURE（ACCEPTED，见 REVIEW.md）。
-取代：本单取代此前草稿名 `S1-B3-WRITE-QUEUE-FLUSH-BARRIER`；本文按用户/审计 A—H 规格完整重定义。
+修订历史：v1（WRITE-QUEUE-FLUSH-BARRIER 草案）→ DESIGN_REVIEW_RECEIPT（12 条 CHANGES_REQUIRED）→ **本 v2**。
+取代：v1 全文。v1 中"KvMemoryCache 冻结 / restore 推迟 S3 / sequence==generation 1:1 / lock+Condition barrier"均被本 v2 取代。
 
 ## 0. 本单性质与停止条件
 
-架构正确性批次。**本轮只交付本工作单（设计定义），不改任何业务源码、不写测试、不实现。**
-实现必须等网页 ChatGPT 明确确认本单设计（A—H）之后，按既有节奏单独执行：
-RED（Run L）→ 最小实现 → GREEN（Run M focused / Run N full）→ commit 代码候选 → push → metadata → `WAIT_CHATGPT_AUDIT`。
+架构正确性批次。当前只交付设计（本文件）；**未写任何业务代码**。
+网页 ChatGPT 最终确认本 v2 A—H 后，才按既有节奏单独执行实现批：
+RED（Run L）→ 最小实现 → GREEN（Run M/N）→ commit 候选 → push → metadata → `WAIT_CHATGPT_AUDIT`。
 
-## 目标（DESIGN D03/D04 前置落地）
+## 方案决定（对应 review 第 12 条；Option 1 保留）
 
-把 preference 持久化从"单线程 executor + 日志级失败"升级为**可观察、可等待、有序、可 fence 的写通道**，
-并提供 `flushPendingWrites()` durable barrier。保持 P01 结构（单线程 FIFO writer、3 次重试、
-snapshotLock、readEpoch、per-key generation），不迁移并发模型（见 H）。
+单线程 writer executor + admission 锁 + **独立单调 queueSequence**（与 cache generation 解耦）+
+keyed ACK 使用 cache generation token + **cache 级全表 fence generation** + **紧凑有效失败状态（无操作日志式 journal）** +
+**in-band FIFO barrier marker（CompletableFuture）** + **原子 restore/reset writer 任务**。
+拒绝 coroutine actor/channel 迁移（理由同 v1：属并发模型整体迁移，必须独立立项）。
 
-## A. flushPendingWrites 的精确定义
-
-```kotlin
-// RoomPreferenceDataStore 新公开方法（本单冻结）：
-suspend fun flushPendingWrites(): FlushResult
-
-data class FlushResult(val success: Boolean, val completed: Int, val failures: List<WriteFailure>)
-data class WriteFailure(val key: String, val reason: String)   // reason=异常类名+message；不持有 Throwable
-```
-
-**成功唯一语义**：`success=true` 当且仅当——
-
-> 在 `flushPendingWrites()` 调用开始时刻**已被 store 接纳（admitted）**的所有 mutation（含 put/delete/restore/reset
-> 通道任务），均已到达 durable 终态：其 SQL 已在 DB 上执行完毕（commit 由单通道任务完成回调证实），
-> 且在 barrier 判定时刻该 key 的最新终态不是永久失败。
-
-**明确禁止的伪成功**：
-- 不得把 "writer queue 已跑空 / executor 空闲" 当作成功（队列空 ≠ 前置操作终态齐全，且 Future 语义不覆盖失败）。
-- 不得把 "等待超时/被取消" 当作成功。
-- 不得把 "该 mutation 已被 restore/reset 取代" 记为失败之外又含糊成功——取代由 fence 终态 `SUPERSEDED` 显式表达（见 D）。
-- 任何 barrier 覆盖范围内 mutation 最终持久化失败 → `success=false` 且 `failures` 含该 key（幂等去重后）。
-
-`completed` = 本 barrier 覆盖并到达终态的 operation 数（含 SUPERSEDED，便于诊断）；barrier 后新接纳的操作不计入。
-
-## B. Barrier 边界
-
-1. **捕获点**：进入 `flushPendingWrites` 后，在 coordinator 的 admission 锁内读取当前 `sequence` 作为
-   `upTo`（单一分配点，见"冻结签名"：sequence 与 cache generation 对 keyed 操作 1:1 同锁分配；
-   restore/reset 消耗 coordinator 专属 sequence）。
-2. **等待集合**：所有 `sequence ≤ upTo` 的 operation；**之后**新接纳的 mutation（sequence > upTo）不延长本次
-   barrier——barrier 不追逐未来写入。
-3. **同 key 多 generation**：每个 operation 独立终态（ledger 逐项记账）；key 的 barrier 判定结果 =
-   `sequence ≤ upTo` 中**最新终态**的 outcome（最新成功即干净；最新终态为失败即失败）。旧 generation 被
-   新 generation 取代时仍须各自到达终态（其 DB 写仍会执行并提交，cache ACK 按既有 stale 规则忽略）。
-4. **delete 与 put 统一模型**：delete 是普通 operation（进入同一 ledger/同一 barrier；`dao.delete` 影响 0 行
-   亦为成功——终态即"该 key 在 DB 无行"）。restore/reset 是 fence 型 operation（见 D），同样占 sequence。
-5. **等待实现**：锁 + Condition（`awaitAllTerminal(upTo)`），flush 挂在 `Dispatchers.IO` 且
-   `runInterruptible`/`suspendCancellableCoroutine` 包装——**writer 线程绝不阻塞等 barrier**；
-   等待者取消只取消等待，不取消已接纳写入（回归 T8）。
-6. **无超时**（本批）：writer 为常驻单线程、任务不外抛，理论上必达终态；不设 timeout，S2 接入方自行决定
-   调用策略。此决定显式记录，防止"用超时掩盖失败"。
-
-## C. Persistence failure protocol
-
-现状（base `1e140ca`）：3 次重试（50/100/200ms）耗尽后仅 `Logs.w`，系统假装成功——本批终结该状态。
-
-| 项 | 定义 |
-|---|---|
-| mutation 成功状态 | `SUCCESS`：DAO 调用无异常返回；cache ACK 按既有 generation 规则处理；ledger 记 `lastSuccess[gen,key]` |
-| mutation 最终失败状态 | `FAILED_PERMANENT`：3 次重试全部异常；ledger 记 `lastFailure[gen,key]`；镜像保留乐观值、pending 保留（既有语义）；`Logs.w` 保留 |
-| fence 取代状态 | `SUPERSEDED`：被 restore/reset fence 判定为不落盘的旧 epoch 操作（见 D），非失败非成功，不计入 failures |
-| barrier 如何看到失败 | `awaitAllTerminal` 返回时，收集"`sequence ≤ upTo` 且 key 最新终态为 FAILED_PERMANENT"的 key 集合 → `FlushResult(success=false, failures)` |
-| 下一次 put 是否恢复 | **是**：同 key 更新的 put 成功后 `lastSuccess > lastFailure`，后续 barrier 视该 key 干净（RED 测试 4）；旧失败不屏蔽新状态 |
-| degraded/dirty 状态 | 本批**不引入**全局 dirty 布尔；ledger 即状态源，提供内部查询 `failedWriteKeys(): Set<String>`（测试与 S2 消费），不做 UI |
-| 错误传给 durable 调用方 | 唯一通道是 `FlushResult.failures`（key + reason）；公共 setter 签名与行为不变、不抛持久化异常；S2 的关键握手（D04）消费 FlushResult |
-| 失败后的队列 | 队列继续推进，不卡死、不重排；后续 key 的写入照常（RED 测试 6 相关回归） |
-
-## D. restore/reset 与排队写入（fence 语义；本批最小修复）
-
-**现状根因（base `1e140ca`，L0 静态核对）**：
-`restore()` 在 `Dispatchers.IO` 直接执行 `kvPairDao.reset()+insert`，与 writer 线程**并发**——
-`put(v1) 已入队未执行 → restore 先跑完 → 旧 put(v1) 随后落盘` 会污染恢复后的库。
-`reset()` 直接 `kvPairDao.reset()` 且完全绕过镜像（不清缓存、无 sentinel ACK）——同样是绕通道缺陷。
-
-**修复（最小、总序）**：restore 与 reset 的 DB 段作为**一个任务排入同一条 writer FIFO**：
-
-1. `restore(rows)`：同步 `cache.prime(rows)`（read-your-writes 不变）→ admission 分配 sequence + **新 write-epoch** →
-   writer 任务 `dao.reset(); insert(rows)` → 完成回调标 ledger 终态并 `cache.merge` 校准（既有语义）。
-   FIFO 总序保证：restore 前入队的 put/delete 先执行、其 SQL 先落盘、随后被 `dao.reset` 抹除——
-   **旧排队写不可能在 restore 落盘后重现**；restore 后入队的写落在新库上（新 epoch）。
-2. `reset()`：admission 分配 sequence + 新 epoch → `cache.reset()` 同步清镜像（sentinel pendingReset，既有语义）→
-   writer 任务 `dao.reset()` → 完成回调走既有 `writeCommitted(PENDING_RESET)` 清 sentinel；失败可观察（A/C）。
-3. 三个指定竞争的判定：
-   - `put(v1) 排队未执行 → restore → put 执行`：put 先落盘，被 reset 抹除；终态记 `SUCCESS` 后由 restore 整体取代，
-     barrier 汇总不因它失败（它本身成功；DB 最终态=restore 赢家）。**测试 5** 断言 fake DAO 最终表 = restored rows，无 v1。
-   - `delete → restore`：delete 先执行（行已删），restore 重写全表。
-   - `多个 queued mutations → restore`：FIFO 依序执行后统一被 restore 取代；barrier（覆盖它们）在这些任务终态后返回。
-4. 旧失败 × restore：restore 完成后，其 epoch 之前的 FAILED_PERMANENT 一律 `SUPERSEDED`（整表被替换，"失败"不再有意义）；
-   不向后续 barrier 报告。flush 捕获点在 restore 之前则如实报告当时失败。
-5. epoch 与 cache：`KvMemoryCache.kt` 本批**冻结不改**（S1-B2 刚验收）；write-epoch 只存在于 coordinator，
-   用于 ledger 取代判定；镜像层既有 pendingReset/readEpoch 语义不动。restore 内 `cache.prime/merge` 既有调用保持。
-
-## E. reload/start durability（现状分析，L0；本批只记录，不改 RuntimeController/dbOffMain）
-
-静态调用点核对（base `1e140ca`）：
-
-| 路径 | 位置 | 现状风险 |
-|---|---|---|
-| 组管理变更后全量 reload | `GroupManager.kt:155 → SagerNet.reloadServiceFully()` | 组/配置写入与 reload 之间无 durable 屏障 |
-| 配置页代理更新/切换后 reload | `ConfigurationFragment.kt:1036/2309/2672/2698 → SagerNet.reloadService()` | setter 乐观可见，DB 未 durable 即 reload |
-| 主界面/快捷开关/切换页 reload | `MainActivity.kt:525/531`、`Utils.kt:233`、`SwitchActivity.kt:33`、`QuickToggleShortcut.kt:68` | 同上 |
-| 启动路径 | `SagerNet.startService()` → `BaseService` init/reload 读 DataStore/Database | 进程早期读库；crash/跨进程窗口可见旧值 |
-| `syncNow()` | P01 引入，**当前无生产调用方**（dead API） | flush 的姊妹原语；S2 决定接线 |
-
-**未来关键路径统一链（S2 接线，非本批）**：`mutation → flushPendingWrites() → sync/snapshot → reload/start`。
-本批交付 flush 原语与失败协议，不改编以上任何调用点；`syncNow` 保持现状（snapshotLock 通道）。
-
-## F. RED tests（确定性；fake DAO + CountDownLatch/CompletableFuture；禁 sleep 作为时序控制）
-
-必含（用户指定 8 条）：
-
-| # | 测试 | 机制要点 |
-|---|---|---|
-| 1 | `barrierWaitsForPriorWrite` | put 后 DAO 阻塞于 latch；flush 未完成；放行 → flush success |
-| 2 | `barrierDoesNotWaitForLaterWrite` | put(k1) 阻塞 → flush 启动 → 再 put(k2)（阻塞不放行）；放行 k1 → flush 返回且 k2 仍 outstanding |
-| 3 | `barrierReportsPermanentWriteFailure` | fake DAO 恒抛异常 → flush `success=false` 且 failures 含该 key；镜像保留乐观值；setter 不抛 |
-| 4 | `newerSuccessfulMutationCanRecoverFromPreviousFailure` | 首写失败、同 key 二写成功 → 后续 flush success（C 恢复语义） |
-| 5 | `queuedWriteBeforeRestoreCannotCommitAfterRestoreWinner` | put(v1) 阻塞 → restore(rows) 入队 → 放行 put → 最终 fake DAO 表 == rows，无 v1；v1 记 SUCCESS 或 SUPERSEDED，最终表不被污染 |
-| 6 | `multipleWritesBarrierCompletesOnlyAfterAllPriorWrites` | 两写分别阻塞，flush 在两放行后才完成，completed==2 |
-| 7 | `deleteParticipatesInBarrier` | put+delete（delete 阻塞）→ flush 等 delete 终态；DB 无该行 |
-| 8 | `repeatedFlushWhenCleanReturnsImmediately` | 无 outstanding、无未恢复失败 → flush 立即 success |
-
-扩展（保留既有草稿中的高价值项，仍禁 sleep）：listener 重入写保持 admission 顺序且锁外通知（I7）、
-等待者取消传播且已接纳写入完成、并发 invalidation 合并为一次 refresh、prime 失败可观察不伪装空表、
-reset 走通道（镜像即清 + DAO 失败可观察 + sentinel ACK）、同 key 多 generation barrier 判定（B.3）、
-delete 与 put 统一 ledger、`sequence==cache.generation` 1:1 不变式断言。
-
-**RED 形式（如实标注）**：`flushPendingWrites/FlushResult/WriteTicket/PreferenceWriteCoordinator` 在 base
-`1e140ca` 上不存在 → Run L 为**编译级 RED**（同 run-b 先例）；凡现有 API 可表达的断言（如 failure 不冒泡 setter 的
-对照行为）尽量补断言级红。证据存 `docs/agent/evidence/s1-b3/`。
-
-## G. 范围限制
-
-**允许修改**：
-- `app/src/main/java/io/nekohasekai/sagernet/database/preference/RoomPreferenceDataStore.kt`（admission/ledger/flush/restore-reset 路由/注入点）
-- 新增同包 `PreferenceWriteCoordinator.kt`（仅当职责确需聚合；禁止无功能分层）
-- 对应 JVM tests（新增 `PreferenceWriteQueueTest.kt` 等）
-- restore/reset **仅限** D 所述 queue-fence 必须部分
-
-**冻结不改**：`KvMemoryCache.kt`（S1-B2 刚验收；若实现暴露编译级冲突，须在 HANDOFF 说明理由并最小处理）。
-
-**禁止顺带处理**：dbOffMain/runBlocking 主线程阻塞（含存量 init `runBlocking(Dispatchers.IO)`，S2）、
-RuntimeController、network debounce、ConfigSnapshot、sing-box、性能优化、UI/品牌、
-P2-TEST-ROBUSTNESS（`Thread.sleep(80)` 测试清理）、无关重构。
-
-## H. 方案比较与推荐
-
-| | 方案 1（推荐）：现有单线程 writer executor + 单调 sequence + completion/failure ledger + barrier | 方案 2：coroutine actor/channel 串行状态机 |
-|---|---|---|
-| 与 P01 的差异 | writer 结构/重试/线程数不变；仅加 admission 锁、ledger、Condition barrier、restore/reset 入队 | 整个 store 并发模型重写（含 init runBlocking、invalidation 回调、restore） |
-| barrier/失败表达 | lock+Condition + per-op ledger 足以精确表达 A/B/C；FIFO 总序使 restore fence 几乎零成本表达 | 语义等价，但需重造 job/supervision 与取消语义 |
-| 风险 | 低（增量、可回退） | 高（迁移即大改 P01，违背 D01-A 与单批纪律） |
-| 测试确定性 | fake DAO + latch 直接可控 | 需虚拟时间/调度注入，改动面更大 |
-| 结论 | **采用** | 仅当方案 1 无法表达 A—C 时再提案（现为否） |
-
-推荐理由：D01-A 渐进修复原则；现有 executor 完全可表达 barrier/failure/fence（本单 A—D 已给出精确语义）；
-方案 2 属并发模型整体迁移，必须独立立项，不得混入 S1-B3。
-
-## 冻结的 Kotlin 签名（实现阶段以本节为准）
+## 冻结的 Kotlin 签名 v2
 
 ```kotlin
 // RoomPreferenceDataStore 同包内部契约；不跨进程比较。
-data class WriteTicket(val epoch: Long, val sequence: Long)   // epoch=写纪元(restore/reset 推进)；sequence=admission 单调序
-data class WriteFailure(val key: String, val reason: String)  // reason=异常类名+message，不携带 Throwable
+enum class WriteOperationKind { PUT, DELETE, RESET, RESTORE }
+
+data class WriteTicket(
+    val queueSequence: Long,       // writer/admission/barrier/fence 的排序时钟（coordinator 独立计数）
+    val writeEpoch: Long,          // store 写纪元（RESTORE/RESET admission 时推进）
+    val cacheGeneration: Long?,    // 仅 keyed 操作：cache.put/delete 返回值；全表操作为 null
+)
+
+data class WriteFailure(
+    val operation: WriteOperationKind,
+    val key: String?,              // 全表操作（RESET/RESTORE）为 null；禁止用魔法 key 字符串表示全表
+    val reason: String,            // 异常类名+message；不持有 Throwable
+)
+
 data class FlushResult(val success: Boolean, val completed: Int, val failures: List<WriteFailure>)
 
-suspend fun flushPendingWrites(): FlushResult   // RoomPreferenceDataStore 公开；Dispatchers.IO + 可中断等待
+suspend fun flushPendingWrites(): FlushResult      // 公开；在 Dispatchers.IO 上可取消等待 marker future
+fun restore(rows: List<KeyValuePair>): FlushResult // 语义修订：阻塞至 fence 终态，不再 enqueue-and-return（见 D.4）
+fun reset(): Unit                                  // 语义修订：走通道 fence；调用点清单见 E/静态清单
 ```
 
-- 公共 setter 签名不变；token 为内部契约。keyed 操作 `sequence` 与 `cache.put/delete` 返回的 generation 在
-  同一 admission 临界区内 1:1 分配（不变式，测试断言）；restore/reset 只消耗 coordinator sequence + 推进 epoch。
-- admission 临界区（单锁）完成：分配 sequence、修改镜像、入队；`fireChangeListener` 必须锁外（I7）。
-- `syncNow()` 签名不变，维持 snapshotLock 通道。
+- **时钟解耦（review 第 3 条）**：`queueSequence`（coordinator）与 `cacheGeneration`（cache）是**不同时钟**，
+  不得假设数值相等；测试断言 "ticket.cacheGeneration == 对应 cache.put/delete 返回值、且该代 ACK 语义正确"，
+  不断言两计数器相等。cache 内部保留**单一单调计数器**同时充当 keyed generation 与全表 fence generation
+  （v1 的 captureReadEpoch/merge(readEpoch) guard 语义因此保持不变）。
+- 公共 setter 签名不变；token 为内部契约。`syncNow()` 签名不变，维持 snapshotLock 通道。
 
-## 验证命令（实现阶段）
+## A. flushPendingWrites 精确语义（CUT-SCOPED EFFECTIVE DURABLE STATE）
+
+```kotlin
+suspend fun flushPendingWrites(): FlushResult
+```
+
+**linearization point = barrier cut**：进入 flush 后，在 admission 锁内分配 `cut`（marker 的 queueSequence）
+并把 **barrier-marker 任务**插入既有单线程 writer FIFO（与 `writer.execute` 同一 admission 锁排序）。
+
+**marker 任务（in-band，review 第 2 条）**：
+- 由 FIFO 保证在**所有先于它入队的任务到达终态之后**才在 writer 线程上执行（writer 天然串行，无锁竞争）；
+- 执行时读取 coordinator 的**紧凑有效状态槽**（见 C/有界状态），对 cut 求值 CUT-SCOPED EFFECTIVE DURABLE STATE；
+- 用求值结果 complete 一个 `CompletableFuture<FlushResult>`；**不阻塞、不等待任何后续任务**；
+- 之后入队的 mutation 排在 marker 之后：**不能延长、也不能治愈该 barrier**。
+
+**成功唯一语义**：`success=true` 当且仅当在 cut 处——
+1. 不存在未恢复的全表 fence 失败（见 C 判定顺序）；
+2. 每个 key 的"cut 内最新有效 keyed 操作"为 SUCCESS（或被 cut 内成功 fence 取代）。
+
+**明确禁止的伪成功**："writer queue 已跑空"不是判据（判据是 cut 处有效状态求值，queue 排空只是 marker
+可执行的 FIFO 前提）；等待超时/取消不是成功；被 fence 取代不是含糊成功（显式 SUPERSEDED）。
+cut 覆盖范围内任何 key 的最终持久化失败且未被 cut 内更晚成功修复 → `success=false`。
+
+**等待与取消**：`flushPendingWrites` 在 `Dispatchers.IO` 上等待 marker future，可取消；
+取消等待者不取消已接纳写入（marker 任务照常完成）。
+**无内部超时**，且**修正 v1 的错误断言**：DAO 调用理论上可无限阻塞，**不存在"每个任务必然终态"的保证**；
+marker 会与被阻塞 DAO 一样等待；调用方以后可自行加超时/取消，取消不得取消已接纳写入。
+
+`completed` = 先于 marker 入队并到达终态的 operation 数（coordinator 计数；含 fence 任务；不含 cut 后操作）。
+
+## B. Barrier 边界
+
+1. **cut**：marker 的 `queueSequence`；等待集合 = 所有 `queueSequence < marker.queueSequence` 的 operation。
+2. **cut 后操作不可回溯治愈**：barrier 求值只读"marker 执行时"的有效状态槽；FIFO 保证此刻**所有 ≤cut 操作已终态、
+   所有 >cut 操作尚未执行**（终态更新都在 writer 线程任务内完成，天然按序），因此槽状态恰为 cut 状态——
+   这就是 cut-scoped 语义的实现依据（无需额外等待机构）。
+3. **同 key 多 generation**：key 判定 = cut 内该 key **最新终态**的 outcome（cut 内先失败后成功 → 干净；
+   cut 内先成功后失败 → 失败；cut 前失败、cut 后才成功且成功在 cut 外 → 本 barrier 仍失败）。
+4. **delete 与 put 统一模型**：同一 ledger/同一 marker 求值；`dao.delete` 影响 0 行也是 SUCCESS（终态="DB 无该行"）。
+   RESTORE/RESET 是 fence 型 operation，结果支配 keyed 结果（见 C）。
+5. v1 的 lock+Condition/逐操作等待机构**移除**：in-band marker 已表达全部需求（review 第 2 条），
+   除非实现暴露 marker 无法表达的具体需求（须在 HANDOFF 论证）。
+
+## C. Persistence failure protocol（全表失败显式建模，review 第 7 条）
+
+| 项 | 定义 |
+|---|---|
+| 操作状态 | `ADMITTED → SUCCESS \| FAILED_PERMANENT`（fence 取代时旧记录转 `SUPERSEDED` 语义，由水位比较实现，不逐条改写） |
+| 全表 fence 记账 | coordinator 单槽 `latestWholeTableFence(queueSequence, kind=RESET\|RESTORE, success, reason)`；每次 fence 终态覆盖该槽 |
+| keyed 记账 | 每键单槽 `latestKeyedOutcome(queueSequence, kind, success)`（有界：每键一条，见"有界状态"） |
+| marker 判定顺序 | ① 若 cut 处最新 fence 为 FAILED → **全局 durability 失败**：`failures=[WriteFailure(kind, null, reason)]`，keyed 结果不影响；② 否则以最新**成功** fence 的 queueSequence 为水位，仅对水位后的 keyed 槽按 key 判定；③ `failures` = 最新有效 keyed 终态为 FAILED_PERMANENT 的 key 集合 |
+| 恢复规则 | cut 内同 key 更晚成功 keyed 写修复该 key（且仅当该修复在**同一 cut 之前接纳**）；cut 前捕获的 barrier 在恢复前求值 → 失败；恢复后捕获的 barrier → 成功；**成功的全表 fence 取代其之前的一切失败**；**失败的全表 fence 保持未解决**：更晚的 keyed 成功**不能**治愈它；更晚的成功全表 fence 可以治愈/取代它 |
+| 失败后的队列 | 队列继续推进、不卡死、不重排；后续 key 照常记账 |
+| degraded/dirty 状态 | 无全局布尔；ledger 槽即状态源，内部查询 `pendingWholeTableFailure(): WriteFailure?` 与 `failedWriteKeys(): Set<String>`（测试与 S2 消费），无 UI |
+| 错误传递 | 唯一通道 `FlushResult.failures`（operation/key/reason）；公共 setter 不抛持久化异常；restore() 直接向调用方返回终态 FlushResult（见 D.4）；S2 的 D04 握手消费 FlushResult |
+| 保留 | `Logs.w` 日志保留，但以 FlushResult/ledger 查询为准（失败是结果不是日志） |
+
+## D. restore/reset：FULL_TABLE fence（review 第 4 条）+ 原子性（第 6 条）+ 单一权威（第 5 条）
+
+### D.1 cache 级 fence API（`KvMemoryCache.kt` **最小解冻**，仅限此用途）
+
+```kotlin
+// 新增（prime() 保留为 bootstrap/初始 prime，不再是运行时 restore 通道）：
+fun beginFullTableFence(optimisticRows: List<KeyValuePair>): Long   // 返回 cache 全表 fence 代
+fun commitFullTableFence(committedEpoch: Long, authoritativeRows: List<KeyValuePair>)
+fun abortFullTableFence(committedEpoch: Long)                        // 永久失败路径，见"全表失败镜像策略"
+```
+
+admission 临界区（cache 锁内一次完成）——`beginFullTableFence`：
+`epoch = ++generationCounter`（cache 单时钟推进，满足"runtime restore/reset 推进 cache 可见全表代"）→
+**显式取代全部 pre-fence pending keyed 世代**（`pendingKeys/pendingGenerations` 清空；其后续 ACK 按 stale 规则无效，
+失败/在途的 pre-fence 写不再能阻塞快照传播）→ 清除 legacy `pendingReset` sentinel →
+`values` 置为 optimisticRows（乐观全表态，read-your-writes）→ 置 `pendingFullTable`。
+
+`commitFullTableFence`（writer 任务完成回调，cache 锁内）：
+先快照 post-fence keyed 乐观值（`pendingGenerations` 中 fence 之后 admit 的项）→ `values` 替换为 authoritativeRows →
+重放 post-fence 乐观值并保留其 pending（**post-fence keyed 写不被 fence 完成抹除**）→
+`lastCommittedFullTableEpoch = committedEpoch`（**读序 guard**：`merge(list, readEpoch)` 中
+`readEpoch < lastCommittedFullTableEpoch` 的快照视为 stale，不应用、不删除——旧快照无法回滚 fence）→
+`pendingFullTable = false`。
+
+`merge/mergeLocked` 守卫扩展（既有语义上追加）：`pendingFullTable` 为真时快照一律不应用（在途 fence 不可被覆盖）；
+`readEpoch < lastCommittedFullTableEpoch` 的快照不应用、不删除（fence 后旧快照不可回滚）；
+fresh 快照照常应用（属性 5）。既有 keyed guard（`pendingKeys || lastCommittedGenerations[key] > readEpoch`）不变。
+
+### D.2 store 层通道语义
+
+- **restore(rows)**（admission，在调用线程但**非主线程**——现状已如此）：
+  admission 锁内分配 ticket（queueSequence/writeEpoch+1/cacheGeneration=null）→ `cache.beginFullTableFence(rows)`
+  → writer 任务：`restoreTransaction { dao.reset(); dao.insert(rows) }`（**单一 Room 事务，原子**，见 D.3）→
+  成功：`cache.commitFullTableFence(epoch, rows)` + ledger SUCCESS；失败（含事务回滚异常）：
+  `cache.abortFullTableFence(epoch)` + ledger FAILED_PERMANENT（`WriteFailure(RESTORE, null, reason)`）。
+  FIFO 总序保证：pre-restore 排队写先落盘、再被事务内 `reset` 抹除——**旧排队写不可能在 restore 落盘后重现**
+  （RED 测试 5）；post-restore 写排在其后，落在新库（新 epoch）。
+- **reset()**：admission → `cache.beginFullTableFence(emptyList())` → writer 任务 `dao.reset()`（包在同一
+  restoreTransaction seam 内，单语句事务）→ commit/abort 同上。legacy `cache.reset()`/`PENDING_RESET`
+  路径保留给既有测试与兼容，生产不再使用。
+- **全表失败镜像策略（review 第 8 条，先选政策再写码）**——**选定政策 P-OPTIMISTIC-HOLD**：
+  1. 永久失败后 getters 看到**乐观 fence 态**（restore=rows / reset=空）——与 keyed 失败的乐观语义一致（I5）；
+  2. 失败 fence **不 stamp 读序保护**：fresh snapshot（反映 DB 真值=旧数据）**允许**应用，逐步把镜像拉回真值
+     （不自愈会违反 I5"旧失败不得无限期屏蔽远端有效状态"）；在途（PENDING）fence 期间仍阻塞快照；
+  3. 恢复途径：下一次成功的全表 fence（再次 restore/reset）在 cache 侧覆盖镜像、在 ledger 侧取代失败；
+     重试由调用方（S2 的 D04/恢复协调）驱动；
+  4. 清除者：唯一清除者是**下一次成功的全表 fence**；keyed 成功不清除（keyedSuccessDoesNotHealFailedWholeTableFence）；
+  5. 失败后的 keyed 写：照常 admit/执行/记账（它们写的是真实 DB 旧态），其结果按普通 keyed 规则参与后续 barrier；
+     全局失败仍由 fence 槽表达直到被成功 fence 取代。
+
+### D.3 原子性 seam（review 第 6 条：不得用非事务 reset+insert 替换 BackupFragment 现有事务）
+
+`RoomPreferenceDataStore` 构造函数新增可选参数 `restoreTransaction: (() -> Unit) -> Unit = { it() }`；
+`DataStore.kt` 注入 `PublicDatabase.instance::runInTransaction`。restore/reset 的 writer 任务把
+`dao.reset()+dao.insert(rows)` 包在该 seam 内执行 → 真实运行时由 Room 事务保证原子（成功全有或全无）；
+测试注入可控 fake（模拟回滚）验证 `restoreReplacementIsAtomicOnInsertFailure`。
+不改 `KeyValuePair.kt`/`PublicDatabase.kt`，除非实现证明 DAO 默认方法 seam 不可行（须在 HANDOFF 论证）。
+
+### D.4 restore 调用语义冻结（不再 enqueue-and-return）
+
+`restore(rows): FlushResult` **阻塞调用线程**（非主线程；现状 finishImport 已在非主线程）直至 restore 任务终态，
+返回其 FlushResult。直接调用方（`BackupFragment.finishImport`）必须：成功才继续备份导入的收尾/重启路径；
+失败必须观察到失败（showMessage + 不继续 as-success），不得假装恢复成功。
+保留现有 off-main 用法；**不在本批**解决 dbOffMain/runBlocking 全局问题。
+
+## E. reload/start durability（L0 静态分析 + 调用点清单；本批只记录，不改 RuntimeController/dbOffMain）
+
+风险链（静态）：`UI setter（内存乐观可见）→ DB 尚未 durable → reload/start 读取设置`。
+
+**静态清单（review 第 5/6 条要求，已在设计阶段执行并记录；base 1e140ca）**：
+
+| # | 位置 | 写操作 | B3 处置 |
+|---|---|---|---|
+| 1 | `BackupFragment.kt:569-571`（`PublicDatabase.instance.runInTransaction { kvPairDao.reset(); kvPairDao.insert(decodedSettings) }`） | 设置表 reset+insert（与 576 的 store.restore **双写**） | **移除**；由 `configurationStore.restore()` 单一权威取代（事务 seam 见 D.3） |
+| 2 | `BackupFragment.kt:576`（`DataStore.configurationStore.restore(decodedSettings)`，`suspend finishImport` 内，off-main） | restore 唯一调用方 | 消费终态 FlushResult；失败不继续 as-success |
+| 3 | `SettingsPreferenceFragment.kt:203`（`DataStore.configurationStore.reset()`，主线程对话框回调，忽略返回值，随后 `triggerFullRestart()`） | reset 唯一生产调用方 | B3 改为通道 fence、返回 Unit（调用点兼容）；**记录缺口**：`triggerFullRestart` = stopService + delay(500) + ProcessPhoenix rebirth（进程死亡），排队 reset 可能未 durable——**不在 B3 修**，S2 用 flush-before-restart 握手关闭 |
+| 4 | `BackupFragment.kt:538-561`（SagerDatabase.runInTransaction：router/proxy/group/rules 表） | **非设置表**（SagerDatabase） | 不属于设置通道范围（S3/D06 两库恢复处理）；仅登记 |
+| 5 | `RouteFragment.kt:114`（`SagerDatabase.rulesDao.reset()`） | 非 设置表 | 仅登记（S3 范围） |
+| 6 | `BackupSerializer.exportDatabase`（runInTransaction 内只读） | 只读导出 | 判定 read-only，无需路由 |
+| 7 | `RoomPreferenceDataStore.kt` 内部 put/delete/reset/restore（166/190/97-98/103 行） | 唯一合法通道 | 本批改造对象 |
+
+结论：**设置表（PublicDatabase.kvPairDao）在 store 之外只有一个绕道写入点**（#1），B3 移除后
+`configurationStore.restore` 成为单一权威；其余绕道均为非设置表或只读。
+
+**未来关键路径统一链（S2 接线，非本批）**：`mutation → flushPendingWrites() → sync/snapshot → reload/start`；
+候选接入点即上表 reload 类路径（GroupManager.kt:155、ConfigurationFragment.kt:1036/2309/2672/2698、
+MainActivity.kt:525/531、Utils.kt:233、SwitchActivity.kt:33、QuickToggleShortcut.kt:68、启动 startService）。
+`syncNow()` 维持现状（无生产调用方，P01 dead API，flush 的姊妹原语）。
+
+## F. RED tests（确定性；fake DAO/可控 fake transaction + CountDownLatch/CompletableFuture；禁 sleep 作时序控制）
+
+**cache 层全表 fence（新文件 `KvMemoryCacheFullTableFenceTest.kt`，对 base 1e140ca 编译级 RED）**：
+
+| # | 测试 | 断言 |
+|---|---|---|
+| C1 | `failedPendingWriteIsSupersededBySuccessfulRestore` | put 后不 ACK（pending）→ beginFullTableFence → pre-fence ACK 变 stale no-op；快照传播不再被阻塞 |
+| C2 | `staleSnapshotStartedBeforeRestoreCannotRollbackRestore` | captureReadEpoch → begin+commit(rows) → merge(staleSnapshot, readEpoch) → rows 存活 |
+| C3 | `staleSnapshotStartedBeforeResetCannotResurrectRows` | 同上，rows=empty → 空 table 存活，旧行不复活 |
+| C4 | `postFenceKeyedWriteSurvivesFenceCommit` | begin(rows) → post-fence put → commit → put 值存活且 pending 保留 |
+| C5 | `freshSnapshotAfterFenceStillApplies` | commit 后 fresh readEpoch 的 merge 照常应用远端行 |
+
+**store/coordinator 层（`PreferenceWriteQueueTest.kt` 等）**——原 8 条 + review 追加 11 条：
+
+| # | 测试 | 断言要点 |
+|---|---|---|
+| S1 | barrierWaitsForPriorWrite | DAO 阻塞→flush 未完成→放行→success |
+| S2 | barrierDoesNotWaitForLaterWrite | cut 后 admit 的 k2 不延长 barrier |
+| S3 | barrierReportsPermanentWriteFailure | 恒抛 DAO → failures 含 key；镜像保留乐观值；setter 不抛 |
+| S4 | newerSuccessfulMutationCanRecoverFromPreviousFailure | 同 key cut 内后写成功修复 |
+| S5 | queuedWriteBeforeRestoreCannotCommitAfterRestoreWinner | restore 后 fake DAO 终表==rows，无 v1 |
+| S6 | multipleWritesBarrierCompletesOnlyAfterAllPriorWrites | 两写全放行才完成，completed==2 |
+| S7 | deleteParticipatesInBarrier | delete 阻塞/放行参与 barrier；DB 无行 |
+| S8 | repeatedFlushWhenCleanReturnsImmediately | 干净时立即返回 |
+| S9 | barrierCapturedBeforeRecoveryStillFails | 恢复操作在 cut 之后 admit → 本 barrier 仍失败 |
+| S10 | barrierCapturedAfterRecoverySucceeds | 恢复后新捕获的 barrier 成功 |
+| S11 | restoreReplacementIsAtomicOnInsertFailure | fake transaction 回滚 → 终表不变；restore 报失败 |
+| S12 | restoreFailurePreventsSuccessfulReturn | restore 返回 success=false；BackupFragment 消费契约：不继续 as-success（store 层断言返回值契约；UI 路径以代码走查+合同断言覆盖） |
+| S13 | restoreFailureAppearsInFlushResult | failures 含 WriteFailure(RESTORE, null, reason) |
+| S14 | resetFailureAppearsInFlushResult | failures 含 WriteFailure(RESET, null, reason) |
+| S15 | keyedSuccessDoesNotHealFailedWholeTableFence | 失败 fence 后 keyed 成功 → barrier 仍全局失败 |
+| S16 | laterSuccessfulWholeTableFenceRecoversEarlierFenceFailure | 后续成功 fence 取代早先 fence 失败 → barrier 成功 |
+
+保留扩展（v1 高价值项）：listener 重入写保持 admission 顺序且锁外通知（I7）、等待者取消传播且已接纳写入完成、
+并发 invalidation 合并为一次 refresh、bootstrap prime 失败可观察不伪装空表、
+`ticketMapsToCacheGeneration`（断言映射正确而非计数器相等，review 第 3 条）、reset 通道化回归
+（镜像即清、DAO 失败可观察；SettingsPreferenceFragment 调用点兼容）。
+
+RED 形式：fence/flush/coordinator API 在 base `1e140ca` 不存在 → Run L 编译级 RED（同 run-b 先例，如实标注）；
+现有 API 可表达的对照断言（如 S3 的"异常不冒泡 setter"）尽量补断言级红。证据 `docs/agent/evidence/s1-b3/`。
+
+## G. 范围修订（review 第 11 条）
+
+**允许**：
+- `RoomPreferenceDataStore.kt`（admission/ledger/marker/flush/restore-reset 路由/restoreTransaction 注入点）
+- `PreferenceWriteCoordinator.kt`（确有职责聚合才新增）
+- `KvMemoryCache.kt` **仅限 D.1 全表 fence 最小语义**（begin/commit/abort + merge 守卫扩展 + 单时钟 fence 代；其余冻结）
+- `BackupFragment.kt` **仅限**移除带外设置写（#1）并消费 authoritative restore 结果（D.4）
+- `KeyValuePair.kt` / `PublicDatabase.kt` 仅当 D.3 seam 不可行时的原子事务最小改动
+- 对应 JVM tests + metadata/evidence
+
+**仍排除**：dbOffMain 清理、RuntimeController、network debounce、ConfigSnapshot、sing-box、性能、UI/品牌、
+P2-TEST-ROBUSTNESS（`Thread.sleep(80)`）、无关重构、SagerDatabase 非设置表写入（S3）。
+
+## H. 有界 coordinator 状态（review 第 9 条）
+
+无操作日志式 journal。状态上限 ≈ `outstanding 队列深度 + 活跃 marker 数 + 每 key 一条有效槽 + 全表 fence 单槽`：
+
+- `pendingQueue: ArrayDeque<WriteOp>` —— 已 admit 未终态（含 marker），终态即出队；
+- `latestKeyedOutcome: HashMap<String, KeyedOutcome>` —— 每键仅保留最新一条（新终态覆盖旧条目；fence 成功后
+  水位前的条目惰性失效、不主动清扫——总量受键数上界约束，设置表键数有限）；
+- `latestWholeTableFence: WholeTableOutcome?` —— 单槽；
+- `activeMarkers: Queue<CompletableFuture<FlushResult>>` —— 并发 flush 数上限。
+
+终态历史不保留：terminal 回调只覆盖槽位并出队，旧记录立即折叠。barrier 求值只读槽位（B.2 FIFO 论证保证正确性）。
+
+## I. 实现约束（不变部分，沿用 v1 + 修订）
+
+- 注入点仅限测试：DAO、`restoreTransaction`、delay 策略（替代 50/100/200ms sleep）、executor/调度器；生产默认行为不变。
+- 重试 3 次/50/100/200ms 保留，不为文档机械改参；失败是 FlushResult 结果不是日志。
+- admission 单锁（分配 ticket + 改镜像 + 入队）；**禁止锁内调 listener/Binder/JNI**；`fireChangeListener` 锁外（I7）。
+- marker 之外**禁止**再引入 lock+Condition 等待机构（review 第 2 条）；flush 等待可取消（Dispatchers.IO + 可中断）。
+- 快照读取/发布维持 snapshotLock 单通道；`syncNow` 不绕过。
+- 禁止：`allowMainThreadQueries`、主线程 runBlocking（存量 init `runBlocking(Dispatchers.IO)` 归 S2）、
+  sleep/delay 同步、扩线程池、吞异常、删断言、用超时掩盖失败。
+
+## J. 验证命令 / 回退 / push / 停止条件（实现阶段）
 
 ```powershell
 ./gradlew.bat :app:testOssDebugUnitTest --tests "*KvMemoryCache*" --tests "*RoomPreferenceDataStore*" --tests "*PreferenceWrite*" --no-daemon --console=plain
 ./gradlew.bat :app:testOssDebugUnitTest --no-daemon --console=plain
 ```
 
-cwd=仓库根；shell=PowerShell；GREEN exit 0 且 0 failures；证据 `docs/agent/evidence/s1-b3/`（Run L=RED、M=GREEN focused、N=GREEN full）。
-
-## 回退方案
-
-revert 本批单 commit 回 `1e140ca`；FlushResult 为新增 API，回退无破坏；无 schema/格式变更。
-
-## push 分支 / 停止条件
-
+cwd=仓库根；shell=PowerShell；GREEN exit 0 且 0 failures；证据 `docs/agent/evidence/s1-b3/`（Run L=RED、M/N=GREEN）。
+回退：revert 本批单 commit 回 `1e140ca`；FlushResult/fence 为新增 API，回退无破坏；无 schema/签名变更。
 分支：`fix/p01-room-off-main-thread`（非 main）。
-**当前停止条件：设计确认**——网页 ChatGPT 明确 ACCEPT 本单 A—H 前，不写任何实现代码。
-实现获准后的停止条件：候选 push → `WAIT_CHATGPT_AUDIT`；`ACCEPTED` 后 S1 仅剩阶段验收核对（B1—B3 + I1—I8 覆盖），再签发 S2-B1；`CHANGES_REQUIRED` 只修本批。
+**停止条件：网页 ChatGPT 最终确认本 v2 设计后才实现**；实现完成后 `WAIT_CHATGPT_AUDIT`；
+ACCEPTED 后 S1 仅剩阶段验收核对（B1—B3 + I1—I8），再签发 S2-B1；CHANGES_REQUIRED 只修本批。
 
-## 明确不在本批
+## K. 明确不在本批
 
-S2 关键操作握手（D04：把 flush 接进 reload/start 调用点）、restore 完整重写（S3/D06：两库事务/中断恢复）、
-prime 失败 UI 状态机（S2/D05）、双进程验证（S2-B3）、P2-TEST-ROBUSTNESS 清理、dbOffMain/runBlocking 改造。
+S2 关键操作握手（把 flush 接进 reload/start/reset-before-restart）、restore 完整重写（S3/D06：两库、中断恢复、
+SagerDatabase 表）、prime 失败 UI 状态机（S2/D05）、双进程验证（S2-B3）、dbOffMain/runBlocking 全局改造、
+P2-TEST-ROBUSTNESS 清理。
