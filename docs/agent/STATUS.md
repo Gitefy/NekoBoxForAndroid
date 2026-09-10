@@ -9,9 +9,9 @@
 | observed_local_head | 见 HANDOFF（本轮 metadata commit） |
 | observed_local_branch | fix/p01-room-off-main-thread |
 | observed_upstream | origin/fix/p01-room-off-main-thread |
-| current_phase | S1（B1 ACCEPTED；B2 ACCEPTED+CI PASS；B3 REVISED DRAFT v2.1 / AWAITING_FINAL_DESIGN_ACCEPTANCE） |
+| current_phase | S1（B1 ACCEPTED；B2 ACCEPTED+CI PASS；B3 FD-1.0 DESIGN_ACCEPTED / IMPLEMENTATION_IN_PROGRESS） |
 | current_work_order | S1-B3-WRITE-QUEUE-DURABILITY-BARRIER |
-| work_order_state | v2 复审**基本通过**；3 点修正已并入 v2.1；AWAITING_FINAL_DESIGN_ACCEPTED；implementation_authorized=false |
+| work_order_state | FD-1.0 DESIGN_ACCEPTED；implementation_authorized=true（scope=S1-B3.md only）；实施中，完成后 WAIT_AUDIT |
 | current_state | PLAN_NEXT_BATCH |
 | write_owner | Cursor |
 | working_tree_state | 仅 S1-B3 设计/交接文档变更；无业务源码改动 |
@@ -22,7 +22,7 @@
 | latest_audit_verdict | S1-B2 `ACCEPTED`（CI PASS）；S1-B3 v1 设计 `CHANGES_REQUIRED`（12 条→v2）→ v2 复审基本通过、3 点修正已并入 v2.1 |
 | last_accepted_batch | S1-B2-CONFIRM-SEMANTICS-CLOSURE |
 | last_accepted_code_sha | 1e140ca720a54dfa42cc37235484af7faae499bf |
-| next_action | 网页 ChatGPT 出具最终 **DESIGN_ACCEPTED**（v2.1 三点修正已并入）→ 才允许按单实现（RED Run L → 最小实现 → GREEN Run M/N → 候选 push → WAIT_AUDIT） |
+| next_action | 按 `docs/agent/final-design/S1-B3.md` 实施：核验相关差异→失败测试→最小修改→聚焦/全量测试→代码 commit+非 main push→独立 metadata→WAIT_AUDIT |
 
 ## 阶段状态
 

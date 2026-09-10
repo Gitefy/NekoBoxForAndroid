@@ -1,7 +1,31 @@
 # 当前独立审计
 
 reviewer：ChatGPT Web via GitHub fixed-SHA。
-work_order：S1-B1 与 S1-B2 均 **已关闭（ACCEPTED）**；S1-B3-WRITE-QUEUE-DURABILITY-BARRIER 为 **REVISED DRAFT v2（DESIGN_CHANGES_REQUIRED 已修订，待一次最终设计确认）**；未实现。
+work_order：S1-B1 与 S1-B2 均 **已关闭（ACCEPTED）**；S1-B3 设计 **FD-1.0 `DESIGN_ACCEPTED`（implementation_authorized=true）**，代码 **NOT_AUDITED / 实施中**。
+
+## 设计接受（FD-1.0）— DESIGN_REVIEW_RECEIPT（网页 ChatGPT，2026-09-10）
+
+- 已核对 GitHub 文档提交 `057e07b21d6f9633e79b28b1ccaca0da2bba2153`（S1-B3 v2.1）。
+- verdict：`DESIGN_ACCEPTED`；`implementation_authorized=true`；`implementation_scope=S1-B3.md only`；`code_audit_status=NOT_AUDITED`；`next_stop=WAIT_AUDIT`。
+- 接受 v2.1 三项改动：reset 等待提交后重启、fence 保留后续删除、事务绑定到正确数据库。
+- S1-B3.md 将长稿整合为实施合同，补明边界：旧 fence 回调不能清掉更新 fence；fence 事务和快照发布共享原有 snapshotLock；取消等待不取消写入；默认直通事务 runner 不得被宣传为通用原子恢复。
+- 设计认可不等于代码通过；B3 尚待实现及代码审计。receipt 原文：
+
+```
+DESIGN_REVIEW_RECEIPT
+repo=Gitefy/NekoBoxForAndroid
+branch=fix/p01-room-off-main-thread
+work_order=S1-B3-WRITE-QUEUE-DURABILITY-BARRIER
+base_code_sha=1e140ca720a54dfa42cc37235484af7faae499bf
+reviewed_design_sha=057e07b21d6f9633e79b28b1ccaca0da2bba2153
+design_version=FD-1.0
+verdict=DESIGN_ACCEPTED
+implementation_authorized=true
+implementation_scope=S1-B3.md only
+code_audit_status=NOT_AUDITED
+next_stop=WAIT_AUDIT
+END_DESIGN_REVIEW_RECEIPT
+```
 
 ## 审计一（a34a0cf）
 
