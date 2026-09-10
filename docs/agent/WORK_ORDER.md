@@ -1,6 +1,6 @@
 # 当前工作单：S1-B2-CONFIRM-SEMANTICS-CLOSURE
 
-状态：ISSUED / IN_PROGRESS。
+状态：CANDIDATE_PUSHED / WAIT_CHATGPT_AUDIT。
 Owner：Cursor。
 独立审计：网页 ChatGPT（固定 GitHub SHA）。
 base_code_sha：`e9b92cf79625c555ecd21b10991642b76037de71`（S1-B1 accepted candidate）。
