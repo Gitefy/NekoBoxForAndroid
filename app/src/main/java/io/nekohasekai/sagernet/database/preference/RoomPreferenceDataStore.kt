@@ -42,13 +42,22 @@ open class RoomPreferenceDataStore(
     init {
         // One-time mirror prime; replaces per-read synchronous queries.
         runBlocking(Dispatchers.IO) {
-            runCatching { cache.merge(tableSnapshot()) }.onFailure { Logs.w(it) }
+            runCatching { readAndMergeSnapshot() }.onFailure { Logs.w(it) }
         }
         invalidationSource?.onInvalidate { tables ->
             if ("KeyValuePair" in tables) {
-                runCatching { cache.merge(tableSnapshot()) }.onFailure { Logs.w(it) }
+                runCatching { readAndMergeSnapshot() }.onFailure { Logs.w(it) }
             }
         }
+    }
+
+    /**
+     * Capture the mirror's mutation epoch before the table read so [merge]
+     * can reject snapshots that predate local commits made afterwards.
+     */
+    private fun readAndMergeSnapshot() {
+        val readEpoch = cache.captureReadEpoch()
+        cache.merge(tableSnapshot(), readEpoch)
     }
 
     fun getBoolean(key: String) = cache.get(key)?.boolean
@@ -67,7 +76,7 @@ open class RoomPreferenceDataStore(
      * invalidation may not have propagated yet (service start/reload).
      */
     suspend fun syncNow() = kotlinx.coroutines.withContext(Dispatchers.IO) {
-        cache.merge(tableSnapshot())
+        readAndMergeSnapshot()
     }
 
     /**
@@ -130,25 +139,25 @@ open class RoomPreferenceDataStore(
         }
 
     fun remove(key: String) {
-        cache.delete(key)
+        val generation = cache.delete(key)
         fireChangeListener(key)
-        writer.execute { executeDeleteWithRetry(key) }
+        writer.execute { executeDeleteWithRetry(key, generation) }
     }
 
     private fun putValue(key: String, pair: KeyValuePair) {
-        cache.put(pair)
+        val generation = cache.put(pair)
         fireChangeListener(key)
-        writer.execute { executePutWithRetry(key, pair) }
+        writer.execute { executePutWithRetry(key, pair, generation) }
     }
 
     private val putRetryDelaysMs = longArrayOf(50L, 100L, 200L)
 
-    private fun executePutWithRetry(key: String, pair: KeyValuePair) {
+    private fun executePutWithRetry(key: String, pair: KeyValuePair, generation: Long) {
         var lastError: Exception? = null
         for (attempt in 0..2) {
             try {
                 kvPairDao.put(pair)
-                cache.writeCommitted(key, pair)
+                cache.writeCommitted(key, pair, generation)
                 return
             } catch (e: Exception) {
                 lastError = e
@@ -167,12 +176,12 @@ open class RoomPreferenceDataStore(
         else Logs.w { "Giving up persisting preference $key after 3 attempts; keeping memory value, will retry on next put" }
     }
 
-    private fun executeDeleteWithRetry(key: String) {
+    private fun executeDeleteWithRetry(key: String, generation: Long) {
         var lastError: Exception? = null
         for (attempt in 0..2) {
             try {
                 kvPairDao.delete(key)
-                cache.writeCommitted(key, null)
+                cache.writeCommitted(key, null, generation)
                 return
             } catch (e: Exception) {
                 lastError = e

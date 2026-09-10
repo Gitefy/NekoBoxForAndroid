@@ -152,6 +152,51 @@ class KvMemoryCacheTest {
         assertEquals("9", cache.get("x")?.string)
     }
 
+    /**
+     * S1-B1: an acknowledgment of a superseded put must not regress the mirror
+     * to the older value, and must not clear the pending state of the newer
+     * mutation. This regression test fails on the P01 baseline
+     * (cc63f248): the stale ack overwrites v2 with v1 and drops pending.
+     */
+    @Test
+    fun staleAckOfSupersededPutDoesNotRegressMemory() {
+        val cache = KvMemoryCache()
+        cache.prime(emptyList())
+
+        cache.put(row("k", "v1"))
+        cache.put(row("k", "v2"))
+
+        cache.writeCommitted("k", row("k", "v1"))
+        assertEquals("v2", cache.get("k")?.string)
+        assertTrue(cache.hasPending("k"))
+
+        cache.writeCommitted("k", row("k", "v2"))
+        assertEquals("v2", cache.get("k")?.string)
+        assertFalse(cache.hasPending("k"))
+    }
+
+    /**
+     * S1-B1: an acknowledgment of a put that was superseded by a delete must
+     * not resurrect the deleted value, and must not clear the delete's pending
+     * state. Fails on cc63f248: the stale ack re-inserts v1 into the mirror.
+     */
+    @Test
+    fun staleAckOfPutDoesNotResurrectDeletedKey() {
+        val cache = KvMemoryCache()
+        cache.prime(emptyList())
+
+        cache.put(row("k", "v1"))
+        cache.delete("k")
+
+        cache.writeCommitted("k", row("k", "v1"))
+        assertNull(cache.get("k"))
+        assertTrue(cache.hasPending("k"))
+
+        cache.writeCommitted("k", null)
+        assertNull(cache.get("k"))
+        assertFalse(cache.hasPending("k"))
+    }
+
     @Test
     fun writeFailureKeepsMemoryAndAllowsRetryPut() {
         val cache = KvMemoryCache()
