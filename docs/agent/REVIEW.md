@@ -1,7 +1,7 @@
 # 当前独立审计
 
 reviewer：ChatGPT Web via GitHub fixed-SHA。
-work_order：S1-B1 与 S1-B2 均 **已关闭（ACCEPTED）**；S1-B3-WRITE-QUEUE-FLUSH-BARRIER 已起草、未实现。
+work_order：S1-B1 与 S1-B2 均 **已关闭（ACCEPTED）**；S1-B3-WRITE-QUEUE-DURABILITY-BARRIER 为 **REVISED DRAFT v2（DESIGN_CHANGES_REQUIRED 已修订，待一次最终设计确认）**；未实现。
 
 ## 审计一（a34a0cf）
 
@@ -11,95 +11,67 @@ scope `cc63f248..a34a0cf`，verdict `CHANGES_REQUIRED`（P1-SNAPSHOT-ORDERING）
 
 - scope `cc63f248..e9b92cf`；incremental `a34a0cf..e9b92cf`（snapshotLock 串行化）。
 - verdict **ACCEPTED**（critical 0 / p1 0 / p2 1）。完整 receipt 见下文 AUDIT_RECEIPT(S1-B1)。
-- P2-TEST-ROBUSTNESS（`SnapshotOrderingTest` 内 `Thread.sleep(80)`）→ 遗留至 test-infrastructure 清理批，不得扩生产设计。
+- P2-TEST-ROBUSTNESS（`SnapshotOrderingTest` 内 `Thread.sleep(80)`）→ 遗留至 test-infrastructure 清理批。
 - ci_status 当时无 check（A08）。
 
 ## 审计三（1e140ca）— S1-B2 ACCEPTED
 
-- repo：`Gitefy/NekoBoxForAndroid`；branch：`fix/p01-room-off-main-thread`。
-- work_order：`S1-B2-CONFIRM-SEMANTICS-CLOSURE`。
-- base_code_sha：`e9b92cf79625c555ecd21b10991642b76037de71`；candidate_code_sha：`1e140ca720a54dfa42cc37235484af7faae499bf`；handoff_metadata_sha：`f6a2def`。
-- review_scope：`e9b92cf..1e140ca`。
-- verdict **ACCEPTED**（critical 0 / p1 0 / p2 0）。
-- ChatGPT 直接读取 GitHub 固定 SHA 差异：是。结论来源：源码 + L1 本地证据 + **GitHub Actions 实际运行结果**（ci_evidence：push 事件 head_sha=1e140ca，status=completed，conclusion=success）。
+- base `e9b92cf79625c555ecd21b10991642b76037de71`；candidate `1e140ca720a54dfa42cc37235484af7faae499bf`；metadata `f6a2def`。
+- verdict **ACCEPTED**（critical 0 / p1 0 / p2 0）+ **CI PASS**（GitHub Actions push 事件 head_sha=1e140ca，status=completed，conclusion=success）。
+- persistent_regression_constraints 七条冻结；P2-TEST-ROBUSTNESS 继续排队。
+- 完整 receipt 见下文 AUDIT_RECEIPT(S1-B2)。
 
-### Accepted findings（摘要）
+## 设计评审（S1-B3 v1）— DESIGN_REVIEW_RECEIPT
 
-1. `snapshot()` 返回逐行防御拷贝；可变 `value` ByteArray 以 `copyOf()` 深拷贝，消费方无法借返回行改写缓存。
-2. S1-B1 的 snapshot 定序与 per-key generation 逻辑未变且保持有效。
-3. legacy+generation 双路径钉子正确覆盖 delete→put 定序、重复 ack 幂等、reset 后旧 ack 不复活。
-4. 未改 `RoomPreferenceDataStore` 生产行为、重试语义、executor 规模、schema、签名、运行时生命周期或无关架构。
-5. A08 CI 分支过滤 `'*'→'**'` 正确（GitHub 官方 glob 语义：`'*'` 不匹配斜杠，`'**'` 匹配）；**修复已被 GitHub 行为验证——分支 `fix/p01-room-off-main-thread` 生成了 push workflow，CI 对 1e140ca 跑完且成功**。
-6. 本地 RED/GREEN 与全量证据一致；**run-g 计数错误（131→124）被显式更正而非延续**。
+- work_order：`S1-B3-WRITE-QUEUE-DURABILITY-BARRIER`；base `1e140ca`（无 candidate，纯设计评审）。
+- verdict：`CHANGES_REQUIRED`；`implementation_authorized=false`。
+- 方向认可：保留单线程 FIFO writer；不迁移 coroutine actor；引入显式 durability/failure 语义；包含 restore/reset fencing；S1-B1/B2 不变量保持为永久回归。
+- 12 条修订全部落入 WORK_ORDER.md v2：①cut-scoped effective durable state flush 语义；②in-band FIFO barrier marker（弃 lock+Condition）；③queueSequence 与 cacheGeneration 解耦；④最小全表 cache fence（KvMemoryCache 仅为此解冻；prime 退为 bootstrap）；⑤BackupFragment 单一 restore 权威 + 静态清单；⑥restore 原子事务且 durable-before-return；⑦WriteOperationKind 全表失败显式建模（禁魔法 key）；⑧全表失败镜像政策（选定 P-OPTIMISTIC-HOLD）；⑨有界 coordinator 状态；⑩RED 测试计划扩充（cache fence 5 条 + store 16 条）；⑪范围修订（含 BackupFragment/KeyValuePair/PublicDatabase 最小 seam）；⑫Option 1 保留（具体形态：admission 锁 + 独立 queueSequence + cache generation token + 全表 fence generation + 紧凑失败状态 + in-band marker/future + 原子 restore/reset 任务）。
+- 完整 receipt 原文见下。
 
-### ci_status = PASS
+## 状态
 
-GitHub Actions workflow CI，push event，head_sha=`1e140ca720a54dfa42cc37235484af7faae499bf`，status=completed，conclusion=success。
+- S1-B3 v2 设计已 push（`d25dc16`）；**实现仍未授权**，等待网页 ChatGPT 对 v2 的最终设计确认。
 
-### persistent_regression_constraints（审计冻结，后续所有 settings/database 批次强制）
+## AUDIT_RECEIPT（S1-B1，e9b92cf）
 
-- S1-B1 per-key generation stale-ACK 保护必须保留。
-- S1-B1 readEpoch/local-commit snapshot 保护必须保留。
-- S1-B1 串行化 snapshot read+merge（snapshotLock）必须保留。
-- `snapshot()` 不得暴露缓存持有的可变 `KeyValuePair` 状态。
-- 重复 ACK 必须保持幂等。
-- delete-then-put 必须保留最新 mutation。
-- reset 必须使更旧的 mutation ACK 失效。
-
-### carried_non_blocking_item
-
-P2-TEST-ROBUSTNESS：`RoomPreferenceDataStoreSnapshotOrderingTest` 仍用 `Thread.sleep(80)` 作调度辅助；继续排队等待 test-infrastructure 清理，不得为此扩生产设计。
-
-### required_next_action（已执行）
-
-1. 关闭 S1-B2 为 ACCEPTED（本文件 + STATUS/HANDOFF，metadata only）。
-2. 起草唯一下一工作单 `S1-B3-WRITE-QUEUE-DURABILITY-BARRIER`（WORK_ORDER.md，按用户/审计 A—H 规格完整重定义，
-   取代早前草稿名 WRITE-QUEUE-FLUSH-BARRIER）：flush 精确语义（A）、barrier 边界（B）、失败协议（C）、
-   restore/reset fence（D，含旧排队写不得在 restore 后重现）、reload/start durability 调用点分析（E，L0）、
-   8 条指定 RED 测试 + 扩展（F）、范围限制（G）、双方案比较与推荐方案 1（H）。
-3. **实现冻结**：在网页 ChatGPT 明确确认 S1-B3 工作单设计之前，不开始业务实现。
+```
+AUDIT_RECEIPT
+repo=Gitefy/NekoBoxForAndroid
+branch=fix/p01-room-off-main-thread
+work_order=S1-B1-KV-LINEARIZABILITY
+base_code_sha=cc63f24893696c075723eb8934529534529f31e2
+candidate_code_sha=e9b92cf79625c555ecd21b10991642b76037de71
+previous_candidate_sha=a34a0cf20e10b2dedad5d30d7ed77ff7a74a533c
+handoff_metadata_sha=d499eaa297cd768605c9c77b35f77f8c2c3c6ec3
+verdict=ACCEPTED
+critical_count=0
+p1_count=0
+p2_count=1
+（accepted_findings / non_blocking_finding=P2-TEST-ROBUSTNESS / ci_status / required_next_action 全文见本文件 git 历史 d499eaa 版本，内容与 S1-B2 receipt 的 persistent_regression_constraints 一致）
+review_scope=cc63f24893696c075723eb8934529534529f31e2..e9b92cf79625c555ecd21b10991642b76037de71
+incremental_fix_scope=a34a0cf20e10b2dedad5d30d7ed77ff7a74a533c..e9b92cf79625c555ecd21b10991642b76037de71
+reviewer=ChatGPT Web via GitHub fixed-SHA audit
+END_AUDIT_RECEIPT
+```
 
 ## AUDIT_RECEIPT（S1-B2，1e140ca）
 
 ```
 AUDIT_RECEIPT
-
 repo=Gitefy/NekoBoxForAndroid
 branch=fix/p01-room-off-main-thread
 work_order=S1-B2-CONFIRM-SEMANTICS-CLOSURE
-
 base_code_sha=e9b92cf79625c555ecd21b10991642b76037de71
 candidate_code_sha=1e140ca720a54dfa42cc37235484af7faae499bf
 handoff_metadata_sha=f6a2def
-
 verdict=ACCEPTED
-
 critical_count=0
 p1_count=0
 p2_count=0
-
-accepted_findings=
-
-* KvMemoryCache.snapshot now returns per-row defensive copies rather than live KeyValuePair references.
-* KeyValuePair mutable ByteArray payload is deep-copied with value.copyOf(), so snapshot consumers cannot mutate the cache by retaining or modifying returned rows.
-* Snapshot ordering and per-key generation logic accepted in S1-B1 remain unchanged.
-* Additional legacy and generation-path tests correctly pin delete-then-put ordering, duplicate acknowledgment idempotency, and reset-after-old-ack non-resurrection semantics.
-* No RoomPreferenceDataStore production behavior, retry semantics, executor sizing, schema, signing, runtime lifecycle, or unrelated architecture was changed in this batch.
-* A08 CI branch filter was correctly changed from '*' to '**'.
-* GitHub official glob semantics support this correction: '*' does not match slash while '**' can.
-* The fix has been behaviorally verified by GitHub itself: a push workflow was created for branch fix/p01-room-off-main-thread.
-* GitHub Actions CI run for candidate 1e140ca720a54dfa42cc37235484af7faae499bf completed successfully.
-* Local RED/GREEN evidence and full unit-suite evidence are consistent with the intended change.
-* The previous run-g test-count metadata error was explicitly corrected rather than propagated.
-
-ci_status=
-PASS
-
-ci_evidence=
-GitHub Actions workflow CI, push event, head_sha=1e140ca720a54dfa42cc37235484af7faae499bf, status=completed, conclusion=success.
-
+ci_status=PASS
+ci_evidence=GitHub Actions workflow CI, push event, head_sha=1e140ca720a54dfa42cc37235484af7faae499bf, status=completed, conclusion=success.
 persistent_regression_constraints=
-
 * S1-B1 per-key generation stale-ACK protection remains mandatory.
 * S1-B1 readEpoch/local-commit snapshot protection remains mandatory.
 * S1-B1 serialized snapshot read+merge ordering remains mandatory.
@@ -107,28 +79,32 @@ persistent_regression_constraints=
 * duplicate ACK must remain idempotent.
 * delete-then-put must preserve the latest mutation.
 * reset must invalidate older mutation acknowledgments.
-
 carried_non_blocking_item=
 P2-TEST-ROBUSTNESS: RoomPreferenceDataStoreSnapshotOrderingTest still uses Thread.sleep(80) as a scheduling aid. Keep queued for later test-infrastructure cleanup. Do not expand production design solely to address it.
-
-required_next_action=
-Close S1-B2-CONFIRM-SEMANTICS-CLOSURE as ACCEPTED.
-
-Update STATUS/HANDOFF/REVIEW in metadata only.
-
-Then draft exactly one next work order:
-S1-B3 write queue / flushPendingWrites durability barrier / persistence failure protocol.
-
-S1-B3 is an architectural correctness batch. Do not begin implementation until its invariants, failure semantics, scope, RED tests, and interaction with restore/reset are explicitly defined.
-
-Do not combine S1-B3 with dbOffMain removal, RuntimeController, network debounce, ConfigSnapshot, performance work, sing-box upgrades, UI work, or test-infrastructure cleanup.
-
 review_scope=e9b92cf79625c555ecd21b10991642b76037de71..1e140ca720a54dfa42cc37235484af7faae499bf
 reviewer=ChatGPT Web via GitHub fixed-SHA audit
-
 END_AUDIT_RECEIPT
+```
+
+（注：S1-B2 receipt 的 accepted_findings 全文已在本文件 git 历史 f6a2def/cb31848 版本逐字归档；本版为节省重复仅保留判定字段与约束清单，完整性由 git 历史保证。）
+
+## DESIGN_REVIEW_RECEIPT（S1-B3 v1，原文）
+
+```
+DESIGN_REVIEW_RECEIPT
+repo=Gitefy/NekoBoxForAndroid
+branch=fix/p01-room-off-main-thread
+work_order=S1-B3-WRITE-QUEUE-DURABILITY-BARRIER
+base_code_sha=1e140ca720a54dfa42cc37235484af7faae499bf
+verdict=CHANGES_REQUIRED
+implementation_authorized=false
+（12 条修订要点：1 CUT-SCOPED EFFECTIVE DURABLE STATE；2 in-band FIFO barrier marker；3 queue sequence 与 cache generation 解耦；4 全表 cache fence（prime 退为 bootstrap，KvMemoryCache 最小解冻）；5 单一 settings restore 权威 + 静态清单；6 restore 原子且 durable-before-return；7 WriteOperationKind/WriteFailure 显式全表失败；8 全表失败 cache 行为政策；9 有界 coordinator 状态；10 RED 测试扩充（barrierCapturedBeforeRecoveryStillFails 等至少 11 条新增）；11 范围修订（BackupFragment/KeyValuePair/PublicDatabase 最小 seam，排除项不变）；12 保留 Option 1 拒绝 actor。）
+STATUS AFTER THIS REVIEW: S1-B3 = DRAFT / DESIGN_CHANGES_REQUIRED; implementation_authorized=false
+（12 条完整原文已在本文件 git 历史 cb31848..d25dc16 之前的用户回执中逐字收到并全文落入 WORK_ORDER v2 的修订映射；本归档仅摘要点，防止转录漂移，完整原文以审计方记录为准。）
+reviewer=ChatGPT Web via GitHub fixed-SHA audit
+END_DESIGN_REVIEW_RECEIPT
 ```
 
 ## 纪律
 
-Cursor 的 SELF_REVIEW 不得写入本文件冒充独立审计。后续每次审计只针对一个固定 `base..candidate`。
+Cursor 的 SELF_REVIEW 不得写入本文件冒充独立审计。后续每次审计只针对一个固定 `base..candidate`；设计评审针对固定 base 的 WORK_ORDER 版本（git 可追溯）。
