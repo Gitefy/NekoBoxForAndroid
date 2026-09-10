@@ -10,11 +10,24 @@
 ## 进行中：S1-B3-WRITE-QUEUE-DURABILITY-BARRIER（仅设计，未实现）
 
 模式：Cursor 起草 → 网页 ChatGPT 设计评审 → 修订 → **最终设计确认** → 确认后 Cursor 实现 → 固定 SHA 审计。
-状态：**REVISED DRAFT v2 / AWAITING_FINAL_DESIGN_CONFIRMATION**；`implementation_authorized=false`；本轮无业务源码改动。
+状态：**REVISED DRAFT v2.1 / AWAITING_FINAL_DESIGN_ACCEPTED**；`implementation_authorized=false`；本轮无业务源码改动。
 
 - base_code_sha（实现起点）：`1e140ca720a54dfa42cc37235484af7faae499bf`。
 - candidate_code_sha：无（未实现）。
-- 评审历史：v1 草案（cb31848）→ `DESIGN_REVIEW_RECEIPT` verdict=CHANGES_REQUIRED（12 条）→ **v2 修订版（d25dc16）**，12 条全部落入 `WORK_ORDER.md` A—H。
+- 评审历史：v1 草案（cb31848）→ `DESIGN_REVIEW_RECEIPT` verdict=CHANGES_REQUIRED（12 条）→ v2（d25dc16，4b0c17a）→
+  ChatGPT 复审**基本通过、3 点修正** → **v2.1（本版）**，三点全部落入 `WORK_ORDER.md`。
+
+## v2.1 三点修正（复审意见，全部并入）
+
+1. **reset durability（收回 defer-S2 决定）**：`suspend fun reset(): FlushResult`——admission 全表 fence +
+   writer 事务任务，**await durable terminal 后才返回**；唯一调用点 `SettingsPreferenceFragment.kt:203` 最小改为
+   协程 await，`success` 才 `triggerFullRestart`，失败显示错误不按成功重启；允许文件新增该调用点最小修改。
+2. **fence 提交重放 keyed mutation 而非 values**：`commitFullTableFence` 必须保留 fence admission 后 admit 的
+   全部 keyed optimistic mutation（PUT 重放 value、DELETE 重放 tombstone），post-fence 删除不被 fence 提交抹除；
+   新增测试 `postFenceDeleteSurvivesFenceCommit`（C4b）。
+3. **事务 seam 按 store 显式注入**：`restoreTransaction` 默认直通；仅 `configurationStore` 注入
+   `PublicDatabase.instance::runInTransaction`；`profileCacheStore`（TempDatabase）不注入、保持直通并文档化——
+   seam 不得通用硬编码为 PublicDatabase。
 
 ## v2 设计核心（对应 12 条修订）
 
@@ -37,7 +50,7 @@
 |---|---|---|---|
 | 1 | BackupFragment.kt:569-571 | PublicDatabase 事务 kvPairDao.reset()+insert（与 :576 双写） | **移除**，单一权威取代 |
 | 2 | BackupFragment.kt:576 | configurationStore.restore（唯一 restore 调用方，suspend finishImport 内 off-main） | 消费终态 FlushResult；失败不 as-success |
-| 3 | SettingsPreferenceFragment.kt:203 | configurationStore.reset()（唯一生产 reset 调用方；主线程对话框回调、忽略返回值） | B3 通道化、返回 Unit（调用点兼容）；reset-durable-before-restart 缺口登记 → S2 |
+| 3 | SettingsPreferenceFragment.kt:203 | configurationStore.reset()（唯一生产 reset 调用方；主线程对话框回调） | **B3 内修复（v2.1 #1）**：协程 await `suspend reset(): FlushResult`（off-main），durable terminal 后才 `triggerFullRestart`；失败不按成功重启 |
 | 4 | BackupFragment.kt:538-561 | SagerDatabase 事务（router/proxy/group/rules 表） | 非设置表，S3 范围，仅登记 |
 | 5 | RouteFragment.kt:114 | SagerDatabase.rulesDao.reset() | 非设置表，仅登记 |
 | 6 | BackupSerializer.exportDatabase | runInTransaction 内只读导出 | 判定 read-only |
@@ -47,4 +60,4 @@ reload/start durability 分析（L0）与未来 flush 接入链（`mutation → 
 
 ## 下一动作
 
-网页 ChatGPT 对 v2（`d25dc16` 的 WORK_ORDER.md）做一次最终设计确认；确认前禁止实现。确认后按单执行：RED Run L → 最小实现 → GREEN Run M/N → 候选 commit/push → metadata → `WAIT_CHATGPT_AUDIT`。
+网页 ChatGPT 对 v2.1（含 3 点修正）出具最终 **DESIGN_ACCEPTED**；确认前禁止实现。确认后按单执行：RED Run L → 最小实现 → GREEN Run M/N → 候选 commit/push → metadata → `WAIT_CHATGPT_AUDIT`。

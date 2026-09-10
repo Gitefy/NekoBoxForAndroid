@@ -9,20 +9,20 @@
 | observed_local_head | 见 HANDOFF（本轮 metadata commit） |
 | observed_local_branch | fix/p01-room-off-main-thread |
 | observed_upstream | origin/fix/p01-room-off-main-thread |
-| current_phase | S1（B1 ACCEPTED；B2 ACCEPTED+CI PASS；B3 REVISED DRAFT v2 / AWAITING_FINAL_DESIGN_CONFIRMATION） |
+| current_phase | S1（B1 ACCEPTED；B2 ACCEPTED+CI PASS；B3 REVISED DRAFT v2.1 / AWAITING_FINAL_DESIGN_ACCEPTANCE） |
 | current_work_order | S1-B3-WRITE-QUEUE-DURABILITY-BARRIER |
-| work_order_state | DRAFTED / DESIGN_CHANGES_REQUIRED 已修订（v2, d25dc16）；implementation_authorized=false |
+| work_order_state | v2 复审**基本通过**；3 点修正已并入 v2.1；AWAITING_FINAL_DESIGN_ACCEPTED；implementation_authorized=false |
 | current_state | PLAN_NEXT_BATCH |
 | write_owner | Cursor |
 | working_tree_state | 仅 S1-B3 设计/交接文档变更；无业务源码改动 |
 | base_code_sha | 1e140ca720a54dfa42cc37235484af7faae499bf（= S1-B2 accepted candidate） |
 | candidate_code_sha | 无（S1-B3 未产出候选；实现待最终设计确认） |
 | handoff_metadata_sha | 本 commit |
-| github_push_state | S1-B2 候选 1e140ca 已推送且 GitHub Actions CI PASS；S1-B3 v1 设计 CHANGES_REQUIRED 已按 12 条修订为 v2 并推送 |
-| latest_audit_verdict | S1-B2 `ACCEPTED`（CI PASS）；S1-B3 v1 设计 `CHANGES_REQUIRED`（12 条，已全部落入 v2） |
+| github_push_state | S1-B2 候选 1e140ca 已推送且 GitHub Actions CI PASS；S1-B3 v1 CHANGES_REQUIRED→v2（d25dc16）→复审 3 点修正→v2.1（本轮） |
+| latest_audit_verdict | S1-B2 `ACCEPTED`（CI PASS）；S1-B3 v1 设计 `CHANGES_REQUIRED`（12 条→v2）→ v2 复审基本通过、3 点修正已并入 v2.1 |
 | last_accepted_batch | S1-B2-CONFIRM-SEMANTICS-CLOSURE |
 | last_accepted_code_sha | 1e140ca720a54dfa42cc37235484af7faae499bf |
-| next_action | 网页 ChatGPT 对 v2（A—H，含静态清单与全表失败政策 P-OPTIMISTIC-HOLD）做**一次最终设计确认** → 才允许按单实现（RED Run L → 最小实现 → GREEN Run M/N → 候选 push → WAIT_AUDIT） |
+| next_action | 网页 ChatGPT 出具最终 **DESIGN_ACCEPTED**（v2.1 三点修正已并入）→ 才允许按单实现（RED Run L → 最小实现 → GREEN Run M/N → 候选 push → WAIT_AUDIT） |
 
 ## 阶段状态
 
@@ -59,10 +59,10 @@
 ## 遗留项
 
 - P2-TEST-ROBUSTNESS：`SnapshotOrderingTest` 内 `Thread.sleep(80)` → 后续 test-infrastructure 清理批；**不在 S1-B3 顺手修**。
-- reset-before-restart 缺口（`SettingsPreferenceFragment.kt:203` 主线程 reset + `triggerFullRestart` 进程重启，排队 reset 可能未 durable）→ 已在工作单 E 节记录，S2 用 flush-before-restart 握手关闭。
+- ~~reset-before-restart 缺口~~ → **已按 ChatGPT 复审意见收回并纳入 B3 v2.1**（`suspend reset()` await + 调用点成功才 restart，见 WORK_ORDER D.2/静态清单 #3）。
 - e9b92cf run-g 计数更正（131→124）已落档；后续以 `TEST-*.xml` 汇总为准。
 
 ## 状态纪律
 
 业务批次完成后必须存在固定 `candidate_code_sha` 与 ChatGPT verdict 才能进入下一业务批次；`SELF_REVIEW` 不得冒充独立审计。
-S1-B3 为架构批：v1 设计 CHANGES_REQUIRED（12 条）→ v2 已修订；**最终设计确认前禁止实现**。
+S1-B3 为架构批：v1 设计 CHANGES_REQUIRED（12 条）→ v2 → 复审基本通过、3 点修正并入 v2.1；**最终 DESIGN_ACCEPTED 前禁止实现**。

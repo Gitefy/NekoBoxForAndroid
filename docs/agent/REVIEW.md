@@ -25,9 +25,18 @@ scope `cc63f248..a34a0cf`，verdict `CHANGES_REQUIRED`（P1-SNAPSHOT-ORDERING）
 
 - work_order：`S1-B3-WRITE-QUEUE-DURABILITY-BARRIER`；base `1e140ca`（无 candidate，纯设计评审）。
 - verdict：`CHANGES_REQUIRED`；`implementation_authorized=false`。
-- 方向认可：保留单线程 FIFO writer；不迁移 coroutine actor；引入显式 durability/failure 语义；包含 restore/reset fencing；S1-B1/B2 不变量保持为永久回归。
 - 12 条修订全部落入 WORK_ORDER.md v2：①cut-scoped effective durable state flush 语义；②in-band FIFO barrier marker（弃 lock+Condition）；③queueSequence 与 cacheGeneration 解耦；④最小全表 cache fence（KvMemoryCache 仅为此解冻；prime 退为 bootstrap）；⑤BackupFragment 单一 restore 权威 + 静态清单；⑥restore 原子事务且 durable-before-return；⑦WriteOperationKind 全表失败显式建模（禁魔法 key）；⑧全表失败镜像政策（选定 P-OPTIMISTIC-HOLD）；⑨有界 coordinator 状态；⑩RED 测试计划扩充（cache fence 5 条 + store 16 条）；⑪范围修订（含 BackupFragment/KeyValuePair/PublicDatabase 最小 seam）；⑫Option 1 保留（具体形态：admission 锁 + 独立 queueSequence + cache generation token + 全表 fence generation + 紧凑失败状态 + in-band marker/future + 原子 restore/reset 任务）。
 - 完整 receipt 原文见下。
+
+## 复审（S1-B3 v2）— 基本通过，3 点修正（网页 ChatGPT，2026-06）
+
+- verdict：v2 **基本通过**；仅 3 点修正；禁止重新扫描/重新设计/实现代码；只改 WORK_ORDER/STATUS。
+- 修正 1（reset durability）：不得 enqueue+Unit 后立即 triggerFullRestart；B3 内保证 reset durable terminal 后才 restart；`SettingsPreferenceFragment` 调用点允许最小修改为 suspend/off-main await FlushResult，失败不得按成功重启；**不推迟 S2**。
+- 修正 2（full-table fence）：`commitFullTableFence` 必须保留 fence admission 后全部 keyed optimistic mutation（PUT 与 DELETE tombstone），不能只"重放 values"；新增测试 `postFenceDeleteSurvivesFenceCommit`。
+- 修正 3（transaction seam）：store 同时用于 configurationStore/profileCacheStore；seam 不得通用硬编码为 PublicDatabase；由对应 store 显式注入正确 DB transaction seam，或仅使 seam 在需要的 configurationStore 路径生效。
+- 处置：三点全部并入 WORK_ORDER.md v2.1（D.2/D.1/C4b/D.3/G/K 同步修订；遗留项中 defer-S2 决定收回）；STATUS/HANDOFF 同步。
+- 其余 v2 设计全部保持不变；不新增方案、不增加测试矩阵、不扩大研究。
+- 等待：最终 `DESIGN_ACCEPTED`；`implementation_authorized` 仍为 false。
 
 ## 状态
 

@@ -1,11 +1,11 @@
 # 当前工作单：S1-B3-WRITE-QUEUE-DURABILITY-BARRIER（REVISED DRAFT v2 — 待最终设计确认，未实现）
 
-状态：DRAFTED / DESIGN_CHANGES_REQUIRED（v2 已按 DESIGN_REVIEW_RECEIPT 全部 12 条修订；implementation_authorized=false）。
+状态：DRAFTED / AWAITING_FINAL_DESIGN_ACCEPTED（v2 已通过 12 条评审；ChatGPT 复审**基本通过、3 点修正**已并入本 v2.1；implementation_authorized=false）。
 Owner：Cursor。
 独立审计：网页 ChatGPT（固定 GitHub SHA；v1 设计被 CHANGES_REQUIRED 退回，本 v2 待**一次最终设计确认**）。
 base_code_sha：`1e140ca720a54dfa42cc37235484af7faae499bf`（S1-B2 accepted candidate，CI PASS）。
-修订历史：v1（WRITE-QUEUE-FLUSH-BARRIER 草案）→ DESIGN_REVIEW_RECEIPT（12 条 CHANGES_REQUIRED）→ **本 v2**。
-取代：v1 全文。v1 中"KvMemoryCache 冻结 / restore 推迟 S3 / sequence==generation 1:1 / lock+Condition barrier"均被本 v2 取代。
+修订历史：v1（WRITE-QUEUE-FLUSH-BARRIER 草案）→ DESIGN_REVIEW_RECEIPT（12 条 CHANGES_REQUIRED）→ v2 → ChatGPT 复审（**基本通过，3 点修正**）→ **本 v2.1**。
+取代：v1 全文（"KvMemoryCache 冻结 / restore 推迟 S3 / sequence==generation 1:1 / lock+Condition barrier" 均废）；v2.1 再废 v2 的三点：reset 返回 Unit+defer-S2、"只重放 values"、事务 seam 通用化。
 
 ## 0. 本单性质与停止条件
 
@@ -42,7 +42,7 @@ data class FlushResult(val success: Boolean, val completed: Int, val failures: L
 
 suspend fun flushPendingWrites(): FlushResult      // 公开；在 Dispatchers.IO 上可取消等待 marker future
 fun restore(rows: List<KeyValuePair>): FlushResult // 语义修订：阻塞至 fence 终态，不再 enqueue-and-return（见 D.4）
-fun reset(): Unit                                  // 语义修订：走通道 fence；调用点清单见 E/静态清单
+suspend fun reset(): FlushResult                   // v2.1 修订：durable terminal 后才返回；调用点 await，见 D.2/静态清单 #3
 ```
 
 - **时钟解耦（review 第 3 条）**：`queueSequence`（coordinator）与 `cacheGeneration`（cache）是**不同时钟**，
@@ -126,8 +126,10 @@ admission 临界区（cache 锁内一次完成）——`beginFullTableFence`：
 `values` 置为 optimisticRows（乐观全表态，read-your-writes）→ 置 `pendingFullTable`。
 
 `commitFullTableFence`（writer 任务完成回调，cache 锁内）：
-先快照 post-fence keyed 乐观值（`pendingGenerations` 中 fence 之后 admit 的项）→ `values` 替换为 authoritativeRows →
-重放 post-fence 乐观值并保留其 pending（**post-fence keyed 写不被 fence 完成抹除**）→
+先快照 fence admission 之后 admit 的**全部 keyed pending mutation——PUT 与 DELETE tombstone 都要**（来自
+`pendingGenerations` 中 fence 之后 admit 的项）→ `values` 替换为 authoritativeRows → **按 mutation 重放**：
+PUT 重放乐观 value、DELETE 重放 tombstone（保证该 key 在提交后的镜像中不出现），并保留其 pending
+（**post-fence keyed 写与删都不被 fence 完成抹除**；v2.1 第 2 条修正 v2 的"只重放 values"）→
 `lastCommittedFullTableEpoch = committedEpoch`（**读序 guard**：`merge(list, readEpoch)` 中
 `readEpoch < lastCommittedFullTableEpoch` 的快照视为 stale，不应用、不删除——旧快照无法回滚 fence）→
 `pendingFullTable = false`。
@@ -145,9 +147,13 @@ fresh 快照照常应用（属性 5）。既有 keyed guard（`pendingKeys || la
   `cache.abortFullTableFence(epoch)` + ledger FAILED_PERMANENT（`WriteFailure(RESTORE, null, reason)`）。
   FIFO 总序保证：pre-restore 排队写先落盘、再被事务内 `reset` 抹除——**旧排队写不可能在 restore 落盘后重现**
   （RED 测试 5）；post-restore 写排在其后，落在新库（新 epoch）。
-- **reset()**：admission → `cache.beginFullTableFence(emptyList())` → writer 任务 `dao.reset()`（包在同一
-  restoreTransaction seam 内，单语句事务）→ commit/abort 同上。legacy `cache.reset()`/`PENDING_RESET`
-  路径保留给既有测试与兼容，生产不再使用。
+- **reset()**：`suspend fun reset(): FlushResult` —— admission → `cache.beginFullTableFence(emptyList())` →
+  writer 任务 `dao.reset()`（包在 restoreTransaction seam 内，单语句事务）→ commit/abort 同上；
+  **await 全表 fence 终态后才返回**（Dispatchers.IO 可中断等待，durable-before-return 语义同 restore）。
+  唯一调用点 `SettingsPreferenceFragment.kt:203` 最小修改：对话框确认改为协程内
+  `val r = configurationStore.reset()`（suspend 内部 hop IO，off-main await）→ **仅 `r.success` 才
+  `triggerFullRestart(ctx)`**；失败显示错误、不得按成功重启（v2.1 第 1 条，B3 内修复，不推迟 S2）。
+  legacy `cache.reset()`/`PENDING_RESET` 路径保留给既有测试与兼容，生产不再使用。
 - **全表失败镜像策略（review 第 8 条，先选政策再写码）**——**选定政策 P-OPTIMISTIC-HOLD**：
   1. 永久失败后 getters 看到**乐观 fence 态**（restore=rows / reset=空）——与 keyed 失败的乐观语义一致（I5）；
   2. 失败 fence **不 stamp 读序保护**：fresh snapshot（反映 DB 真值=旧数据）**允许**应用，逐步把镜像拉回真值
@@ -158,10 +164,12 @@ fresh 快照照常应用（属性 5）。既有 keyed guard（`pendingKeys || la
   5. 失败后的 keyed 写：照常 admit/执行/记账（它们写的是真实 DB 旧态），其结果按普通 keyed 规则参与后续 barrier；
      全局失败仍由 fence 槽表达直到被成功 fence 取代。
 
-### D.3 原子性 seam（review 第 6 条：不得用非事务 reset+insert 替换 BackupFragment 现有事务）
+### D.3 原子性 seam（review 第 6 条：不得用非事务 reset+insert 替换 BackupFragment 现有事务；v2.1 第 3 条修订）
 
-`RoomPreferenceDataStore` 构造函数新增可选参数 `restoreTransaction: (() -> Unit) -> Unit = { it() }`；
-`DataStore.kt` 注入 `PublicDatabase.instance::runInTransaction`。restore/reset 的 writer 任务把
+`RoomPreferenceDataStore` 构造函数新增可选参数 `restoreTransaction: (() -> Unit) -> Unit = { it() }`（默认直通，
+即"仅在显式注入时生效"）。**seam 不通用硬编码**：`configurationStore`（PublicDatabase）由 `DataStore.kt` 注入
+`PublicDatabase.instance::runInTransaction`；`profileCacheStore`（TempDatabase）**不注入**，保持直通默认——
+事务语义只作用于显式声明的 configurationStore 路径。restore/reset 的 writer 任务把
 `dao.reset()+dao.insert(rows)` 包在该 seam 内执行 → 真实运行时由 Room 事务保证原子（成功全有或全无）；
 测试注入可控 fake（模拟回滚）验证 `restoreReplacementIsAtomicOnInsertFailure`。
 不改 `KeyValuePair.kt`/`PublicDatabase.kt`，除非实现证明 DAO 默认方法 seam 不可行（须在 HANDOFF 论证）。
@@ -183,7 +191,7 @@ fresh 快照照常应用（属性 5）。既有 keyed guard（`pendingKeys || la
 |---|---|---|---|
 | 1 | `BackupFragment.kt:569-571`（`PublicDatabase.instance.runInTransaction { kvPairDao.reset(); kvPairDao.insert(decodedSettings) }`） | 设置表 reset+insert（与 576 的 store.restore **双写**） | **移除**；由 `configurationStore.restore()` 单一权威取代（事务 seam 见 D.3） |
 | 2 | `BackupFragment.kt:576`（`DataStore.configurationStore.restore(decodedSettings)`，`suspend finishImport` 内，off-main） | restore 唯一调用方 | 消费终态 FlushResult；失败不继续 as-success |
-| 3 | `SettingsPreferenceFragment.kt:203`（`DataStore.configurationStore.reset()`，主线程对话框回调，忽略返回值，随后 `triggerFullRestart()`） | reset 唯一生产调用方 | B3 改为通道 fence、返回 Unit（调用点兼容）；**记录缺口**：`triggerFullRestart` = stopService + delay(500) + ProcessPhoenix rebirth（进程死亡），排队 reset 可能未 durable——**不在 B3 修**，S2 用 flush-before-restart 握手关闭 |
+| 3 | `SettingsPreferenceFragment.kt:203`（`DataStore.configurationStore.reset()`，主线程对话框回调，随后 `triggerFullRestart()`） | reset 唯一生产调用方 | **B3 内修复（v2.1 第 1 条，不推迟 S2）**：调用点最小改为协程内 `suspend reset()` await FlushResult（off-main），**durable terminal 后才 restart**；失败显示错误、不按成功重启 |
 | 4 | `BackupFragment.kt:538-561`（SagerDatabase.runInTransaction：router/proxy/group/rules 表） | **非设置表**（SagerDatabase） | 不属于设置通道范围（S3/D06 两库恢复处理）；仅登记 |
 | 5 | `RouteFragment.kt:114`（`SagerDatabase.rulesDao.reset()`） | 非 设置表 | 仅登记（S3 范围） |
 | 6 | `BackupSerializer.exportDatabase`（runInTransaction 内只读） | 只读导出 | 判定 read-only，无需路由 |
@@ -207,6 +215,7 @@ MainActivity.kt:525/531、Utils.kt:233、SwitchActivity.kt:33、QuickToggleShort
 | C2 | `staleSnapshotStartedBeforeRestoreCannotRollbackRestore` | captureReadEpoch → begin+commit(rows) → merge(staleSnapshot, readEpoch) → rows 存活 |
 | C3 | `staleSnapshotStartedBeforeResetCannotResurrectRows` | 同上，rows=empty → 空 table 存活，旧行不复活 |
 | C4 | `postFenceKeyedWriteSurvivesFenceCommit` | begin(rows) → post-fence put → commit → put 值存活且 pending 保留 |
+| C4b | `postFenceDeleteSurvivesFenceCommit` | begin(rows) → post-fence delete → commit → tombstone 重放：该 key 在镜像中不出现且 pending 保留（v2.1 第 2 条） |
 | C5 | `freshSnapshotAfterFenceStillApplies` | commit 后 fresh readEpoch 的 merge 照常应用远端行 |
 
 **store/coordinator 层（`PreferenceWriteQueueTest.kt` 等）**——原 8 条 + review 追加 11 条：
@@ -245,6 +254,8 @@ RED 形式：fence/flush/coordinator API 在 base `1e140ca` 不存在 → Run L 
 - `PreferenceWriteCoordinator.kt`（确有职责聚合才新增）
 - `KvMemoryCache.kt` **仅限 D.1 全表 fence 最小语义**（begin/commit/abort + merge 守卫扩展 + 单时钟 fence 代；其余冻结）
 - `BackupFragment.kt` **仅限**移除带外设置写（#1）并消费 authoritative restore 结果（D.4）
+- `SettingsPreferenceFragment.kt` **仅限** reset 调用点最小修改：协程 await FlushResult，成功才 restart（v2.1 第 1 条）
+- `DataStore.kt` **仅限**为 configurationStore 显式注入 PublicDatabase 事务 seam（v2.1 第 3 条）
 - `KeyValuePair.kt` / `PublicDatabase.kt` 仅当 D.3 seam 不可行时的原子事务最小改动
 - 对应 JVM tests + metadata/evidence
 
@@ -283,11 +294,11 @@ P2-TEST-ROBUSTNESS（`Thread.sleep(80)`）、无关重构、SagerDatabase 非设
 cwd=仓库根；shell=PowerShell；GREEN exit 0 且 0 failures；证据 `docs/agent/evidence/s1-b3/`（Run L=RED、M/N=GREEN）。
 回退：revert 本批单 commit 回 `1e140ca`；FlushResult/fence 为新增 API，回退无破坏；无 schema/签名变更。
 分支：`fix/p01-room-off-main-thread`（非 main）。
-**停止条件：网页 ChatGPT 最终确认本 v2 设计后才实现**；实现完成后 `WAIT_CHATGPT_AUDIT`；
+**停止条件：网页 ChatGPT 出具最终 DESIGN_ACCEPTED 后才实现**（v2.1 三点修正已并入本文件）；实现完成后 `WAIT_CHATGPT_AUDIT`；
 ACCEPTED 后 S1 仅剩阶段验收核对（B1—B3 + I1—I8），再签发 S2-B1；CHANGES_REQUIRED 只修本批。
 
 ## K. 明确不在本批
 
-S2 关键操作握手（把 flush 接进 reload/start/reset-before-restart）、restore 完整重写（S3/D06：两库、中断恢复、
-SagerDatabase 表）、prime 失败 UI 状态机（S2/D05）、双进程验证（S2-B3）、dbOffMain/runBlocking 全局改造、
-P2-TEST-ROBUSTNESS 清理。
+S2 关键操作握手（把 flush 接进 reload/start；**reset-before-restart 已由本批 v2.1 第 1 条修复，不再是 S2 项**）、
+restore 完整重写（S3/D06：两库、中断恢复、SagerDatabase 表）、prime 失败 UI 状态机（S2/D05）、双进程验证（S2-B3）、
+dbOffMain/runBlocking 全局改造、P2-TEST-ROBUSTNESS 清理。
