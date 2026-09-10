@@ -320,6 +320,14 @@ fun buildConfig(
     val needSniff = DataStore.trafficSniffing > 0
     val externalIndexMap = ArrayList<IndexEntity>()
     val ipv6Mode = if (forTest) IPv6Mode.ENABLE else DataStore.ipv6Mode
+    val dialerFallbackDelay = if (DataStore.concurrentDial) "300ms" else "900ms"
+    val dialerConnectTimeout = "5s"
+    fun SingBoxOption.applyDialerTuning() {
+        if (forTest) return
+        if (this is Outbound_SelectorOptions || this is Outbound_URLTestOptions) return
+        _hack_config_map["fallback_delay"] = dialerFallbackDelay
+        _hack_config_map["connect_timeout"] = dialerConnectTimeout
+    }
 
     fun genDomainStrategy(noAsIs: Boolean): String {
         return when {
@@ -651,6 +659,7 @@ fun buildConfig(
                     _hack_config_map["tag"] = tagOut
 
                     _hack_custom_config = bean.customOutboundJson
+                    applyDialerTuning()
                 }
 
                 // External proxy need a dokodemo-door inbound to forward the traffic

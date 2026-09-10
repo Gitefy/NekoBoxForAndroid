@@ -5,9 +5,16 @@ import (
 )
 
 func NumUDPWorkers() int {
-	numUDPWorkers := 4
-	if num := runtime.GOMAXPROCS(0); num > numUDPWorkers {
-		numUDPWorkers = num
+	n := runtime.GOMAXPROCS(0)
+	if n < 2 {
+		return 2
 	}
-	return numUDPWorkers
+	if n > 4 {
+		return 4
+	}
+	return n
+}
+
+func TunWorkerCount() int {
+	return NumUDPWorkers()
 }

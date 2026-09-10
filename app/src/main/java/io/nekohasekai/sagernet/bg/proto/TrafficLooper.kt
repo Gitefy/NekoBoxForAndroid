@@ -203,6 +203,7 @@ class TrafficLooper
                 SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
             )
 
+            val trackedTagCountForPolicy = tagMap.size.coerceAtLeast(idMap.size)
             if (!TrafficLoopPolicy.shouldCollectTraffic(delayMs, profileTrafficStatistics)) {
                 // Nobody is listening -> skip the selection query and the IPC round-trip.
                 if (mainActivityForeground && data.state == BaseService.State.Connected) {
@@ -219,6 +220,7 @@ class TrafficLooper
                     delayMs,
                     mainActivityForeground,
                     false,
+                    trackedTagCountForPolicy,
                 ))
                 continue
             }
@@ -335,6 +337,7 @@ class TrafficLooper
                     configuredMillis = delayMs,
                     mainActivityForeground = mainActivityForeground,
                     notificationSpeedVisible = data.notification?.listenPostSpeed == true,
+                    trackedTagCount = tagMap.size,
                 )
             )
         }

@@ -4,6 +4,7 @@ import (
 	"libcore/device"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	_ "unsafe"
@@ -35,6 +36,7 @@ func InitCore(process, cachePath, internalAssets, externalAssets string,
 	if1 NB4AInterface, if2 BoxPlatformInterface, if3 LocalDNSTransport,
 ) {
 	defer device.DeferPanicToError("InitCore", func(err error) { log.Println(err) })
+	applyThermalGOMAXPROCS()
 	isBgProcess = strings.HasSuffix(process, ":bg")
 
 	neko_common.RunMode = neko_common.RunMode_NekoBoxForAndroid
@@ -77,6 +79,21 @@ func InitCore(process, cachePath, internalAssets, externalAssets string,
 			extractAssets()
 		}
 	}()
+}
+
+func applyThermalGOMAXPROCS() {
+	cpus := runtime.NumCPU()
+	limit := 4
+	if cpus < limit {
+		limit = cpus
+	}
+	if limit < 2 {
+		limit = 2
+	}
+	prev := runtime.GOMAXPROCS(limit)
+	if prev != limit {
+		log.Printf("GOMAXPROCS thermal cap: %d -> %d (NumCPU=%d)", prev, limit, cpus)
+	}
 }
 
 // sendFdToProtect is platform-specific (see sendfd_unix.go / sendfd_other.go).

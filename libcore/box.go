@@ -60,20 +60,30 @@ func formatVersionBox(coreVersion, revision string) string {
 	return strings.Join(version, "\n")
 }
 
+var (
+	resetConnMu   sync.Mutex
+	resetConnLast time.Time
+)
+
 func ResetAllConnections(system bool) {
-	if system {
-		// sing-box 1.15 removed the conntrack package. Connections dialed by
-		// outbound dialers are tracked by the box ConnectionManager, which is
-		// also what upstream closes on network changes and on the daemon's
-		// "close all connections" command.
-		if mainInstance != nil && mainInstance.connectionManager != nil {
-			mainInstance.connectionManager.CloseAll()
-			log.Println("Reset system connections done")
-		} else {
-			log.Println("Reset system connections: no running instance")
-		}
-	} else {
+	if !system {
 		log.Println("TODO: Reset user connections")
+		return
+	}
+	resetConnMu.Lock()
+	now := time.Now()
+	if !resetConnLast.IsZero() && now.Sub(resetConnLast) < 3*time.Second {
+		resetConnMu.Unlock()
+		log.Println("Reset system connections: throttled")
+		return
+	}
+	resetConnLast = now
+	resetConnMu.Unlock()
+	if mainInstance != nil && mainInstance.connectionManager != nil {
+		mainInstance.connectionManager.CloseAll()
+		log.Println("Reset system connections done")
+	} else {
+		log.Println("Reset system connections: no running instance")
 	}
 }
 
