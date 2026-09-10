@@ -138,4 +138,54 @@ class KvMemoryCacheLinearizabilityTest {
         assertEquals("local", cache.get("k")?.string)
         assertTrue(cache.hasPending("k"))
     }
+
+    @Test
+    fun deleteThenPutGenerationsAckedIndependently() {
+        val cache = KvMemoryCache()
+        cache.prime(emptyList())
+
+        val putGeneration = cache.put(row("k", "v1"))
+        val deleteGeneration = cache.delete("k")
+        val rePutGeneration = cache.put(row("k", "v2"))
+
+        cache.writeCommitted("k", row("k", "v1"), putGeneration)
+        assertEquals("v2", cache.get("k")?.string)
+        assertTrue(cache.hasPending("k"))
+
+        cache.writeCommitted("k", null, deleteGeneration)
+        assertEquals("v2", cache.get("k")?.string)
+        assertTrue(cache.hasPending("k"))
+
+        cache.writeCommitted("k", row("k", "v2"), rePutGeneration)
+        assertEquals("v2", cache.get("k")?.string)
+        assertFalse(cache.hasPending("k"))
+    }
+
+    @Test
+    fun duplicateGenerationAckIsIdempotent() {
+        val cache = KvMemoryCache()
+        cache.prime(emptyList())
+
+        val generation = cache.put(row("k", "v"))
+        cache.writeCommitted("k", row("k", "v"), generation)
+        assertFalse(cache.hasPending("k"))
+
+        cache.writeCommitted("k", row("k", "v"), generation)
+        assertEquals("v", cache.get("k")?.string)
+        assertFalse(cache.hasPending("k"))
+    }
+
+    @Test
+    fun oldGenerationAckAfterResetDoesNotResurrect() {
+        val cache = KvMemoryCache()
+        cache.prime(listOf(row("a", "1")))
+
+        val generation = cache.put(row("k", "v"))
+        cache.reset()
+        assertTrue(cache.snapshot().isEmpty())
+
+        cache.writeCommitted("k", row("k", "v"), generation)
+        assertTrue(cache.snapshot().isEmpty())
+        assertTrue(cache.hasPending(KvMemoryCache.PENDING_RESET))
+    }
 }

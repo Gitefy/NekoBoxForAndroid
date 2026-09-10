@@ -116,8 +116,13 @@ class KvMemoryCache {
 
     fun get(key: String): KeyValuePair? = lock.read { values[key] }
 
-    /** Read-your-writes snapshot for dumps/exports. */
-    fun snapshot(): List<KeyValuePair> = lock.read { values.values.toList() }
+    /** Read-your-writes snapshot for dumps/exports; rows are defensive copies. */
+    fun snapshot(): List<KeyValuePair> = lock.read { values.values.map(::copiedRow) }
+
+    private fun copiedRow(row: KeyValuePair): KeyValuePair = KeyValuePair(row.key).also { copy ->
+        copy.valueType = row.valueType
+        copy.value = row.value.copyOf()
+    }
 
     /**
      * Write [pair] into the mirror synchronously and return the generation the

@@ -216,4 +216,73 @@ class KvMemoryCacheTest {
         assertEquals("v2", cache.get("k")?.string)
         assertFalse(cache.hasPending("k"))
     }
+
+    @Test
+    fun deleteThenPutOrderingPinsLatestValue() {
+        val cache = KvMemoryCache()
+        cache.prime(emptyList())
+
+        cache.put(row("k", "v1"))
+        cache.delete("k")
+        cache.put(row("k", "v2"))
+
+        // Stale ack of the first put must not resurrect v1 or clear the
+        // delete/put pending chain; the tombstone ack must not erase v2.
+        cache.writeCommitted("k", row("k", "v1"))
+        assertEquals("v2", cache.get("k")?.string)
+        assertTrue(cache.hasPending("k"))
+
+        cache.writeCommitted("k", null)
+        assertEquals("v2", cache.get("k")?.string)
+        assertTrue(cache.hasPending("k"))
+
+        cache.writeCommitted("k", row("k", "v2"))
+        assertEquals("v2", cache.get("k")?.string)
+        assertFalse(cache.hasPending("k"))
+    }
+
+    @Test
+    fun duplicateLegacyAckIsIdempotent() {
+        val cache = KvMemoryCache()
+        cache.prime(emptyList())
+
+        cache.put(row("k", "v"))
+        cache.writeCommitted("k", row("k", "v"))
+        assertFalse(cache.hasPending("k"))
+
+        // Repeated acknowledgment must be a no-op.
+        cache.writeCommitted("k", row("k", "v"))
+        assertEquals("v", cache.get("k")?.string)
+        assertFalse(cache.hasPending("k"))
+    }
+
+    @Test
+    fun resetThenOldLegacyPutAckDoesNotResurrect() {
+        val cache = KvMemoryCache()
+        cache.prime(listOf(row("a", "1")))
+
+        cache.put(row("k", "v"))
+        cache.reset()
+        assertTrue(cache.snapshot().isEmpty())
+
+        // Ack of the pre-reset put arrives after the wipe; it must not
+        // resurrect the value or clear the in-flight reset sentinel.
+        cache.writeCommitted("k", row("k", "v"))
+        assertTrue(cache.snapshot().isEmpty())
+        assertTrue(cache.hasPending(KvMemoryCache.PENDING_RESET))
+    }
+
+    @Test
+    fun snapshotRowsAreDefensiveCopies() {
+        val cache = KvMemoryCache()
+        cache.prime(listOf(row("a", "1")))
+
+        val dumped = cache.snapshot()
+        assertEquals(1, dumped.size)
+        dumped[0].put("mutated")
+
+        // Mutating a returned row must not leak into the mirror.
+        assertEquals("1", cache.get("a")?.string)
+        assertEquals("1", cache.snapshot()[0].string)
+    }
 }
