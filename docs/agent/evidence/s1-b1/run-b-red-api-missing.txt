@@ -1,0 +1,75 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/8.10.2/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+> Task :buildSrc:checkKotlinGradlePluginConfigurationErrors
+> Task :buildSrc:compileKotlin UP-TO-DATE
+> Task :buildSrc:compileJava NO-SOURCE
+> Task :buildSrc:compileGroovy NO-SOURCE
+> Task :buildSrc:pluginDescriptors UP-TO-DATE
+> Task :buildSrc:processResources NO-SOURCE
+> Task :buildSrc:classes UP-TO-DATE
+> Task :buildSrc:jar UP-TO-DATE
+> Task :app:verifyLibcore
+> Task :app:preBuild
+> Task :app:preOssDebugBuild
+> Task :app:compileOssDebugAidl UP-TO-DATE
+> Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :app:dataBindingMergeDependencyArtifactsOssDebug UP-TO-DATE
+> Task :app:generateOssDebugResValues UP-TO-DATE
+> Task :app:extractOssDebugSupportedLocales UP-TO-DATE
+> Task :app:generateOssDebugLocaleConfig UP-TO-DATE
+> Task :app:generateOssDebugResources UP-TO-DATE
+> Task :app:mergeOssDebugResources UP-TO-DATE
+> Task :app:dataBindingGenBaseClassesOssDebug UP-TO-DATE
+> Task :app:generateOssDebugBuildConfig UP-TO-DATE
+> Task :app:checkOssDebugAarMetadata UP-TO-DATE
+> Task :app:mapOssDebugSourceSetPaths UP-TO-DATE
+> Task :app:createOssDebugCompatibleScreenManifests UP-TO-DATE
+> Task :app:extractDeepLinksOssDebug UP-TO-DATE
+> Task :app:processOssDebugMainManifest UP-TO-DATE
+> Task :app:processOssDebugManifest UP-TO-DATE
+> Task :app:processOssDebugManifestForPackage UP-TO-DATE
+> Task :app:processOssDebugResources UP-TO-DATE
+> Task :app:kspOssDebugKotlin UP-TO-DATE
+> Task :app:compileOssDebugKotlin UP-TO-DATE
+> Task :app:javaPreCompileOssDebug UP-TO-DATE
+> Task :app:compileOssDebugJavaWithJavac UP-TO-DATE
+> Task :app:bundleOssDebugClassesToRuntimeJar UP-TO-DATE
+> Task :app:bundleOssDebugClassesToCompileJar UP-TO-DATE
+> Task :app:preOssDebugUnitTestBuild
+> Task :app:javaPreCompileOssDebugUnitTest UP-TO-DATE
+> Task :app:processOssDebugJavaRes UP-TO-DATE
+> Task :app:kspOssDebugUnitTestKotlin
+
+> Task :app:compileOssDebugUnitTestKotlin FAILED
+e: file:///C:/Users/renos/Documents/Proxy/NekoBoxForAndroid-router-groups/app/src/test/java/io/nekohasekai/sagernet/database/preference/KvMemoryCacheLinearizabilityTest.kt:41:51 Too many arguments for 'fun writeCommitted(key: String, value: KeyValuePair?): Unit'.
+e: file:///C:/Users/renos/Documents/Proxy/NekoBoxForAndroid-router-groups/app/src/test/java/io/nekohasekai/sagernet/database/preference/KvMemoryCacheLinearizabilityTest.kt:45:51 Too many arguments for 'fun writeCommitted(key: String, value: KeyValuePair?): Unit'.
+e: file:///C:/Users/renos/Documents/Proxy/NekoBoxForAndroid-router-groups/app/src/test/java/io/nekohasekai/sagernet/database/preference/KvMemoryCacheLinearizabilityTest.kt:58:51 Too many arguments for 'fun writeCommitted(key: String, value: KeyValuePair?): Unit'.
+e: file:///C:/Users/renos/Documents/Proxy/NekoBoxForAndroid-router-groups/app/src/test/java/io/nekohasekai/sagernet/database/preference/KvMemoryCacheLinearizabilityTest.kt:62:41 Too many arguments for 'fun writeCommitted(key: String, value: KeyValuePair?): Unit'.
+e: file:///C:/Users/renos/Documents/Proxy/NekoBoxForAndroid-router-groups/app/src/test/java/io/nekohasekai/sagernet/database/preference/KvMemoryCacheLinearizabilityTest.kt:75:53 Too many arguments for 'fun writeCommitted(key: String, value: KeyValuePair?): Unit'.
+e: file:///C:/Users/renos/Documents/Proxy/NekoBoxForAndroid-router-groups/app/src/test/java/io/nekohasekai/sagernet/database/preference/KvMemoryCacheLinearizabilityTest.kt:78:53 Too many arguments for 'fun writeCommitted(key: String, value: KeyValuePair?): Unit'.
+e: file:///C:/Users/renos/Documents/Proxy/NekoBoxForAndroid-router-groups/app/src/test/java/io/nekohasekai/sagernet/database/preference/KvMemoryCacheLinearizabilityTest.kt:89:31 Unresolved reference 'captureReadEpoch'.
+e: file:///C:/Users/renos/Documents/Proxy/NekoBoxForAndroid-router-groups/app/src/test/java/io/nekohasekai/sagernet/database/preference/KvMemoryCacheLinearizabilityTest.kt:95:36 Too many arguments for 'fun merge(authoritative: List<KeyValuePair>): Unit'.
+e: file:///C:/Users/renos/Documents/Proxy/NekoBoxForAndroid-router-groups/app/src/test/java/io/nekohasekai/sagernet/database/preference/KvMemoryCacheLinearizabilityTest.kt:105:31 Unresolved reference 'captureReadEpoch'.
+e: file:///C:/Users/renos/Documents/Proxy/NekoBoxForAndroid-router-groups/app/src/test/java/io/nekohasekai/sagernet/database/preference/KvMemoryCacheLinearizabilityTest.kt:109:46 Too many arguments for 'fun merge(authoritative: List<KeyValuePair>): Unit'.
+e: file:///C:/Users/renos/Documents/Proxy/NekoBoxForAndroid-router-groups/app/src/test/java/io/nekohasekai/sagernet/database/preference/KvMemoryCacheLinearizabilityTest.kt:118:31 Unresolved reference 'captureReadEpoch'.
+e: file:///C:/Users/renos/Documents/Proxy/NekoBoxForAndroid-router-groups/app/src/test/java/io/nekohasekai/sagernet/database/preference/KvMemoryCacheLinearizabilityTest.kt:121:46 Too many arguments for 'fun merge(authoritative: List<KeyValuePair>): Unit'.
+e: file:///C:/Users/renos/Documents/Proxy/NekoBoxForAndroid-router-groups/app/src/test/java/io/nekohasekai/sagernet/database/preference/KvMemoryCacheLinearizabilityTest.kt:125:32 Unresolved reference 'captureReadEpoch'.
+e: file:///C:/Users/renos/Documents/Proxy/NekoBoxForAndroid-router-groups/app/src/test/java/io/nekohasekai/sagernet/database/preference/KvMemoryCacheLinearizabilityTest.kt:126:49 Too many arguments for 'fun merge(authoritative: List<KeyValuePair>): Unit'.
+e: file:///C:/Users/renos/Documents/Proxy/NekoBoxForAndroid-router-groups/app/src/test/java/io/nekohasekai/sagernet/database/preference/KvMemoryCacheLinearizabilityTest.kt:135:32 Unresolved reference 'captureReadEpoch'.
+e: file:///C:/Users/renos/Documents/Proxy/NekoBoxForAndroid-router-groups/app/src/test/java/io/nekohasekai/sagernet/database/preference/KvMemoryCacheLinearizabilityTest.kt:137:49 Too many arguments for 'fun merge(authoritative: List<KeyValuePair>): Unit'.
+System.Management.Automation.RemoteException
+FAILURE: Build failed with an exception.
+System.Management.Automation.RemoteException
+* What went wrong:
+Execution failed for task ':app:compileOssDebugUnitTestKotlin'.
+> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction
+   > Compilation error. See log for more details
+System.Management.Automation.RemoteException
+* Try:
+> Run with --stacktrace option to get the stack trace.
+32 actionable tasks: 4 executed, 28 up-to-date
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+System.Management.Automation.RemoteException
+BUILD FAILED in 19s
