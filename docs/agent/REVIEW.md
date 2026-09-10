@@ -1,59 +1,104 @@
 # 当前独立审计
 
 reviewer：ChatGPT Web via GitHub fixed-SHA。
-work_order：S1-B1-KV-LINEARIZABILITY。
-状态：CHANGES_REQUIRED 已修正并重推候选，等待新审计。
+work_order：S1-B1-KV-LINEARIZABILITY — **已关闭（ACCEPTED）**；S1-B2-CONFIRM-SEMANTICS-CLOSURE 进行中。
 
-## 最新审计
+## 审计一（a34a0cf）
+
+- scope `cc63f248..a34a0cf`，verdict `CHANGES_REQUIRED`（P1-SNAPSHOT-ORDERING），完整 receipt 与修正记录见下方审计二的前文与 `docs/agent/evidence/s1-b1/`。该 P1 已由候选 `e9b92cf` 修正。
+
+## 审计二（e9b92cf）— 最终 ACCEPTED
 
 - repo：`Gitefy/NekoBoxForAndroid`。
 - branch：`fix/p01-room-off-main-thread`。
 - work_order：`S1-B1-KV-LINEARIZABILITY`。
 - base_code_sha：`cc63f24893696c075723eb8934529534529f31e2`。
-- candidate_code_sha（已审）：`a34a0cf20e10b2dedad5d30d7ed77ff7a74a533c`。
-- handoff_metadata_sha（对应）：`115615d10c938adacf6b236d5edc57fa67f3e60d`。
-- review_scope：`cc63f248..a34a0cf`。
-- verdict：`CHANGES_REQUIRED`。
-- critical_count：0；p1_count：1（`P1-SNAPSHOT-ORDERING`）；p2_count：0。
-- ChatGPT 是否直接读取 GitHub 差异：是（fixed-SHA）。
-- 结论来源：源码 + L1（ChatGPT 确认 stale-ACK 场景已覆盖；concurrent snapshot ordering 场景在 a34a0cf 上未覆盖）。
+- candidate_code_sha：`e9b92cf79625c555ecd21b10991642b76037de71`。
+- previous_candidate_sha：`a34a0cf20e10b2dedad5d30d7ed77ff7a74a533c`。
+- handoff_metadata_sha：`d499eaa297cd768605c9c77b35f77f8c2c3c6ec3`。
+- review_scope：`cc63f248..e9b92cf`；incremental_fix_scope：`a34a0cf..e9b92cf`。
+- verdict：**ACCEPTED**。critical_count=0；p1_count=0；p2_count=1。
+- ChatGPT 直接读取 GitHub 固定 SHA 差异：是。
+- 结论来源：源码 + L1（本地 JVM 定点测试）；L2/L3/L4 未执行（阶段门槛另计）。
 
-## Findings（a34a0cf）
+### Accepted findings（摘要，原文见 receipt）
 
-- Accepted：per-key generation 正确阻止 stale put ACK 回退/复活；production put/delete 传播 generation；readEpoch 保护本地提交不被读取起点早于它的 snapshot 回滚；原有 focused stale-ACK 回归正确。
-- Blocking P1-SNAPSHOT-ORDERING：`RoomPreferenceDataStore.readAndMergeSnapshot` 仅做 `captureReadEpoch→tableSnapshot→merge`，未串行化完整 read+merge；`A(capture 0)+A(read old)` 先于 `B(capture 0)+B(read new)+B(merge new)` 的交错中，A 后续 `merge old` 可在无 pending/lastCommitted 时覆盖 new，进程可在无后续 invalidation 时长期 stale。要求：用一个 snapshot lock/coordinator 串行化 capture+read+merge，不扩 executor、不改重试、不加 delay/sleep，不做复杂 version clock。
+1. per-key generation 阻止 stale ACK 回退被取代的 put。
+2. per-key generation 阻止 stale put ACK 复活其后的 delete。
+3. snapshot readEpoch 阻止 "读取起点早于本地提交" 的快照回滚该本地提交。
+4. a34a0cf 的 P1-SNAPSHOT-ORDERING 已修复：`RoomPreferenceDataStore` 用单一 `snapshotLock` 串行化完整 `captureReadEpoch + tableSnapshot + merge`；两个并发 sibling snapshot 不可能乱序 merge。
+5. 单 writer 持久化与重试语义不变；无 executor 扩容、无生产 delay 同步、无 schema 变更、无无关重构；候选范围收敛于 `RoomPreferenceDataStore` + 其定序回归测试。
 
-## 本次修正后新候选
+### Non-blocking finding（P2-TEST-ROBUSTNESS，记录不阻塞）
 
-- new candidate_code_sha：`e9b92cf79625c555ecd21b10991642b76037de71`（`a34a0cf..e9b92cf` 仅补 `RoomPreferenceDataStore.snapshotLock` + 1 定序并发回归测试 `RoomPreferenceDataStoreSnapshotOrderingTest`）。
-- 完整可审范围：`cc63f248..e9b92cf`。
-- 修正性质：最小串行化整改（`ReentrantLock snapshotLock` 包起来 `captureReadEpoch + tableSnapshot + merge`），保留全部 per-key generation、主线程不读 DB、重试语义。
-- 证据：`run-e-red-concurrent-snapshot.txt`（a34a0cf 上 `expected:<[new]> but was:<[old]>`）；`run-f-green-focused-after-fix.txt`、`run-g-green-full-suite-after-fix.txt`（exit 0，29 suites 131 tests / 0 failures）。
+`RoomPreferenceDataStoreSnapshotOrderingTest` 的关键交错用 `CountDownLatch/AtomicReference`，但仍含 `Thread.sleep(80)` 供线程 B 争抢 `snapshotLock`。不影响生产修复、不阻塞验收；RED 行为在极端调度延迟下非数学完全确定。**记录为后续 test-infrastructure 清理项，不得为删 sleep 扩大生产设计。** 已登记 `docs/agent/ISSUES.md` S1 遗留（见 WORK_ORDER S1-B2 范围外备注）。
 
-## AUDIT_RECEIPT（a34a0cf）
+### ci_status
+
+审计期间未见 candidate `e9b92cf` 的 GitHub commit status/check。**ACCEPTED 不等于 GitHub CI 通过**；执行证据以 handoff 本地测试记录为准。原因与 A08 一致：`ci.yml` push `branches: '*'` 不匹配含 `/` 的分支名（`fix/p01-room-off-main-thread`），push 未触发 CI——已列为 S1-B2 工作单修复项。
+
+### required_next_action（已执行）
+
+1. 关闭 S1-B1 为 ACCEPTED（本文件 + STATUS/HANDOFF，metadata only）。
+2. 按 roadmap 签发唯一下一工作单 `S1-B2-CONFIRM-SEMANTICS-CLOSURE`（WORK_ORDER.md）。
+3. S1-B1 不变量成为后续 settings/database 工作的回归约束（KvMemoryCacheTest / KvMemoryCacheLinearizabilityTest / RoomPreferenceDataStoreSnapshotOrderingTest 为约束锚点，写入 WORK_ORDER）。
+
+## AUDIT_RECEIPT（最终，e9b92cf）
 
 ```
 AUDIT_RECEIPT
 repo=Gitefy/NekoBoxForAndroid
 branch=fix/p01-room-off-main-thread
 work_order=S1-B1-KV-LINEARIZABILITY
+
 base_code_sha=cc63f24893696c075723eb8934529534529f31e2
-candidate_code_sha=a34a0cf20e10b2dedad5d30d7ed77ff7a74a533c
-handoff_metadata_sha=115615d10c938adacf6b236d5edc57fa67f3e60d
-verdict=CHANGES_REQUIRED
+candidate_code_sha=e9b92cf79625c555ecd21b10991642b76037de71
+previous_candidate_sha=a34a0cf20e10b2dedad5d30d7ed77ff7a74a533c
+handoff_metadata_sha=d499eaa297cd768605c9c77b35f77f8c2c3c6ec3
+
+verdict=ACCEPTED
+
 critical_count=0
-p1_count=1
-p2_count=0
-blocking_finding=P1-SNAPSHOT-ORDERING
-review_scope=cc63f24893696c075723eb8934529534529f31e2..a34a0cf20e10b2dedad5d30d7ed77ff7a74a533c
+p1_count=0
+p2_count=1
+
+accepted_findings=
+
+* Per-key generation prevents stale ACK from regressing a superseding put.
+* Per-key generation prevents stale put ACK from resurrecting a subsequent delete.
+* Snapshot readEpoch prevents a snapshot started before a later local commit from rolling that local commit back.
+* The P1-SNAPSHOT-ORDERING defect from candidate a34a0cf is fixed.
+* RoomPreferenceDataStore now serializes the complete captureReadEpoch + tableSnapshot + merge operation with one snapshotLock.
+* Two sibling snapshot refreshes therefore cannot merge out of read order.
+* Existing single-writer persistence and retry semantics remain unchanged.
+* No executor expansion, production delay-based synchronization, database schema change, or unrelated refactor was introduced.
+* The code candidate commit is scoped to RoomPreferenceDataStore plus its snapshot-ordering regression test.
+
+non_blocking_finding=P2-TEST-ROBUSTNESS
+
+non_blocking_detail=
+RoomPreferenceDataStoreSnapshotOrderingTest uses CountDownLatch/AtomicReference for the important interleaving, but still contains Thread.sleep(80) to give thread B time to contend for snapshotLock.
+
+This does not invalidate the production fix and does not block S1-B1 acceptance. However, the RED behavior of the regression test is not mathematically fully deterministic under extreme scheduler delay. Record this for a later test-infrastructure cleanup; do not expand the current production design solely to remove the sleep.
+
+ci_status=
+No visible GitHub commit status/check was available for candidate e9b92cf during this audit. ACCEPTED therefore does not mean GitHub CI passed. Local test evidence recorded in the handoff remains the execution evidence.
+
+required_next_action=
+Close S1-B1-KV-LINEARIZABILITY as ACCEPTED.
+
+Update STATUS/HANDOFF/REVIEW with this receipt in metadata only.
+
+Then issue exactly one next work order according to the existing roadmap. Do not combine multiple architectural batches.
+
+S1-B1 invariants must become regression constraints for all later settings/database work.
+
+review_scope=cc63f24893696c075723eb8934529534529f31e2..e9b92cf79625c555ecd21b10991642b76037de71
+incremental_fix_scope=a34a0cf20e10b2dedad5d30d7ed77ff7a74a533c..e9b92cf79625c555ecd21b10991642b76037de71
 reviewer=ChatGPT Web via GitHub fixed-SHA audit
 END_AUDIT_RECEIPT
 ```
 
-## required_next_action
+## 纪律
 
-Keep S1-B1 open（已执行）；最小修正串行化整个 snapshot read+merge 路径（已用 `snapshotLock.withLock` 实现）；追加 CountDownLatch 定序并发 snapshot 回归并演示 RED→GREEN（已完成）；跑 focused + 全量 `testOssDebugUnitTest`（已完成 exit 0）；提交新 candidate `e9b92cf` 并 push 同非 main 分支（已完成）；独立 metadata commit 更新 HANDOFF/STATUS/REVIEW（本 commit），返回新 base/candidate 并 WAIT_AUDIT。禁止开启 S1-B2，禁止用 delay/sleep/扩线程。
-
-## 完整归档
-
-原始 receipt 文本已完整保留于本文件；如需独立 `docs/agent/reports/` 归档，可原样复制。
+Cursor 的 SELF_REVIEW 不得写入本文件冒充独立审计。后续每次审计只针对一个固定 `base..candidate`。
