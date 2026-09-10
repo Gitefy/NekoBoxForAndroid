@@ -2,10 +2,12 @@ package io.nekohasekai.sagernet.database.preference
 
 import androidx.preference.PreferenceDataStore
 import io.nekohasekai.sagernet.ktx.Logs
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 
 /**
  * PreferenceDataStore backed by a Room `KeyValuePair` table.
@@ -35,6 +37,7 @@ open class RoomPreferenceDataStore(
 ) : PreferenceDataStore() {
 
     private val cache = KvMemoryCache()
+    private val snapshotLock = ReentrantLock()
     private val writer: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "kv-store-writer").apply { isDaemon = true }
     }
@@ -52,10 +55,14 @@ open class RoomPreferenceDataStore(
     }
 
     /**
-     * Capture the mirror's mutation epoch before the table read so [merge]
-     * can reject snapshots that predate local commits made afterwards.
+     * Serialize the complete snapshot path. Without this coordinator two
+     * concurrent readers can interleave as A(capture)→A(read old)→B(capture)→
+     * B(read new)→B(merge new)→A(merge old) and regress the mirror to a
+     * stale DB state. Holding one lock across capture+read+merge preserves
+     * per-key generation semantics, needs no sleep/delay, and keeps the
+     * single-writer and retry behavior unchanged.
      */
-    private fun readAndMergeSnapshot() {
+    private fun readAndMergeSnapshot() = snapshotLock.withLock {
         val readEpoch = cache.captureReadEpoch()
         cache.merge(tableSnapshot(), readEpoch)
     }
