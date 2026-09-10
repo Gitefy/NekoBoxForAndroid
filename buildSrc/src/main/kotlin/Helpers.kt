@@ -13,7 +13,13 @@ import kotlin.system.exitProcess
 private val Project.android get() = extensions.getByName<ApplicationExtension>("android")
 
 fun Project.requireMetadata(): Properties {
-    val file = rootProject.file("asteria.properties")
+    val primary = rootProject.file("egox.properties")
+    val fallback = rootProject.file("asteria.properties")
+    val file = when {
+        primary.exists() -> primary
+        fallback.exists() -> fallback
+        else -> primary
+    }
     val props = Properties()
     if (file.exists()) {
         file.inputStream().use { props.load(it) }
@@ -59,8 +65,6 @@ fun Project.setupCommon() {
             showAll = true
             checkAllWarnings = true
             checkReleaseBuilds = true
-            // Keep advisory dependency/style findings visible without promoting them
-            // to runtime correctness errors. Lint errors still abort the build.
             warningsAsErrors = false
             textOutput = project.file("build/lint.txt")
             htmlOutput = project.file("build/lint.html")
@@ -118,10 +122,12 @@ fun Project.setupAppCommon() {
     val alias = lp.getProperty("ALIAS_NAME") ?: System.getenv("ALIAS_NAME")
     val pwd = lp.getProperty("ALIAS_PASS") ?: System.getenv("ALIAS_PASS")
 
+    val egoxKeystore = rootProject.file("egox.keystore")
     val asteriaKeystore = rootProject.file("asteria.keystore")
     val releaseKeystore = rootProject.file("release.keystore")
     val targetKeystore = when {
         !keystorePath.isNullOrBlank() -> rootProject.file(keystorePath)
+        egoxKeystore.exists() -> egoxKeystore
         asteriaKeystore.exists() -> asteriaKeystore
         releaseKeystore.exists() -> releaseKeystore
         else -> null
@@ -193,7 +199,7 @@ fun Project.setupApp() {
         applicationVariants.all {
             outputs.all {
                 this as BaseVariantOutputImpl
-                outputFileName = outputFileName.replace(project.name, "Asteria-$versionName")
+                outputFileName = outputFileName.replace(project.name, "EgoX-$versionName")
                     .replace("-release", "")
                     .replace("-oss", "")
             }

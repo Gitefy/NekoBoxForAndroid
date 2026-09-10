@@ -5,7 +5,8 @@ on:
     branches:
       - main
     paths:
-      - 'nb4a.properties'
+      - 'egox.properties'
+      - 'asteria.properties'
 jobs:
   libcore:
     name: Native Build (LibCore)
@@ -74,5 +75,5 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: Asteria
+          name: EgoX
           path: ${{ env.APK }}

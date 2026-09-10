@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name" translatable="false">Asteria</string>
-    <string name="app_name_long" translatable="false">Asteria for Android</string>
+    <string name="app_name" translatable="false">EgoX</string>
+    <string name="app_name_long" translatable="false">EgoX for Android</string>
     <string name="app_desc">The universal proxy toolchain for Android, written in Kotlin.</string>
     <string name="project">Project</string>
     <string name="github">Source code</string>
@@ -19,7 +19,7 @@
     <string name="quick_toggle">Toggle</string>
     <string name="quick_enable">Enable</string>
     <string name="quick_disable">Disable</string>
-    <string name="tile_title">Asteria</string>
+    <string name="tile_title">EgoX</string>
     <string name="menu_traffic">Traffic</string>
     <string name="menu_dashboard">sing-box Dashboard</string>
     <!-- externel -->

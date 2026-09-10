@@ -1,2 +1,2 @@
 include(":app")
-rootProject.name = "Asteria"
+rootProject.name = "EgoX"
