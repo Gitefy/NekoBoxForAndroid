@@ -1,101 +1,131 @@
 # 当前独立审计
 
 reviewer：ChatGPT Web via GitHub fixed-SHA。
-work_order：S1-B1-KV-LINEARIZABILITY — **已关闭（ACCEPTED）**；S1-B2-CONFIRM-SEMANTICS-CLOSURE 进行中。
+work_order：S1-B1 与 S1-B2 均 **已关闭（ACCEPTED）**；S1-B3-WRITE-QUEUE-FLUSH-BARRIER 已起草、未实现。
 
 ## 审计一（a34a0cf）
 
-- scope `cc63f248..a34a0cf`，verdict `CHANGES_REQUIRED`（P1-SNAPSHOT-ORDERING），完整 receipt 与修正记录见下方审计二的前文与 `docs/agent/evidence/s1-b1/`。该 P1 已由候选 `e9b92cf` 修正。
+scope `cc63f248..a34a0cf`，verdict `CHANGES_REQUIRED`（P1-SNAPSHOT-ORDERING）。P1 已由候选 `e9b92cf` 修正并复审计通过。
 
-## 审计二（e9b92cf）— 最终 ACCEPTED
+## 审计二（e9b92cf）— S1-B1 ACCEPTED
 
-- repo：`Gitefy/NekoBoxForAndroid`。
-- branch：`fix/p01-room-off-main-thread`。
-- work_order：`S1-B1-KV-LINEARIZABILITY`。
-- base_code_sha：`cc63f24893696c075723eb8934529534529f31e2`。
-- candidate_code_sha：`e9b92cf79625c555ecd21b10991642b76037de71`。
-- previous_candidate_sha：`a34a0cf20e10b2dedad5d30d7ed77ff7a74a533c`。
-- handoff_metadata_sha：`d499eaa297cd768605c9c77b35f77f8c2c3c6ec3`。
-- review_scope：`cc63f248..e9b92cf`；incremental_fix_scope：`a34a0cf..e9b92cf`。
-- verdict：**ACCEPTED**。critical_count=0；p1_count=0；p2_count=1。
-- ChatGPT 直接读取 GitHub 固定 SHA 差异：是。
-- 结论来源：源码 + L1（本地 JVM 定点测试）；L2/L3/L4 未执行（阶段门槛另计）。
+- scope `cc63f248..e9b92cf`；incremental `a34a0cf..e9b92cf`（snapshotLock 串行化）。
+- verdict **ACCEPTED**（critical 0 / p1 0 / p2 1）。完整 receipt 见下文 AUDIT_RECEIPT(S1-B1)。
+- P2-TEST-ROBUSTNESS（`SnapshotOrderingTest` 内 `Thread.sleep(80)`）→ 遗留至 test-infrastructure 清理批，不得扩生产设计。
+- ci_status 当时无 check（A08）。
 
-### Accepted findings（摘要，原文见 receipt）
+## 审计三（1e140ca）— S1-B2 ACCEPTED
 
-1. per-key generation 阻止 stale ACK 回退被取代的 put。
-2. per-key generation 阻止 stale put ACK 复活其后的 delete。
-3. snapshot readEpoch 阻止 "读取起点早于本地提交" 的快照回滚该本地提交。
-4. a34a0cf 的 P1-SNAPSHOT-ORDERING 已修复：`RoomPreferenceDataStore` 用单一 `snapshotLock` 串行化完整 `captureReadEpoch + tableSnapshot + merge`；两个并发 sibling snapshot 不可能乱序 merge。
-5. 单 writer 持久化与重试语义不变；无 executor 扩容、无生产 delay 同步、无 schema 变更、无无关重构；候选范围收敛于 `RoomPreferenceDataStore` + 其定序回归测试。
+- repo：`Gitefy/NekoBoxForAndroid`；branch：`fix/p01-room-off-main-thread`。
+- work_order：`S1-B2-CONFIRM-SEMANTICS-CLOSURE`。
+- base_code_sha：`e9b92cf79625c555ecd21b10991642b76037de71`；candidate_code_sha：`1e140ca720a54dfa42cc37235484af7faae499bf`；handoff_metadata_sha：`f6a2def`。
+- review_scope：`e9b92cf..1e140ca`。
+- verdict **ACCEPTED**（critical 0 / p1 0 / p2 0）。
+- ChatGPT 直接读取 GitHub 固定 SHA 差异：是。结论来源：源码 + L1 本地证据 + **GitHub Actions 实际运行结果**（ci_evidence：push 事件 head_sha=1e140ca，status=completed，conclusion=success）。
 
-### Non-blocking finding（P2-TEST-ROBUSTNESS，记录不阻塞）
+### Accepted findings（摘要）
 
-`RoomPreferenceDataStoreSnapshotOrderingTest` 的关键交错用 `CountDownLatch/AtomicReference`，但仍含 `Thread.sleep(80)` 供线程 B 争抢 `snapshotLock`。不影响生产修复、不阻塞验收；RED 行为在极端调度延迟下非数学完全确定。**记录为后续 test-infrastructure 清理项，不得为删 sleep 扩大生产设计。** 已登记 `docs/agent/ISSUES.md` S1 遗留（见 WORK_ORDER S1-B2 范围外备注）。
+1. `snapshot()` 返回逐行防御拷贝；可变 `value` ByteArray 以 `copyOf()` 深拷贝，消费方无法借返回行改写缓存。
+2. S1-B1 的 snapshot 定序与 per-key generation 逻辑未变且保持有效。
+3. legacy+generation 双路径钉子正确覆盖 delete→put 定序、重复 ack 幂等、reset 后旧 ack 不复活。
+4. 未改 `RoomPreferenceDataStore` 生产行为、重试语义、executor 规模、schema、签名、运行时生命周期或无关架构。
+5. A08 CI 分支过滤 `'*'→'**'` 正确（GitHub 官方 glob 语义：`'*'` 不匹配斜杠，`'**'` 匹配）；**修复已被 GitHub 行为验证——分支 `fix/p01-room-off-main-thread` 生成了 push workflow，CI 对 1e140ca 跑完且成功**。
+6. 本地 RED/GREEN 与全量证据一致；**run-g 计数错误（131→124）被显式更正而非延续**。
 
-### ci_status
+### ci_status = PASS
 
-审计期间未见 candidate `e9b92cf` 的 GitHub commit status/check。**ACCEPTED 不等于 GitHub CI 通过**；执行证据以 handoff 本地测试记录为准。原因与 A08 一致：`ci.yml` push `branches: '*'` 不匹配含 `/` 的分支名（`fix/p01-room-off-main-thread`），push 未触发 CI——已列为 S1-B2 工作单修复项。
+GitHub Actions workflow CI，push event，head_sha=`1e140ca720a54dfa42cc37235484af7faae499bf`，status=completed，conclusion=success。
+
+### persistent_regression_constraints（审计冻结，后续所有 settings/database 批次强制）
+
+- S1-B1 per-key generation stale-ACK 保护必须保留。
+- S1-B1 readEpoch/local-commit snapshot 保护必须保留。
+- S1-B1 串行化 snapshot read+merge（snapshotLock）必须保留。
+- `snapshot()` 不得暴露缓存持有的可变 `KeyValuePair` 状态。
+- 重复 ACK 必须保持幂等。
+- delete-then-put 必须保留最新 mutation。
+- reset 必须使更旧的 mutation ACK 失效。
+
+### carried_non_blocking_item
+
+P2-TEST-ROBUSTNESS：`RoomPreferenceDataStoreSnapshotOrderingTest` 仍用 `Thread.sleep(80)` 作调度辅助；继续排队等待 test-infrastructure 清理，不得为此扩生产设计。
 
 ### required_next_action（已执行）
 
-1. 关闭 S1-B1 为 ACCEPTED（本文件 + STATUS/HANDOFF，metadata only）。
-2. 按 roadmap 签发唯一下一工作单 `S1-B2-CONFIRM-SEMANTICS-CLOSURE`（WORK_ORDER.md）。
-3. S1-B1 不变量成为后续 settings/database 工作的回归约束（KvMemoryCacheTest / KvMemoryCacheLinearizabilityTest / RoomPreferenceDataStoreSnapshotOrderingTest 为约束锚点，写入 WORK_ORDER）。
+1. 关闭 S1-B2 为 ACCEPTED（本文件 + STATUS/HANDOFF，metadata only）。
+2. 起草唯一下一工作单 `S1-B3-WRITE-QUEUE-DURABILITY-BARRIER`（WORK_ORDER.md，按用户/审计 A—H 规格完整重定义，
+   取代早前草稿名 WRITE-QUEUE-FLUSH-BARRIER）：flush 精确语义（A）、barrier 边界（B）、失败协议（C）、
+   restore/reset fence（D，含旧排队写不得在 restore 后重现）、reload/start durability 调用点分析（E，L0）、
+   8 条指定 RED 测试 + 扩展（F）、范围限制（G）、双方案比较与推荐方案 1（H）。
+3. **实现冻结**：在网页 ChatGPT 明确确认 S1-B3 工作单设计之前，不开始业务实现。
 
-## AUDIT_RECEIPT（最终，e9b92cf）
+## AUDIT_RECEIPT（S1-B2，1e140ca）
 
 ```
 AUDIT_RECEIPT
+
 repo=Gitefy/NekoBoxForAndroid
 branch=fix/p01-room-off-main-thread
-work_order=S1-B1-KV-LINEARIZABILITY
+work_order=S1-B2-CONFIRM-SEMANTICS-CLOSURE
 
-base_code_sha=cc63f24893696c075723eb8934529534529f31e2
-candidate_code_sha=e9b92cf79625c555ecd21b10991642b76037de71
-previous_candidate_sha=a34a0cf20e10b2dedad5d30d7ed77ff7a74a533c
-handoff_metadata_sha=d499eaa297cd768605c9c77b35f77f8c2c3c6ec3
+base_code_sha=e9b92cf79625c555ecd21b10991642b76037de71
+candidate_code_sha=1e140ca720a54dfa42cc37235484af7faae499bf
+handoff_metadata_sha=f6a2def
 
 verdict=ACCEPTED
 
 critical_count=0
 p1_count=0
-p2_count=1
+p2_count=0
 
 accepted_findings=
 
-* Per-key generation prevents stale ACK from regressing a superseding put.
-* Per-key generation prevents stale put ACK from resurrecting a subsequent delete.
-* Snapshot readEpoch prevents a snapshot started before a later local commit from rolling that local commit back.
-* The P1-SNAPSHOT-ORDERING defect from candidate a34a0cf is fixed.
-* RoomPreferenceDataStore now serializes the complete captureReadEpoch + tableSnapshot + merge operation with one snapshotLock.
-* Two sibling snapshot refreshes therefore cannot merge out of read order.
-* Existing single-writer persistence and retry semantics remain unchanged.
-* No executor expansion, production delay-based synchronization, database schema change, or unrelated refactor was introduced.
-* The code candidate commit is scoped to RoomPreferenceDataStore plus its snapshot-ordering regression test.
-
-non_blocking_finding=P2-TEST-ROBUSTNESS
-
-non_blocking_detail=
-RoomPreferenceDataStoreSnapshotOrderingTest uses CountDownLatch/AtomicReference for the important interleaving, but still contains Thread.sleep(80) to give thread B time to contend for snapshotLock.
-
-This does not invalidate the production fix and does not block S1-B1 acceptance. However, the RED behavior of the regression test is not mathematically fully deterministic under extreme scheduler delay. Record this for a later test-infrastructure cleanup; do not expand the current production design solely to remove the sleep.
+* KvMemoryCache.snapshot now returns per-row defensive copies rather than live KeyValuePair references.
+* KeyValuePair mutable ByteArray payload is deep-copied with value.copyOf(), so snapshot consumers cannot mutate the cache by retaining or modifying returned rows.
+* Snapshot ordering and per-key generation logic accepted in S1-B1 remain unchanged.
+* Additional legacy and generation-path tests correctly pin delete-then-put ordering, duplicate acknowledgment idempotency, and reset-after-old-ack non-resurrection semantics.
+* No RoomPreferenceDataStore production behavior, retry semantics, executor sizing, schema, signing, runtime lifecycle, or unrelated architecture was changed in this batch.
+* A08 CI branch filter was correctly changed from '*' to '**'.
+* GitHub official glob semantics support this correction: '*' does not match slash while '**' can.
+* The fix has been behaviorally verified by GitHub itself: a push workflow was created for branch fix/p01-room-off-main-thread.
+* GitHub Actions CI run for candidate 1e140ca720a54dfa42cc37235484af7faae499bf completed successfully.
+* Local RED/GREEN evidence and full unit-suite evidence are consistent with the intended change.
+* The previous run-g test-count metadata error was explicitly corrected rather than propagated.
 
 ci_status=
-No visible GitHub commit status/check was available for candidate e9b92cf during this audit. ACCEPTED therefore does not mean GitHub CI passed. Local test evidence recorded in the handoff remains the execution evidence.
+PASS
+
+ci_evidence=
+GitHub Actions workflow CI, push event, head_sha=1e140ca720a54dfa42cc37235484af7faae499bf, status=completed, conclusion=success.
+
+persistent_regression_constraints=
+
+* S1-B1 per-key generation stale-ACK protection remains mandatory.
+* S1-B1 readEpoch/local-commit snapshot protection remains mandatory.
+* S1-B1 serialized snapshot read+merge ordering remains mandatory.
+* snapshot() must not expose mutable cache-owned KeyValuePair state.
+* duplicate ACK must remain idempotent.
+* delete-then-put must preserve the latest mutation.
+* reset must invalidate older mutation acknowledgments.
+
+carried_non_blocking_item=
+P2-TEST-ROBUSTNESS: RoomPreferenceDataStoreSnapshotOrderingTest still uses Thread.sleep(80) as a scheduling aid. Keep queued for later test-infrastructure cleanup. Do not expand production design solely to address it.
 
 required_next_action=
-Close S1-B1-KV-LINEARIZABILITY as ACCEPTED.
+Close S1-B2-CONFIRM-SEMANTICS-CLOSURE as ACCEPTED.
 
-Update STATUS/HANDOFF/REVIEW with this receipt in metadata only.
+Update STATUS/HANDOFF/REVIEW in metadata only.
 
-Then issue exactly one next work order according to the existing roadmap. Do not combine multiple architectural batches.
+Then draft exactly one next work order:
+S1-B3 write queue / flushPendingWrites durability barrier / persistence failure protocol.
 
-S1-B1 invariants must become regression constraints for all later settings/database work.
+S1-B3 is an architectural correctness batch. Do not begin implementation until its invariants, failure semantics, scope, RED tests, and interaction with restore/reset are explicitly defined.
 
-review_scope=cc63f24893696c075723eb8934529534529f31e2..e9b92cf79625c555ecd21b10991642b76037de71
-incremental_fix_scope=a34a0cf20e10b2dedad5d30d7ed77ff7a74a533c..e9b92cf79625c555ecd21b10991642b76037de71
+Do not combine S1-B3 with dbOffMain removal, RuntimeController, network debounce, ConfigSnapshot, performance work, sing-box upgrades, UI work, or test-infrastructure cleanup.
+
+review_scope=e9b92cf79625c555ecd21b10991642b76037de71..1e140ca720a54dfa42cc37235484af7faae499bf
 reviewer=ChatGPT Web via GitHub fixed-SHA audit
+
 END_AUDIT_RECEIPT
 ```
 
