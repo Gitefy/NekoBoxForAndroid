@@ -123,4 +123,52 @@ class KvMemoryCacheTest {
         val dumped = cache.snapshot().associate { it.key to it.string }
         assertEquals(mapOf("b" to "2"), dumped)
     }
+
+    @Test
+    fun pendingPutSurvivesMultipleRemoteMerges() {
+        val cache = KvMemoryCache()
+        cache.prime(listOf(row("k", "old")))
+        cache.put(row("k", "new"))
+        cache.merge(listOf(row("k", "old")))
+        assertEquals("new", cache.get("k")?.string)
+        cache.merge(listOf(row("k", "old")))
+        assertEquals("new", cache.get("k")?.string)
+        assertTrue(cache.hasPending("k"))
+        cache.writeCommitted("k", row("k", "new"))
+        assertFalse(cache.hasPending("k"))
+    }
+
+    @Test
+    fun resetInflightIgnoresAllRemoteSnapshotsUntilCommitted() {
+        val cache = KvMemoryCache()
+        cache.prime(listOf(row("a", "1"), row("b", "2")))
+        cache.reset()
+        cache.merge(listOf(row("a", "1")))
+        cache.merge(listOf(row("a", "1"), row("b", "2"), row("c", "3")))
+        assertTrue(cache.snapshot().isEmpty())
+        assertTrue(cache.hasPending(KvMemoryCache.PENDING_RESET))
+        cache.writeCommitted(KvMemoryCache.PENDING_RESET, null)
+        cache.merge(listOf(row("x", "9")))
+        assertEquals("9", cache.get("x")?.string)
+    }
+
+    @Test
+    fun writeFailureKeepsMemoryAndAllowsRetryPut() {
+        val cache = KvMemoryCache()
+        cache.prime(emptyList())
+        cache.put(row("k", "v1"))
+        assertEquals("v1", cache.get("k")?.string)
+        assertTrue(cache.hasPending("k"))
+        // Simulate DB write failure: do NOT call writeCommitted, memory stays pending.
+        cache.merge(emptyList())
+        assertEquals("v1", cache.get("k")?.string)
+        assertTrue(cache.hasPending("k"))
+        // Second put overwrites memory and stays pending; next commit clears.
+        cache.put(row("k", "v2"))
+        assertEquals("v2", cache.get("k")?.string)
+        assertTrue(cache.hasPending("k"))
+        cache.writeCommitted("k", row("k", "v2"))
+        assertEquals("v2", cache.get("k")?.string)
+        assertFalse(cache.hasPending("k"))
+    }
 }

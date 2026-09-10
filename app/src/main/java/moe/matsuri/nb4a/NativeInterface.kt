@@ -11,10 +11,10 @@ import io.nekohasekai.sagernet.database.routerStableId
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.app
 import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
+import io.nekohasekai.sagernet.utils.ConnectionResetDebouncer
 import io.nekohasekai.sagernet.utils.PackageCache
 import io.nekohasekai.sagernet.route.routerNodeKey
 import libcore.BoxPlatformInterface
-import libcore.Libcore
 import libcore.NB4AInterface
 import java.net.InetSocketAddress
 
@@ -105,7 +105,7 @@ class NativeInterface : BoxPlatformInterface, NB4AInterface {
             Logs.d({ "other selector: $selectorTag" })
             return
         }
-        Libcore.resetAllConnections(true)
+        ConnectionResetDebouncer.resetAllConnections()
         if (service == null || proxy == null) return
         runOnDefaultDispatcher {
             if (DataStore.baseService !== service || service.data.proxy !== proxy) return@runOnDefaultDispatcher

@@ -26,6 +26,7 @@ import io.nekohasekai.sagernet.route.RouterSelection
 import io.nekohasekai.sagernet.route.RouterSelectionPlan
 import io.nekohasekai.sagernet.route.RouterSelectionRequest
 import io.nekohasekai.sagernet.route.routerNodeKey
+import io.nekohasekai.sagernet.utils.ConnectionResetDebouncer
 import io.nekohasekai.sagernet.utils.DefaultNetworkListener
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
@@ -73,13 +74,13 @@ class BaseService {
                     } else {
                         proxy?.box?.wake()
                         if (DataStore.wakeResetConnections) {
-                            Libcore.resetAllConnections(true)
+                            ConnectionResetDebouncer.resetAllConnections()
                         }
                     }
                 }
 
                 Action.RESET_UPSTREAM_CONNECTIONS -> runOnDefaultDispatcher {
-                    Libcore.resetAllConnections(true)
+                    ConnectionResetDebouncer.resetAllConnections()
                     runOnMainDispatcher {
                         Util.collapseStatusBar(ctx)
                         Toast.makeText(ctx, "Reset upstream connections done", Toast.LENGTH_SHORT)
@@ -388,7 +389,7 @@ class BaseService {
                     if (networkChanged || (oldName != null && upstreamInterfaceName != null && oldName != upstreamInterfaceName)) {
                         Logs.d({ "Network changed: $oldName -> $upstreamInterfaceName" })
                         if (DataStore.networkChangeResetConnections) {
-                            Libcore.resetAllConnections(true)
+                            ConnectionResetDebouncer.resetAllConnections()
                         }
                         val runningProxy = data.proxy
                         if (data.state == State.Connected && runningProxy?.isInitialized() == true) {

@@ -21,8 +21,8 @@ abstract class PublicDatabase : RoomDatabase() {
                 .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                 .enableMultiInstanceInvalidation()
                 .fallbackToDestructiveMigration()
-                .setQueryExecutor(DbExecutors.single("public-db-query"))
-                .setTransactionExecutor(DbExecutors.single("public-db-transaction"))
+                .setQueryExecutor(DbExecutors.query)
+                .setTransactionExecutor(DbExecutors.write)
                 .build()
         }
 

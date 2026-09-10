@@ -132,32 +132,63 @@ open class RoomPreferenceDataStore(
     fun remove(key: String) {
         cache.delete(key)
         fireChangeListener(key)
-        writer.execute {
-            try {
-                kvPairDao.delete(key)
-            } catch (e: Exception) {
-                Logs.w(e) { "Failed to delete preference $key" }
-            } finally {
-                cache.writeCommitted(key, null)
-            }
-        }
+        writer.execute { executeDeleteWithRetry(key) }
     }
 
     private fun putValue(key: String, pair: KeyValuePair) {
         cache.put(pair)
         fireChangeListener(key)
-        writer.execute {
+        writer.execute { executePutWithRetry(key, pair) }
+    }
+
+    private val putRetryDelaysMs = longArrayOf(50L, 100L, 200L)
+
+    private fun executePutWithRetry(key: String, pair: KeyValuePair) {
+        var lastError: Exception? = null
+        for (attempt in 0..2) {
             try {
                 kvPairDao.put(pair)
-            } catch (e: Exception) {
-                // The mirror keeps the optimistic value; DB failures surface on the
-                // next sync (startup, service start, invalidation) instead of
-                // crashing the caller that merely toggled a preference.
-                Logs.w(e) { "Failed to persist preference $key" }
-            } finally {
                 cache.writeCommitted(key, pair)
+                return
+            } catch (e: Exception) {
+                lastError = e
+                Logs.w(e) { "Failed to persist preference $key (attempt ${attempt + 1}/3)" }
+                if (attempt < 2) {
+                    try {
+                        Thread.sleep(putRetryDelaysMs[attempt])
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        break
+                    }
+                }
             }
         }
+        if (lastError != null) Logs.w(lastError) { "Giving up persisting preference $key after 3 attempts; keeping memory value, will retry on next put" }
+        else Logs.w { "Giving up persisting preference $key after 3 attempts; keeping memory value, will retry on next put" }
+    }
+
+    private fun executeDeleteWithRetry(key: String) {
+        var lastError: Exception? = null
+        for (attempt in 0..2) {
+            try {
+                kvPairDao.delete(key)
+                cache.writeCommitted(key, null)
+                return
+            } catch (e: Exception) {
+                lastError = e
+                Logs.w(e) { "Failed to delete preference $key (attempt ${attempt + 1}/3)" }
+                if (attempt < 2) {
+                    try {
+                        Thread.sleep(putRetryDelaysMs[attempt])
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        break
+                    }
+                }
+            }
+        }
+        if (lastError != null) Logs.w(lastError) { "Giving up deleting preference $key after 3 attempts; keeping memory tombstone" }
+        else Logs.w { "Giving up deleting preference $key after 3 attempts; keeping memory tombstone" }
     }
 
     private val listeners = HashSet<OnPreferenceDataStoreChangeListener>()
