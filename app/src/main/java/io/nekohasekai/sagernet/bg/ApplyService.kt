@@ -65,7 +65,7 @@ object ApplyService {
                 return ApplyResult(request.requestId, CommandOutcome.FAILED, generation, false, ApplyErrorCodes.INVALID_TARGET)
             }
         } else if (request.kind == CommandKind.START || request.kind == CommandKind.RELOAD) {
-            val committed = DataStore.configurationStore.readCommittedSettingsSnapshot()
+            val committed = DataStore.configurationStore.readCommittedSettingsSnapshotOffMain()
             val committedProxyId = resolveCommittedProfileId(request, committed)
             if (committedProxyId == null) {
                 return ApplyResult(request.requestId, CommandOutcome.FAILED, generation, false, ApplyErrorCodes.INVALID_TARGET)

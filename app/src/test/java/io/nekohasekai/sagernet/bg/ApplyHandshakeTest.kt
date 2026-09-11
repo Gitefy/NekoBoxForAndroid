@@ -3,6 +3,7 @@ package io.nekohasekai.sagernet.bg
 import io.nekohasekai.sagernet.Key
 import io.nekohasekai.sagernet.database.preference.KeyValuePair
 import io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -234,5 +235,22 @@ class ApplyHandshakeTest {
         t.join(1_000)
         assertTrue(updateSeen)
         assertEquals("stable-tag", fakeRouterDao.table[42L])
+    }
+
+    @Test
+    fun committedSnapshotReadLeavesCallerThread() = runBlocking {
+        val snapshotThread = java.util.concurrent.atomic.AtomicReference<Thread>()
+        val dao = FakeKvDao()
+        val store = RoomPreferenceDataStore(dao, tableSnapshot = {
+            snapshotThread.set(Thread.currentThread())
+            dao.snapshot()
+        })
+        store.awaitReady()
+        val caller = Thread.currentThread()
+        store.readCommittedSettingsSnapshotOffMain()
+        val seen = snapshotThread.get()
+        assertNotNull(seen)
+        assertTrue(seen != caller)
+        assertFalse(seen.name.contains("main", ignoreCase = true) && seen === caller)
     }
 }

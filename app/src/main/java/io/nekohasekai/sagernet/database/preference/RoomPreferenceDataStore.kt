@@ -181,6 +181,8 @@ open class RoomPreferenceDataStore(
 
     fun cachedAll(): List<KeyValuePair> = cache.snapshot()
     fun readCommittedSettingsSnapshot(): List<KeyValuePair> = tableSnapshot().map(::copyRow)
+    suspend fun readCommittedSettingsSnapshotOffMain(): List<KeyValuePair> =
+        kotlinx.coroutines.withContext(Dispatchers.IO) { readCommittedSettingsSnapshot() }
 
     suspend fun syncNow() = kotlinx.coroutines.withContext(Dispatchers.IO) {
         readAndMergeSnapshot()

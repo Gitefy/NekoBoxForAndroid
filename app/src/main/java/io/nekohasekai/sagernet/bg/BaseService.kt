@@ -327,8 +327,8 @@ class BaseService {
             }
         }
 
-        private fun executeReload(request: ApplyRequest, generation: Long) {
-            val committed = DataStore.configurationStore.readCommittedSettingsSnapshot()
+        private suspend fun executeReload(request: ApplyRequest, generation: Long) {
+            val committed = DataStore.configurationStore.readCommittedSettingsSnapshotOffMain()
             val profileId = ApplyService.resolveCommittedProfileId(request, committed)
             if (profileId == null) {
                 completeApply(request, generation, CommandOutcome.FAILED, false, ApplyErrorCodes.INVALID_TARGET)
@@ -413,7 +413,7 @@ class BaseService {
         fun canReloadSelector(): Boolean = canReloadSelector(
             ApplyService.resolveCommittedProfileId(
                 ApplyRequest(kind = CommandKind.RELOAD, targetProfileId = null, routerStableTag = null, routerMemberId = null),
-                DataStore.configurationStore.readCommittedSettingsSnapshot(),
+                DataStore.configurationStore.cachedAll(),
             ) ?: 0L
         )
 
