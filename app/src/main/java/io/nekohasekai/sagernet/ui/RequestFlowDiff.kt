@@ -21,3 +21,12 @@ object RequestFlowDiff {
         ) == newItem
     }
 }
+
+object RequestRowSelection {
+    const val NO_POSITION = -1
+
+    fun select(position: Int, items: List<RequestFlowData>): RequestFlowData? {
+        if (position == NO_POSITION || position < 0 || position >= items.size) return null
+        return items[position]
+    }
+}

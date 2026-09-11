@@ -24,6 +24,30 @@ class RequestFlowDiffTest {
     }
 }
 
+class RequestRowSelectionTest {
+    @Test
+    fun payloadUpdateIsVisibleToClickSelection() {
+        val first = RequestFlowData(id = "c1", createdAt = 9L, uploadBytes = 1, closed = false)
+        val updated = first.copy(uploadBytes = 80, closed = true, closedAt = 11L)
+        assertEquals(first, RequestRowSelection.select(0, listOf(first)))
+        assertEquals(updated, RequestRowSelection.select(0, listOf(updated)))
+        assertEquals("c1", RequestRowSelection.select(0, listOf(updated))?.id)
+        assertTrue(RequestRowSelection.select(0, listOf(updated))!!.closed)
+        assertEquals(80L, RequestRowSelection.select(0, listOf(updated))!!.uploadBytes)
+    }
+
+    @Test
+    fun removedOrUnknownPositionDoesNotSelectWrongRow() {
+        val a = RequestFlowData(id = "a", createdAt = 1L)
+        val b = RequestFlowData(id = "b", createdAt = 2L)
+        assertEquals(null, RequestRowSelection.select(RequestRowSelection.NO_POSITION, listOf(a, b)))
+        assertEquals(null, RequestRowSelection.select(0, emptyList()))
+        assertEquals(null, RequestRowSelection.select(5, listOf(a, b)))
+        assertEquals("b", RequestRowSelection.select(0, listOf(b))?.id)
+        assertEquals("a", RequestRowSelection.select(1, listOf(b, a))?.id)
+    }
+}
+
 class RequestAppLabelCacheTest {
     @Test
     fun resolveHitsAreCachedAndBounded() {

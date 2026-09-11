@@ -165,6 +165,44 @@ class ConnectionObserverTest {
         assertEquals(listOf("a"), published)
         observer.stop()
     }
+
+    @Test
+    fun duplicateEnableStaysOnSerialSamplerAndResendsFirstFrame() = runBlocking {
+        val ticks = Channel<Unit>(Channel.UNLIMITED)
+        val inFlight = java.util.concurrent.atomic.AtomicInteger(0)
+        val maxInFlight = java.util.concurrent.atomic.AtomicInteger(0)
+        val published = ArrayList<Int>()
+        var polls = 0
+        val observer = ConnectionObserver(
+            snapshot = {
+                polls++
+                val n = inFlight.incrementAndGet()
+                maxInFlight.accumulateAndGet(n) { a, b -> maxOf(a, b) }
+                try {
+                    """{"flows":[{"id":"a","createdAt":1,"uploadBytes":1,"logicalOutbound":"x","finalOutboundTag":"y"}]}"""
+                } finally {
+                    inFlight.decrementAndGet()
+                }
+            },
+            publish = { published.add(it.items.size) },
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            wait = { ticks.receive() },
+            scope = this,
+        )
+        observer.start()
+        yield()
+        val pollsAfterStart = polls
+        assertTrue(pollsAfterStart >= 1)
+        observer.start()
+        yield()
+        yield()
+        assertTrue(polls > pollsAfterStart)
+        assertEquals(1, maxInFlight.get())
+        assertTrue(published.size >= 2)
+        observer.stop()
+    }
 }
 
 class RequestFlowMapperTest {

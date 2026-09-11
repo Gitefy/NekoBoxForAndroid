@@ -121,6 +121,14 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
         private val routeView: TextView = view.findViewById(R.id.request_route)
         private val metaView: TextView = view.findViewById(R.id.request_meta)
 
+        init {
+            itemView.setOnClickListener {
+                val selected = RequestRowSelection.select(bindingAdapterPosition, adapter.currentList)
+                    ?: return@setOnClickListener
+                showDetail(selected)
+            }
+        }
+
         fun bind(flow: RequestFlowData) {
             bindApp(flow)
             val host = flow.domain.ifBlank {
@@ -137,7 +145,6 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
                 }
             }
             bindStats(flow)
-            itemView.setOnClickListener { showDetail(flow) }
         }
 
         fun bindApp(flow: RequestFlowData) {

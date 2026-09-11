@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -207,12 +208,12 @@ func TestEventPathDoesNotEnumerateLiveConnections(t *testing.T) {
 	if src.liveCalls != 0 {
 		t.Fatalf("event path liveCalls=%d", src.liveCalls)
 	}
-	if h.liveScans != 0 {
-		t.Fatalf("liveScans=%d", h.liveScans)
+	if h.liveScans.Load() != 0 {
+		t.Fatalf("liveScans=%d", h.liveScans.Load())
 	}
 	h.MergeLive(src)
-	if src.liveCalls != 1 || h.liveScans != 1 {
-		t.Fatalf("liveCalls=%d scans=%d", src.liveCalls, h.liveScans)
+	if src.liveCalls != 1 || h.liveScans.Load() != 1 {
+		t.Fatalf("liveCalls=%d scans=%d", src.liveCalls, h.liveScans.Load())
 	}
 }
 
@@ -270,13 +271,13 @@ func TestBatchMergeEvictsOnce(t *testing.T) {
 			CreatedAt: now.Add(time.Duration(i) * time.Millisecond),
 		})
 	}
-	before := h.evictPasses
+	before := h.evictPasses.Load()
 	h.mergeTrackers(metas)
-	if h.evictPasses != before+1 {
-		t.Fatalf("evictPasses delta=%d", h.evictPasses-before)
+	if h.evictPasses.Load() != before+1 {
+		t.Fatalf("evictPasses delta=%d", h.evictPasses.Load()-before)
 	}
-	if h.trackerConverts < 8 {
-		t.Fatalf("converts=%d", h.trackerConverts)
+	if h.trackerConverts.Load() < 8 {
+		t.Fatalf("converts=%d", h.trackerConverts.Load())
 	}
 }
 
@@ -287,6 +288,43 @@ func TestHistoryIsAvailableBeforeFirstSnapshotMerge(t *testing.T) {
 	got := h.Snapshot()
 	if len(got) != 1 || got[0].Domain != "example.com" {
 		t.Fatalf("first open should see prior events: %v", got)
+	}
+}
+
+func TestApplyEventAndMergeLiveConcurrent(t *testing.T) {
+	now := time.UnixMilli(12_000_000)
+	h := newConnectionHistory(func() time.Time { return now })
+	metas := make([]*trafficcontrol.TrackerMetadata, 20)
+	for i := range metas {
+		metas[i] = &trafficcontrol.TrackerMetadata{
+			ID:        uuid.FromStringOrNil(fmt.Sprintf("22222222-2222-2222-2222-%012d", i+1)),
+			CreatedAt: now.Add(time.Duration(i) * time.Millisecond),
+		}
+	}
+	src := &countingLiveSource{live: metas}
+	var wg sync.WaitGroup
+	for g := 0; g < 6; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 40; i++ {
+				h.ApplyEvent(metas[i%len(metas)])
+				if i%2 == 0 {
+					h.MergeLive(src)
+				}
+				if i%5 == 0 {
+					_ = h.Snapshot()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if got := len(h.Snapshot()); got == 0 || got > 300 {
+		t.Fatalf("snapshot=%d", got)
+	}
+	if h.trackerConverts.Load() == 0 || h.liveScans.Load() == 0 || h.evictPasses.Load() == 0 {
+		t.Fatalf("counters not updated converts=%d scans=%d evicts=%d",
+			h.trackerConverts.Load(), h.liveScans.Load(), h.evictPasses.Load())
 	}
 }
 

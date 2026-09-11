@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -63,9 +64,9 @@ type connectionHistory struct {
 	stopCh  chan struct{}
 	stopped bool
 
-	liveScans      int
-	trackerConverts int
-	evictPasses    int
+	liveScans       atomic.Int64
+	trackerConverts atomic.Int64
+	evictPasses     atomic.Int64
 }
 
 func newConnectionHistory(now func() time.Time) *connectionHistory {
@@ -257,7 +258,7 @@ func (h *connectionHistory) ApplyEvent(meta *trafficcontrol.TrackerMetadata) {
 	if meta == nil {
 		return
 	}
-	h.trackerConverts++
+	h.trackerConverts.Add(1)
 	h.Upsert(flowFromTracker(meta))
 }
 
@@ -281,7 +282,7 @@ func flowLess(a, b connectionFlow) bool {
 }
 
 func (h *connectionHistory) evictLocked() {
-	h.evictPasses++
+	h.evictPasses.Add(1)
 	cutoff := h.now().Add(-h.maxAge).UnixMilli()
 	for id, flow := range h.byID {
 		created := flow.CreatedAt
@@ -310,7 +311,7 @@ func (h *connectionHistory) mergeTrackers(metas []*trafficcontrol.TrackerMetadat
 	}
 	flows := make([]connectionFlow, 0, len(metas))
 	for _, meta := range metas {
-		h.trackerConverts++
+		h.trackerConverts.Add(1)
 		flows = append(flows, flowFromTracker(meta))
 	}
 	h.mu.Lock()
@@ -400,7 +401,7 @@ func (h *connectionHistory) MergeLive(source liveConnectionSource) {
 	if source == nil {
 		return
 	}
-	h.liveScans++
+	h.liveScans.Add(1)
 	h.mergeTrackers(source.Connections())
 }
 

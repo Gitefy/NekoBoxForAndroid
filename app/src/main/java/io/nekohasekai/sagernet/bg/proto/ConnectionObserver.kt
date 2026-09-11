@@ -5,9 +5,11 @@ import io.nekohasekai.sagernet.aidl.RequestFlowData
 import io.nekohasekai.sagernet.ktx.Logs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 
 class ConnectionObserver(
     private val snapshot: () -> String,
@@ -36,6 +38,7 @@ class ConnectionObserver(
     private var loggedFailure = false
     private var mapsCache: RequestDisplayMaps? = null
     private var lastFingerprint: String? = null
+    private val kicks = Channel<Unit>(Channel.CONFLATED)
     private val publisher = RequestSnapshotPublisher(
         scope = scope,
         isActive = { enabled && isCurrent() },
@@ -51,7 +54,7 @@ class ConnectionObserver(
                 enabled = true
                 lastFingerprint = null
                 if (job?.isActive == true) {
-                    scope.launch { pollOnce() }
+                    kicks.trySend(Unit)
                 } else {
                     startLocked()
                 }
@@ -98,13 +101,23 @@ class ConnectionObserver(
         if (job?.isActive == true) return
         pollActive = true
         job = scope.launch {
-            pollOnce()
-            while (isActive && enabled) {
-                wait(intervalMs)
-                if (!isActive || !enabled) break
-                pollOnce()
+            try {
+                while (isActive && enabled) {
+                    pollOnce()
+                    if (!isActive || !enabled) break
+                    val waiter = launch { wait(intervalMs) }
+                    try {
+                        select<Unit> {
+                            kicks.onReceive { waiter.cancel() }
+                            waiter.onJoin { }
+                        }
+                    } finally {
+                        waiter.cancel()
+                    }
+                }
+            } finally {
+                pollActive = false
             }
-            pollActive = false
         }
     }
 
