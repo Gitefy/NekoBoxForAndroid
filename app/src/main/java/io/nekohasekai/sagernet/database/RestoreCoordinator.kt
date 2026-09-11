@@ -31,6 +31,15 @@ object RestoreCoordinator {
         val holder: String? = null,
     )
 
+    private val ROUTINE_LOCK_OPS = setOf(
+        "try",
+        "acquired",
+        "recovery-begin",
+        "recovery-end",
+        "recoverOnBoot-begin",
+        "recoverOnBoot-end",
+    )
+
     data class AcquireOutcome(
         val permit: Permit?,
         val error: String?,
@@ -184,12 +193,18 @@ object RestoreCoordinator {
         moe.matsuri.nb4a.utils.JavaUtil.getProcessName()
     }.getOrElse { "pid-${diagnosticPid()}" }
 
+    internal fun lockTraceIsRoutine(event: LockEvent): Boolean {
+        if (!event.error.isNullOrBlank()) return false
+        return event.op in ROUTINE_LOCK_OPS
+    }
+
     private fun trace(event: LockEvent) {
-        Logs.w {
+        val line = {
             "restore-lock op=${event.op} kind=${event.kind} acquired=${event.acquired} " +
                 "phase=${event.phase} pid=${event.pid} process=${event.process} " +
                 "holder=${event.holder ?: "-"} error=${event.error ?: "-"}"
         }
+        if (lockTraceIsRoutine(event)) Logs.d(line) else Logs.w(line)
         lockSink?.invoke(event)
     }
 

@@ -26,8 +26,13 @@ import io.nekohasekai.sagernet.group.GroupUpdater
 import io.nekohasekai.sagernet.ktx.*
 import io.nekohasekai.sagernet.widget.ListListener
 import io.nekohasekai.sagernet.widget.QRCodeDialog
+import androidx.lifecycle.lifecycleScope
 import io.nekohasekai.sagernet.widget.UndoSnackbarManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import moe.matsuri.nb4a.utils.Util
 import moe.matsuri.nb4a.utils.toBytesString
 import java.lang.NumberFormatException
@@ -42,6 +47,8 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group),
     lateinit var layoutManager: LinearLayoutManager
     lateinit var groupAdapter: GroupAdapter
     lateinit var undoManager: UndoSnackbarManager<ProxyGroup>
+    private var routerSectionJob: Job? = null
+    private var routerSectionGeneration = 0
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
@@ -313,6 +320,12 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group),
 
     }
 
+    override fun onDestroyView() {
+        routerSectionJob?.cancel()
+        routerSectionJob = null
+        super.onDestroyView()
+    }
+
     override fun onDestroy() {
         if (::groupAdapter.isInitialized) {
             GroupManager.removeListener(groupAdapter)
@@ -561,15 +574,20 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group),
     }
 
     private fun updateRouterSection() {
-        val routerSubtitle = view?.findViewById<TextView>(R.id.router_subtitle) ?: return
-        runOnDefaultDispatcher {
-            val count = runCatching { SagerDatabase.routerGroupDao.all().size }.getOrDefault(0)
-            onMainDispatcher {
-                if (count > 0) {
-                    routerSubtitle.text = getString(R.string.router_groups_card_summary_with_count, count)
-                } else {
-                    routerSubtitle.text = getString(R.string.router_groups_card_summary)
-                }
+        val owner = viewLifecycleOwnerLiveData.value ?: return
+        val generation = ++routerSectionGeneration
+        routerSectionJob?.cancel()
+        routerSectionJob = owner.lifecycleScope.launch {
+            val count = withContext(Dispatchers.IO) {
+                runCatching { SagerDatabase.routerGroupDao.all().size }.getOrDefault(0)
+            }
+            if (!GroupRouterSectionGate.isCurrentGeneration(generation, routerSectionGeneration)) return@launch
+            if (!GroupRouterSectionGate.canApplyUi(view != null, owner.lifecycle.currentState)) return@launch
+            val routerSubtitle = view?.findViewById<TextView>(R.id.router_subtitle) ?: return@launch
+            routerSubtitle.text = if (count > 0) {
+                getString(R.string.router_groups_card_summary_with_count, count)
+            } else {
+                getString(R.string.router_groups_card_summary)
             }
         }
     }
