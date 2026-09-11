@@ -7,73 +7,40 @@ import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock as withLockSuspend
 
-/** Kind of a persisted (or persisted-then-failed) operation. */
 enum class WriteOperationKind { PUT, DELETE, RESET, RESTORE }
 
-/**
- * Admission-order ticket. [queueSequence] is the store-local writer clock that
- * orders admission/barrier/fence operations; [cacheGeneration] is the
- * [KvMemoryCache] generation token used only for stale-ACK protection and is
- * independent of [queueSequence]; [writeEpoch] is only a local write fence.
- */
 data class WriteTicket(
     val queueSequence: Long,
     val writeEpoch: Long,
     val cacheGeneration: Long?,
 )
 
-/** A failed operation. Whole-table operations carry a null [key]. */
 data class WriteFailure(
     val operation: WriteOperationKind,
     val key: String?,
     val reason: String,
 )
 
-/** Result of [RoomPreferenceDataStore.flushPendingWrites]/[reset]/[restore]. */
 data class FlushResult(
     val success: Boolean,
     val completed: Int,
     val failures: List<WriteFailure>,
 )
 
-/**
- * PreferenceDataStore backed by a Room `KeyValuePair` table.
- *
- * Since Android 16 targets must not touch SQLite on the main thread, the store
- * keeps a [KvMemoryCache] mirror of the table:
- *
- * - Reads are served from memory only, so preference getters are safe from any
- *   thread without `allowMainThreadQueries`.
- * - Writes update the mirror synchronously (read-your-writes for every later
- *   getter, including listener callbacks) and are persisted FIFO on a single
- *   writer thread.
- * - The owning Room database observes `KeyValuePair` invalidations on its own
- *   thread (own-process commits and multi-instance invalidation from the other
- *   process) and merges them into the same mirror; local in-flight writes stay
- *   authoritative until the DB layer acknowledges them.
- *
- * S1-B3 adds an explicit write barrier and whole-table fencing:
- *
- * - [flushPendingWrites] inserts an in-band marker into the same FIFO; it runs
- *   only after all operations admitted before the cut reached a terminal state
- *   and evaluates the cut-scoped effective durable state (a failed key is
- *   recoverable only by a later successful same-key write admitted before the
- *   same cut; a failed whole-table fence cannot be healed by keyed writes).
- * - [restore]/[reset] are whole-table fences: they go through the same writer,
- *   run inside the configured transaction runner, hold [snapshotLock] from the
- *   transaction start through the cache commit/abort, and only return after
- *   the durable terminal state.
- *
- * The mirror is primed once at store construction. That single blocking table
- * read replaces the previous per-read synchronous queries and only ever runs
- * during process startup, before any UI is drawn.
- */
 @Suppress("MemberVisibilityCanBePrivate", "unused")
 open class RoomPreferenceDataStore(
     private val kvPairDao: KeyValuePair.Dao,
@@ -88,12 +55,40 @@ open class RoomPreferenceDataStore(
         Thread(runnable, "kv-store-writer").apply { isDaemon = true }
     }
 
-    // Coordinator state. All ledger slots are guarded by [ledgerLock]; the
-    // writer thread is the only place that advances terminals (plus the rare
-    // admission-time rejection path), so a marker evaluating the slots at its
-    // FIFO-ordered execution time sees exactly the cut state. No operation
-    // journal is kept: one slot per key, one whole-table slot, the counter and
-    // the queue.
+    sealed interface StoreReadiness {
+        object Loading : StoreReadiness
+        object Ready : StoreReadiness
+        data class Failed(val errorCode: String) : StoreReadiness
+    }
+
+    private val readinessScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val readinessFlow = MutableStateFlow<StoreReadiness>(StoreReadiness.Loading)
+    private val retryMutex = Mutex()
+    @Volatile private var primeJob: Job? = null
+    private val bootDirty = AtomicBoolean(false)
+    @Volatile private var bootstrapDone = false
+    val readiness: StoreReadiness get() = readinessFlow.value
+    fun isReady(): Boolean = readinessFlow.value is StoreReadiness.Ready
+    suspend fun awaitReady(): StoreReadiness = readinessFlow.first { it !is StoreReadiness.Loading }
+    suspend fun retryPrime(): StoreReadiness {
+        if (readinessFlow.value is StoreReadiness.Ready) return readinessFlow.value
+        retryMutex.withLockSuspend {
+            when (readinessFlow.value) {
+                is StoreReadiness.Ready -> return@withLockSuspend
+                is StoreReadiness.Loading -> {
+                    primeJob?.join()
+                    return@withLockSuspend
+                }
+                is StoreReadiness.Failed -> {
+                    bootDirty.set(false)
+                    readinessFlow.value = StoreReadiness.Loading
+                    launchPrime()
+                }
+            }
+        }
+        return awaitReady()
+    }
+
     private val admissionLock = ReentrantLock()
     private val ledgerLock = Any()
     private var queueSequence = 0L
@@ -118,27 +113,36 @@ open class RoomPreferenceDataStore(
     private var latestWholeTableOutcome: WholeTableOutcome? = null
 
     init {
-        // One-time mirror prime; replaces per-read synchronous queries.
-        runBlocking(Dispatchers.IO) {
-            runCatching { readAndMergeSnapshot() }.onFailure { Logs.w(it) }
-        }
+        readinessFlow.value = StoreReadiness.Loading
+        launchPrime()
         invalidationSource?.onInvalidate { tables ->
             if ("KeyValuePair" in tables) {
-                runCatching { readAndMergeSnapshot() }.onFailure { Logs.w(it) }
+                if (!bootstrapDone) bootDirty.set(true)
+                else runCatching { readAndMergeSnapshot() }.onFailure { Logs.w(it) }
             }
         }
     }
 
-    /**
-     * Serialize the complete snapshot path. Without this coordinator two
-     * concurrent readers can interleave as A(capture)→A(read old)→B(capture)→
-     * B(read new)→B(merge new)→A(merge old) and regress the mirror to a
-     * stale DB state. Holding one lock across capture+read+merge preserves
-     * per-key generation semantics, needs no sleep/delay, and keeps the
-     * single-writer and retry behavior unchanged. Whole-table fences hold the
-     * same lock from the transaction start through the cache commit/abort so
-     * a snapshot that read the DB before a fence cannot merge after it.
-     */
+    private fun launchPrime() {
+        val job = readinessScope.launch {
+            val result: StoreReadiness = runCatching { readAndMergeSnapshot() }.fold(
+                onSuccess = { StoreReadiness.Ready },
+                onFailure = { e ->
+                    Logs.w(e) { "Store prime failed; entering Failed state" }
+                    StoreReadiness.Failed(e.javaClass.simpleName.takeIf { it.isNotBlank() } ?: "StorePrimeFailed")
+                },
+            )
+            readinessFlow.value = result
+            if (result is StoreReadiness.Ready) {
+                if (bootDirty.compareAndSet(true, false)) {
+                    runCatching { readAndMergeSnapshot() }.onFailure { Logs.w(it) }
+                }
+                bootstrapDone = true
+            }
+        }
+        primeJob = job
+    }
+
     private fun readAndMergeSnapshot() = snapshotLock.withLock {
         val readEpoch = cache.captureReadEpoch()
         cache.merge(tableSnapshot(), readEpoch)
@@ -151,14 +155,9 @@ open class RoomPreferenceDataStore(
     fun getString(key: String) = cache.get(key)?.string
     fun getStringSet(key: String) = cache.get(key)?.stringSet
 
-    /** Authoritative mirror snapshot; no database access. */
     fun cachedAll(): List<KeyValuePair> = cache.snapshot()
+    fun readCommittedSettingsSnapshot(): List<KeyValuePair> = tableSnapshot().map(::copyRow)
 
-    /**
-     * Re-read the whole (small) table into the mirror. Call before reading
-     * settings that may have been written by the other process and whose
-     * invalidation may not have propagated yet (service start/reload).
-     */
     suspend fun syncNow() = kotlinx.coroutines.withContext(Dispatchers.IO) {
         readAndMergeSnapshot()
     }
@@ -175,20 +174,8 @@ open class RoomPreferenceDataStore(
             future
         }
 
-    /**
-     * Wait until every operation admitted before this call reached a durable
-     * terminal state, evaluated at the cutoff (cut-scoped effective durable
-     * state). Operations admitted afterwards cannot extend or heal this
-     * barrier; cancelling the waiter never cancels admitted writes.
-     */
     suspend fun flushPendingWrites(): FlushResult = awaitSuspendable(flushPendingWritesAsync())
 
-    /**
-     * Whole-table fence: replace the settings table with [rows] in one
-     * transaction and block the (off-main) caller until the durable result.
-     * Queued pre-fence writes still land first and are erased by the
-     * transaction's reset, so they cannot repollute the restored database.
-     */
     fun restore(rows: List<KeyValuePair>): FlushResult {
         val frozen = rows.map { copyRow(it) }
         val future = admissionLock.withLock {
@@ -217,10 +204,6 @@ open class RoomPreferenceDataStore(
         }
     }
 
-    /**
-     * Whole-table fence that clears the settings table, blocks until the
-     * durable result, and reports failure instead of pretending success.
-     */
     suspend fun reset(): FlushResult {
         val future = admissionLock.withLock {
             val seq = ++queueSequence
@@ -390,9 +373,6 @@ open class RoomPreferenceDataStore(
                     Logs.w(it) { "Failed to abort whole-table fence $fenceToken" }
                 }
                 Logs.w(e) { "Whole-table $operation failed; holding optimistic mirror until the ordered realign" }
-                // Ordered fresh read at the same writer position: realigns the
-                // mirror with the actual table after the failed transaction and
-                // preserves post-fence keyed pendings (merge skips pending keys).
                 runCatching { readAndMergeSnapshot() }.onFailure {
                     Logs.w(it) { "Post-failure mirror realign failed; next invalidation will retry" }
                 }
@@ -411,7 +391,6 @@ open class RoomPreferenceDataStore(
         future.complete(result)
     }
 
-    /** In-band barrier marker: runs at FIFO position, evaluates the cut, never blocks the writer. */
     private fun evaluateBarrierMarker(cut: Long, future: CompletableFuture<FlushResult>) {
         val result = synchronized(ledgerLock) {
             val failures = ArrayList<WriteFailure>()
@@ -457,7 +436,6 @@ open class RoomPreferenceDataStore(
         throw (e.cause ?: e)
     }
 
-    /** Sanitized reason: exception category only, never values or raw messages. */
     private fun reasonOf(e: Throwable?): String = e?.javaClass?.name ?: "persistence failed"
 
     private fun copyRow(pair: KeyValuePair): KeyValuePair = KeyValuePair(pair.key).also { copy ->
@@ -467,29 +445,18 @@ open class RoomPreferenceDataStore(
 
     private val listeners = HashSet<OnPreferenceDataStoreChangeListener>()
     private fun fireChangeListener(key: String) {
-        val listeners = synchronized(listeners) {
-            listeners.toList()
-        }
+        val listeners = synchronized(listeners) { listeners.toList() }
         listeners.forEach { it.onPreferenceDataStoreChanged(this, key) }
     }
 
     fun registerChangeListener(listener: OnPreferenceDataStoreChangeListener) {
-        synchronized(listeners) {
-            listeners.add(listener)
-        }
+        synchronized(listeners) { listeners.add(listener) }
     }
 
     fun unregisterChangeListener(listener: OnPreferenceDataStoreChangeListener) {
-        synchronized(listeners) {
-            listeners.remove(listener)
-        }
+        synchronized(listeners) { listeners.remove(listener) }
     }
 
-    /**
-     * Change-feed from the owning Room database. Production sources subscribe
-     * on the database's own invalidation thread; the observer must never run
-     * on the main thread because a mirror refresh still performs a table read.
-     */
     fun interface InvalidationSource {
         fun onInvalidate(observe: (tables: Set<String>) -> Unit)
     }

@@ -56,6 +56,7 @@ class RoomPreferenceDataStoreSnapshotOrderingTest {
         }
 
         val store = RoomPreferenceDataStore(fakeDao(), tableSnapshot = tableSnapshot)
+        runBlocking { store.awaitReady() }
         assertEquals("old", store.getString("k"))
         blockNextRead.set(true)
 

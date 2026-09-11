@@ -453,37 +453,36 @@ class BaseService {
             data.connectingJob = data.binder.launch(start = CoroutineStart.LAZY) {
                 try {
                     val startedAt = SystemClock.elapsedRealtime()
-                    // Profile lookup and config build are too heavy for the main
-                    // thread (P01): load the profile, build config and start the
-                    // core on Dispatchers.Default; only notification and state
-                    // changes stay on Main.
+                    // S2-B1 [E03] + readiness: promote with app name; title from DB is async and never blocks startup.
+                    val placeholderNotification = onMainDispatcher {
+                        createNotification(getString(R.string.app_name)).also { data.notification = it }
+                    }
+                    if (!placeholderNotification.show()) {
+                        stopRunner(false, "${getString(R.string.service_failed)}foreground service")
+                        return@launch
+                    }
+                    // Gate business on config-store readiness; the start must not branch on a mid-load empty table.
+                    when (val r = DataStore.configurationStore.awaitReady()) {
+                        is io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore.StoreReadiness.Ready -> {}
+                        is io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore.StoreReadiness.Failed ->
+                            error("settings not ready: ${r.errorCode}")
+                        else -> error("settings not ready")
+                    }
+                    // DB-dependent resolution now runs only on Ready; invalidation-backup is ready too (coalesced).
                     val profile = onDefaultDispatcher {
                         runCatching { SagerDatabase.proxyDao.getById(DataStore.selectedProxy) }
                             .getOrNull()
                     }
-                    if (profile == null) { // gracefully shutdown: https://stackoverflow.com/q/47337857/2245107
-                        onMainDispatcher {
-                            data.notification = createNotification("")
-                            stopRunner(false, getString(R.string.profile_empty))
-                        }
+                    if (profile == null) {
+                        onMainDispatcher { stopRunner(false, getString(R.string.profile_empty)) }
                         return@launch
                     }
                     val proxy = ProxyInstance(profile, this@Interface)
                     data.proxy = proxy
-                    val notificationTitle = onDefaultDispatcher {
-                        ServiceNotification.genTitle(profile)
-                    }
-                    val notification = onMainDispatcher {
-                        createNotification(notificationTitle).also {
-                            data.notification = it
-                        }
-                    }
-                    if (!notification.show()) {
-                        stopRunner(
-                            false,
-                            "${getString(R.string.service_failed)}foreground service",
-                        )
-                        return@launch
+                    // Replace placeholder title asynchronously; failure here does not abort the running core.
+                    onMainDispatcher {
+                        runCatching { ServiceNotification.genTitle(profile) }
+                            .onSuccess { title -> data.notification?.let { runCatching { it.postNotificationTitle(title) } } }
                     }
                     val notificationReadyAt = SystemClock.elapsedRealtime()
 

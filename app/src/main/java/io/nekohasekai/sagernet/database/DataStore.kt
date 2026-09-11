@@ -65,11 +65,34 @@ object DataStore : OnPreferenceDataStoreChangeListener {
 
     var runningTest = false
 
+    /** S2-B1: business reads must await this; -1 means "not yet known". */
+    suspend fun awaitReady() = configurationStore.awaitReady()
+    fun configurationReady() = configurationStore.readiness
+    fun isConfigurationReady() = configurationStore.isReady()
+
     fun currentGroupId(): Long {
         val currentSelected = configurationStore.getLong(Key.PROFILE_GROUP, -1)
         if (currentSelected > 0L) return currentSelected
-        // Bootstrap path (fresh install / settings reset): never block main thread
-        // with a synchronous Room call.
+        if (!configurationStore.isReady()) return -1L
+        return dbOffMain {
+            val groups = SagerDatabase.groupDao.allGroups()
+            if (groups.isNotEmpty()) {
+                val groupId = groups[0].id
+                selectedGroup = groupId
+                return@dbOffMain groupId
+            }
+            val groupId = SagerDatabase.groupDao.createGroup(ProxyGroup(ungrouped = true))
+            selectedGroup = groupId
+            groupId
+        }
+    }
+
+    /** S2-B1: Ready-gated variant; callers after awaitReady should prefer this. */
+    suspend fun currentGroupIdAsync(): Long {
+        val cur = configurationStore.getLong(Key.PROFILE_GROUP, -1)
+        if (cur > 0L) return cur
+        configurationStore.awaitReady()
+        if (configurationStore.readiness is RoomPreferenceDataStore.StoreReadiness.Failed) return -1L
         return dbOffMain {
             val groups = SagerDatabase.groupDao.allGroups()
             if (groups.isNotEmpty()) {
@@ -90,6 +113,7 @@ object DataStore : OnPreferenceDataStoreChangeListener {
             group = dbOffMain { SagerDatabase.groupDao.getById(currentSelected) }
         }
         if (group != null) return group
+        if (!configurationStore.isReady()) error("S2-B1: currentGroup() called before Ready; use currentGroupAsync()")
         return dbOffMain {
             val groups = SagerDatabase.groupDao.allGroups()
             if (groups.isEmpty()) {
@@ -101,6 +125,26 @@ object DataStore : OnPreferenceDataStoreChangeListener {
             }.also {
                 selectedGroup = it.id
             }
+        }
+    }
+
+    suspend fun currentGroupAsync(): ProxyGroup {
+        var group: ProxyGroup? = null
+        val cur = configurationStore.getLong(Key.PROFILE_GROUP, -1)
+        if (cur > 0L) {
+            group = dbOffMain { SagerDatabase.groupDao.getById(cur) }
+        }
+        if (group != null) return group
+        configurationStore.awaitReady()
+        return dbOffMain {
+            val groups = SagerDatabase.groupDao.allGroups()
+            if (groups.isEmpty()) {
+                ProxyGroup(ungrouped = true).apply {
+                    id = SagerDatabase.groupDao.createGroup(this)
+                }
+            } else {
+                groups[0]
+            }.also { selectedGroup = it.id }
         }
     }
 

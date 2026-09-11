@@ -57,13 +57,22 @@ class KvMemoryCache {
     /** Whether [prime] ran at least once. */
     val isPrimed: Boolean get() = primed
 
-    /** Replace the mirror with the authoritative table snapshot. */
+    /** Replace the mirror with the authoritative table snapshot; never clobbers admitted writes during bootstrap. */
     fun prime(rows: Collection<KeyValuePair>) = lock.write {
+        val pendingSnapshot = HashMap<String, KeyValuePair>()
+        for (key in pendingKeys) values[key]?.let { pendingSnapshot[key] = it }
+        val keepReset = pendingReset
+        val keepPendingKeys = HashSet(pendingKeys)
+        val keepPendingGens = HashMap(pendingGenerations)
         values.clear()
-        pendingReset = false
         for (row in rows) values[row.key] = row
-        // Local unacknowledged writes still beat the snapshot just read.
-        pendingKeys.removeAll { it == PENDING_RESET }
+        for ((k, v) in pendingSnapshot) values[k] = v
+        pendingKeys.clear()
+        pendingKeys.addAll(keepPendingKeys)
+        pendingGenerations.clear()
+        pendingGenerations.putAll(keepPendingGens)
+        pendingReset = keepReset
+        if (keepReset) pendingKeys.add(PENDING_RESET)
         primed = true
     }
 
