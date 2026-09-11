@@ -273,6 +273,8 @@
         device.</string>
     <!-- alert category -->
     <string name="profile_empty">Please select a profile</string>
+    <string name="settings_not_ready">Settings database is not ready</string>
+    <string name="settings_flush_failed">Settings persistence failed</string>
     <string name="connect">Connect</string>
     <string name="clipboard_empty">Clipboard is empty</string>
     <!-- menu category -->

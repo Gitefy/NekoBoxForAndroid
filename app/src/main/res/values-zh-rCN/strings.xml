@@ -119,6 +119,8 @@
     <string name="reboot_required">无法启动 VPN 服务 , 您可能需要重启您的设备.</string>
     <!-- alert category -->
     <string name="profile_empty">请选择一个服务器配置</string>
+    <string name="settings_not_ready">设置数据库未就绪</string>
+    <string name="settings_flush_failed">设置写入失败</string>
     <string name="connect">连接</string>
     <string name="clipboard_empty">剪切板没有内容</string>
     <!-- menu category -->

@@ -35,6 +35,7 @@ import moe.matsuri.nb4a.utils.cleanWebview
 import java.io.File
 import io.nekohasekai.sagernet.bg.ApplyRequest
 import io.nekohasekai.sagernet.bg.CommandKind
+import io.nekohasekai.sagernet.bg.UserStartTarget
 import androidx.work.Configuration as WorkConfiguration
 
 class SagerNet : Application(),
@@ -221,8 +222,8 @@ class SagerNet : Application(),
             return intent
         }
 
-        fun startService() = startServiceViaApply(
-            ApplyRequest(kind = CommandKind.START, targetProfileId = null, routerStableTag = null, routerMemberId = null),
+        fun startService(targetProfileId: Long? = null) = startServiceViaApply(
+            UserStartTarget.toStartRequest(targetProfileId),
         )
 
         fun startServiceViaApply(request: ApplyRequest) {

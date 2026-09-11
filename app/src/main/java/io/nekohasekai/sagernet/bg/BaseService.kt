@@ -506,6 +506,12 @@ class BaseService {
             }
         }
 
+        fun applyErrorMessage(errorCode: String?): String {
+            this as Context
+            val res = ApplyErrorMessages.stringRes(errorCode)
+            return if (res != null) getString(res) else "${getString(R.string.service_failed)}${errorCode ?: ""}"
+        }
+
         fun stopRunner(
             restart: Boolean = false,
             msg: String? = null,
@@ -700,7 +706,7 @@ class BaseService {
                     val failed = ApplyService.validateCommitted(request, generation)
                     if (failed != null) {
                         if (ApplyCoordinator.isCurrent(generation)) data.binder.finishApply(request, generation, failed)
-                        stopRunner(false, getString(R.string.profile_empty))
+                        stopRunner(false, applyErrorMessage(failed.errorCode))
                         return@launch
                     }
                     if (!ApplyCoordinator.isCurrent(generation)) return@launch
@@ -718,7 +724,7 @@ class BaseService {
                                 ApplyResult(request.requestId, CommandOutcome.FAILED, generation, false, ApplyErrorCodes.INVALID_TARGET),
                             )
                         }
-                        onMainDispatcher { stopRunner(false, getString(R.string.profile_empty)) }
+                        onMainDispatcher { stopRunner(false, applyErrorMessage(ApplyErrorCodes.INVALID_TARGET)) }
                         return@launch
                     }
                     val (proxy, title) = withContext(Dispatchers.Default) {

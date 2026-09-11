@@ -28,12 +28,15 @@ import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.aidl.ISagerNetService
 import io.nekohasekai.sagernet.aidl.SpeedDisplayData
 import io.nekohasekai.sagernet.aidl.TrafficDataBatch
+import io.nekohasekai.sagernet.bg.ApplyErrorMessages
 import io.nekohasekai.sagernet.bg.BaseService
 import io.nekohasekai.sagernet.bg.SagerConnection
+import io.nekohasekai.sagernet.bg.UserStartTarget
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.GroupManager
 import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.ProxyGroup
+import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.database.SubscriptionBean
 import io.nekohasekai.sagernet.database.RouterGroupRepository
 import io.nekohasekai.sagernet.database.preference.OnPreferenceDataStoreChangeListener
@@ -96,9 +99,38 @@ class MainActivity : ThemedActivity(),
         }
 
         binding.fab.setOnClickListener {
-            if (DataStore.serviceState.canStop) SagerNet.stopService() else connect.launch(
-                null
-            )
+            if (DataStore.serviceState.canStop) {
+                SagerNet.stopService()
+                return@setOnClickListener
+            }
+            val capturedGlobal = DataStore.selectedProxy
+            val fragment = currentMainFragment as? ConfigurationFragment
+                ?: supportFragmentManager.findFragmentById(R.id.fragment_holder) as? ConfigurationFragment
+            val inRouter = fragment?.inRouterGroupMode() == true
+            val routerPage = fragment?.currentRouterPage()
+            runOnDefaultDispatcher {
+                val globalValid = capturedGlobal > 0L &&
+                    runCatching { SagerDatabase.proxyDao.getById(capturedGlobal) }.getOrNull() != null
+                val memberId = routerPage?.selectedMemberId ?: 0L
+                val memberValid = memberId > 0L &&
+                    runCatching { SagerDatabase.proxyDao.getById(memberId) }.getOrNull() != null
+                val capture = UserStartTarget.capture(
+                    capturedGlobal,
+                    globalValid,
+                    inRouter,
+                    routerPage,
+                    memberValid,
+                )
+                onMainDispatcher {
+                    if (capture.targetProfileId == null) {
+                        val res = ApplyErrorMessages.stringRes(capture.errorCode) ?: R.string.profile_empty
+                        snackbar(getString(res)).show()
+                        return@onMainDispatcher
+                    }
+                    UserStartTarget.persistIfNeeded(capture) { DataStore.selectedProxy = it }
+                    connect.launch(capture.targetProfileId)
+                }
+            }
         }
 
         setContentView(binding.root)

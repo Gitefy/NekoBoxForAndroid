@@ -51,6 +51,7 @@ import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.aidl.TrafficData
 import io.nekohasekai.sagernet.bg.BaseService
+import io.nekohasekai.sagernet.bg.UserStartTarget
 import io.nekohasekai.sagernet.bg.proto.UrlTest
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.GroupManager
@@ -291,6 +292,20 @@ class ConfigurationFragment @JvmOverloads constructor(
         } else {
             routerGroupSelectionSnapshot[routerGroup.id]
         }
+    }
+
+    fun inRouterGroupMode(): Boolean = ::adapter.isInitialized && adapter.inRouterGroupMode
+
+    fun currentRouterPage(): UserStartTarget.RouterPage? {
+        if (!inRouterGroupMode()) return null
+        val rg = adapter.routerGroupList.getOrNull(groupPager.currentItem) ?: return null
+        val fromUi = selectedProfileInRouterGroup(rg)
+        val selected = when {
+            fromUi != null && fromUi > 0L -> fromUi
+            rg.selectedProxyId > 0L -> rg.selectedProxyId
+            else -> 0L
+        }
+        return UserStartTarget.RouterPage(mode = rg.mode, selectedMemberId = selected)
     }
 
     fun updateRuntimeUrlTestSelections(pairs: LongArray) {

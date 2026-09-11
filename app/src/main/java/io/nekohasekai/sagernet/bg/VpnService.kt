@@ -81,10 +81,13 @@ class VpnService : BaseVpnService(),
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (DataStore.serviceMode == Key.MODE_VPN) {
             if (prepare(this) != null) {
+                val targetId = intent?.getLongExtra(Action.EXTRA_TARGET_PROFILE_ID, -1L) ?: -1L
                 startActivity(
                     Intent(
                         this, VpnRequestActivity::class.java
-                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).apply {
+                        if (targetId > 0L) putExtra(Action.EXTRA_TARGET_PROFILE_ID, targetId)
+                    }
                 )
             } else return super<BaseService.Interface>.onStartCommand(intent, flags, startId)
         }
