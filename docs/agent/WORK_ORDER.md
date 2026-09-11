@@ -1,16 +1,14 @@
-# 当前工作单：S2-B2-APPLY-STOP-HANDSHAKE（短指针）
+# 当前工作单：S2-B3-CROSS-PROCESS-VERIFICATION（短指针｜准备阶段）
 
-work_order：S2-B2-APPLY-STOP-HANDSHAKE。
+work_order：S2-B3-CROSS-PROCESS-VERIFICATION。
 design_version：FD-1.0（设计冻结；授权推进状态见 STATUS 顶部临时授权）。
-design_path：`docs/agent/final-design/S2.md` § B2。
-base_code_sha：`354c472260314e2bc1e3a7a2c0da741bb9a83a1e`（S2-B1 candidate，PENDING_AUDIT，未 ACCEPTED——依赖关系已按所有者临时授权明示记录）。
-state：IMPLEMENTATION_IN_PROGRESS（完成后置 WAIT_AUDIT 标记，但按授权不等待审计；随后准备 S2-B3 仅测试代码）。
+design_path：`docs/agent/final-design/S2.md` § B3。
+base_code_sha：`07e7f4552d40015ab2eb4eaa469f63b8a4837a80`（S2-B2 candidate，PENDING_AUDIT，未 ACCEPTED——依赖关系已按所有者临时授权明示记录）。
+state：TEST_PREPARATION_DONE（仅提交 `app/src/androidTest/` 测试代码并通过 `:app:compileOssDebugAndroidTestKotlin`；`connectedAndroidTest` 未执行，待设备授权后 `NOT_RUN/BLOCKED`）。
 
-要点（摘自 S2.md B2，全文以设计文件为准）：
-- 发送端：点击时捕获目标 + requestId，不在后续异步重猜；本进程 Ready + 实际持久化（settings await B3 flush，Router 选择等待 Sager DAO 事务）后才发送小请求；失败不发“应用成功”。
-- 启动走显式 service Intent，已运行时复用 SagerConnection/AIDL；内部广播仅作兼容 adapter 进入同一请求函数。
-- 接收端：等待 Ready + 等待先前 settings 写入，新读 committed 不可变副本（`readCommittedSettingsSnapshot()`，不取 `cachedAll()`）；显式目标校验失败不回退到其他节点；完整跨库快照由 S5 完成。
-- 回执：现有 AIDL callback 增加 `commandResult(requestId,outcome,instanceGeneration,persisted,errorCode)`；`commandGeneration` 单调，SUPERSEDED 语义，STOP ack 仅在资源清理后发布。
-- 调用方 30s 观察超时仅显示“结果未确认”，不自动重发/回滚；一般 App 重启先确认待写提交，涉及服务时先收停止确认。
+要点（摘自 S2.md B3，全文以设计文件为准）：
+- 以测试为主，允许 `app/src/androidTest/` 及测试包可用的远端 helper；不为测试导出生产组件；单 JVM 双对象不视为双进程证明。
+- 真实 Room 事务/invalidation 与双进程 PID 场景；延迟 invalidation 仍可启动、快速 A→B 仅认最后有效请求、写失败阻止应用、重启后重读已提交数据、同 key 双写 STOP 后收敛、restore/reset 回滚、停止启动交错、取消不撤销 SQL。
+- 命令：`./gradlew :app:connectedOssDebugAndroidTest` 需设备授权，记录设备/Android/PID/fixture/结果；缺环境可提交测试代码并标 BLOCKED。
 
-测试门槛见 S2.md B2（9 项）；新增协议与发/收两侧同候选提交，禁止半升级。
+后续：本授权范围结束后恢复逐批审计；S2-B3 不自动激活 S3。
