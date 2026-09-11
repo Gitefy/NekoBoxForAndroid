@@ -14,6 +14,7 @@ import java.security.MessageDigest
 data class ConfigSnapshot(
     val serviceMode: String,
     val allowAccess: Boolean,
+    val mixedLanAuth: Boolean,
     val remoteDns: String,
     val directDns: String,
     val dnsHosts: String,
@@ -69,9 +70,14 @@ data class ConfigSnapshot(
             val mixedUsername = str(Key.MIXED_USERNAME_PREF, Key.MIXED_USERNAME)
             val mixedSecret = str(Key.MIXED_SECRET, "")
             val serviceMode = str(Key.SERVICE_MODE, Key.MODE_VPN)
+            val allowAccess = bool(Key.ALLOW_ACCESS)
+            val mixedLanAuth = bool(Key.MIXED_LAN_AUTH, true)
+            val existingMixedAuth = serviceMode == Key.MODE_VPN &&
+                (mixedUsername.isNotEmpty() || mixedSecret.isNotEmpty())
             return ConfigSnapshot(
                 serviceMode = serviceMode,
-                allowAccess = bool(Key.ALLOW_ACCESS),
+                allowAccess = allowAccess,
+                mixedLanAuth = mixedLanAuth,
                 remoteDns = str(Key.REMOTE_DNS, "https://dns.google/dns-query"),
                 directDns = str(Key.DIRECT_DNS, "https://223.5.5.5/dns-query"),
                 dnsHosts = str(Key.DNS_HOSTS, ""),
@@ -86,8 +92,7 @@ data class ConfigSnapshot(
                 mtu = stringToInt(Key.MTU, 9000),
                 strictRoute = bool(Key.STRICT_ROUTE, true),
                 mixedPort = port(byKey[Key.MIXED_PORT]?.string, mixedPortFallback),
-                mixedInboundHasAuth = serviceMode == Key.MODE_VPN &&
-                    (mixedUsername.isNotEmpty() || mixedSecret.isNotEmpty()),
+                mixedInboundHasAuth = existingMixedAuth && (!allowAccess || mixedLanAuth),
                 mixedUsername = mixedUsername,
                 mixedSecret = mixedSecret,
                 enableTLSFragment = false,

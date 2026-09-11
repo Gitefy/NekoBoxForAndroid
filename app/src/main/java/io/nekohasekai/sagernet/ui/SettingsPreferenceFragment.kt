@@ -23,6 +23,7 @@ import android.widget.Toast
 import androidx.appcompat.widget.SwitchCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -335,13 +336,30 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
         val view = layoutInflater.inflate(R.layout.layout_local_proxy_dialog, null)
         val portField = view.findViewById<TextInputEditText>(R.id.proxyPort)
         val allowAccessSwitch = view.findViewById<SwitchCompat>(R.id.allowAccessSwitch)
+        val mixedLanAuthSwitch = view.findViewById<SwitchCompat>(R.id.mixedLanAuthSwitch)
+        val usernameLayout = view.findViewById<TextInputLayout>(R.id.proxyUsernameLayout)
+        val passwordLayout = view.findViewById<TextInputLayout>(R.id.proxyPasswordLayout)
         val usernameField = view.findViewById<TextInputEditText>(R.id.proxyUsername)
         val passwordField = view.findViewById<TextInputEditText>(R.id.proxyPassword)
 
         portField.setText(DataStore.mixedPort.toString())
         allowAccessSwitch.isChecked = DataStore.allowAccess
+        mixedLanAuthSwitch.isChecked = DataStore.mixedLanAuth
         usernameField.setText(DataStore.mixedUsername)
         passwordField.setText(DataStore.mixedSecret)
+
+        fun refreshLanAuthUi() {
+            val allowLan = allowAccessSwitch.isChecked
+            mixedLanAuthSwitch.isEnabled = allowLan
+            val credsEnabled = !allowLan || mixedLanAuthSwitch.isChecked
+            usernameLayout.isEnabled = credsEnabled
+            passwordLayout.isEnabled = credsEnabled
+            usernameField.isEnabled = credsEnabled
+            passwordField.isEnabled = credsEnabled
+        }
+        allowAccessSwitch.setOnCheckedChangeListener { _, _ -> refreshLanAuthUi() }
+        mixedLanAuthSwitch.setOnCheckedChangeListener { _, _ -> refreshLanAuthUi() }
+        refreshLanAuthUi()
 
         MaterialAlertDialogBuilder(requireContext())
             .setTitle(R.string.local_proxy_settings)
@@ -356,6 +374,7 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
                 }
                 DataStore.mixedPort = port
                 DataStore.allowAccess = allowAccessSwitch.isChecked
+                DataStore.mixedLanAuth = mixedLanAuthSwitch.isChecked
                 DataStore.mixedUsername = usernameField.text.toString().trim()
                 DataStore.configurationStore.putString(
                     Key.MIXED_SECRET, passwordField.text.toString()

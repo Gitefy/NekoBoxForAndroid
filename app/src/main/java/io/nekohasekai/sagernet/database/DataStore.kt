@@ -189,6 +189,7 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     var concurrentDial by configurationStore.boolean(Key.CONCURRENT_DIAL)
 
     var allowAccess by configurationStore.boolean(Key.ALLOW_ACCESS)
+    var mixedLanAuth by configurationStore.boolean(Key.MIXED_LAN_AUTH) { true }
     var speedInterval by configurationStore.stringToInt(Key.SPEED_INTERVAL)
     var showProfileInNotification by configurationStore.boolean(Key.SHOW_PROFILE_IN_NOTIFICATION) { true }
     var viewModeRouterGroups by configurationStore.boolean(Key.VIEW_MODE_ROUTER_GROUPS) { true }
@@ -234,7 +235,8 @@ object DataStore : OnPreferenceDataStoreChangeListener {
 
     val mixedInboundHasAuth: Boolean
         get() = mixedInboundNeedsAuth &&
-            (mixedUsername.isNotEmpty() || mixedSecret.isNotEmpty())
+            (mixedUsername.isNotEmpty() || mixedSecret.isNotEmpty()) &&
+            (!allowAccess || mixedLanAuth)
 
     val mixedInboundUser: String get() = if (mixedInboundAuthed) mixedUsername else ""
     val mixedInboundPass: String get() = if (mixedInboundAuthed) mixedSecret else ""

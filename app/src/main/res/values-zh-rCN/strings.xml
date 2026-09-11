@@ -49,6 +49,8 @@
     <string name="port_local_dns">本地 DNS 端口</string>
     <string name="allow_access">允许来自局域网的连接</string>
     <string name="allow_access_sum">将入站绑定至 0.0.0.0</string>
+    <string name="mixed_lan_auth">局域网代理需要认证</string>
+    <string name="mixed_lan_auth_sum">关闭后，同一局域网设备只需使用手机 IP 和端口即可连接。仅建议在可信家庭网络中使用。</string>
     <string name="cag_dns">DNS 设置</string>
     <string name="cag_route">路由设置</string>
     <string name="inbound_settings">入站设置</string>

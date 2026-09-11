@@ -11,6 +11,7 @@ class ConfigSnapshotTest {
     private fun sample(mtu: Int = 1500) = ConfigSnapshot(
         serviceMode = "vpn",
         allowAccess = false,
+        mixedLanAuth = true,
         remoteDns = "1.1.1.1",
         directDns = "8.8.8.8",
         dnsHosts = "",

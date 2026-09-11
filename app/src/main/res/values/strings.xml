@@ -116,6 +116,8 @@
     <string name="cag_route">Route Settings</string>
     <string name="allow_access">Allow Connections from the LAN</string>
     <string name="allow_access_sum">Bind inbound servers to 0.0.0.0</string>
+    <string name="mixed_lan_auth">Require authentication for LAN proxy</string>
+    <string name="mixed_lan_auth_sum">When off, devices on the same LAN only need the phone IP and port. Use only on a trusted home network.</string>
     <string name="inbound_settings">Inbound Settings</string>
     <string name="general_settings">App Settings</string>
     <string name="require_http">Enable HTTP inbound</string>
