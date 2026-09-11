@@ -1,5 +1,7 @@
 package io.nekohasekai.sagernet.fmt
 
+import io.nekohasekai.sagernet.Key
+import io.nekohasekai.sagernet.database.preference.KeyValuePair
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Test
@@ -33,6 +35,9 @@ class ConfigSnapshotTest {
         resolveDestination = false,
         bypassLanInCore = false,
         globalCustomConfig = "",
+        domainStrategyRemote = "",
+        domainStrategyDirect = "",
+        domainStrategyServer = "",
     )
 
     @Test
@@ -46,6 +51,22 @@ class ConfigSnapshotTest {
         val mutated = frozen.copy(mtu = 9000)
         assertEquals(1400, frozen.mtu)
         assertNotEquals(frozen, mutated)
+    }
+
+    @Test
+    fun frozenRowsDecodeOnceAndIgnoreLaterMutation() {
+        val rows = mutableListOf(
+            KeyValuePair(Key.MTU).put("1400"),
+            KeyValuePair(Key.REMOTE_DNS).put("1.1.1.1"),
+            KeyValuePair(Key.ENABLE_FAKEDNS).put(false),
+        )
+        val frozen = ConfigSnapshot.fromFrozenRows(rows, mixedPortFallback = 2080)
+        rows.clear()
+        rows.add(KeyValuePair(Key.MTU).put("9000"))
+        rows.add(KeyValuePair(Key.REMOTE_DNS).put("8.8.8.8"))
+        assertEquals(1400, frozen.mtu)
+        assertEquals("1.1.1.1", frozen.remoteDns)
+        assertEquals(false, frozen.enableFakeDns)
     }
 
     @Test
