@@ -11,6 +11,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import io.nekohasekai.sagernet.Action
 import io.nekohasekai.sagernet.aidl.ISagerNetService
 import io.nekohasekai.sagernet.aidl.ISagerNetServiceCallback
+import io.nekohasekai.sagernet.aidl.RequestFlowBatch
 import io.nekohasekai.sagernet.aidl.SpeedDisplayData
 import io.nekohasekai.sagernet.aidl.TrafficDataBatch
 import org.junit.Assert.assertTrue
@@ -46,6 +47,7 @@ class S2B3RealProcessPidTest {
                         override fun cbSpeedUpdate(stats: SpeedDisplayData) {}
                         override fun cbTrafficUpdate(stats: TrafficDataBatch) {}
                         override fun cbSelectorUpdate(id: Long) {}
+                        override fun cbRequestUpdate(stats: RequestFlowBatch) {}
                         override fun missingPlugin(profileName: String?, pluginName: String?) {}
                         override fun commandResult(
                             requestId: String?,
