@@ -76,7 +76,7 @@ class BaseService {
                 }
 
                 Action.RESET_UPSTREAM_CONNECTIONS -> runOnDefaultDispatcher {
-                    ConnectionResetDebouncer.resetAllConnections()
+                    ConnectionResetDebouncer.resetAllConnections(force = true)
                     runOnMainDispatcher {
                         Util.collapseStatusBar(ctx)
                         Toast.makeText(ctx, "Reset upstream connections done", Toast.LENGTH_SHORT)
