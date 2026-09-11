@@ -82,6 +82,40 @@ class ConnectionObserverTest {
     }
 
     @Test
+    fun mapsAreBuiltOncePerPoll() = runBlocking {
+        var mapCalls = 0
+        val observer = ConnectionObserver(
+            snapshot = { """{"flows":[{"id":"a","logicalOutbound":"x","finalOutboundTag":"y"},{"id":"b","logicalOutbound":"x","finalOutboundTag":"y"}]}""" },
+            publish = {},
+            isCurrent = { true },
+            maps = { mapCalls++; RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            scope = this,
+        )
+        assertTrue(observer.pollOnce())
+        assertEquals(1, mapCalls)
+    }
+
+    @Test
+    fun publishIsSkippedWhenRuntimeBecomesStaleAfterMapping() = runBlocking {
+        var current = true
+        val published = ArrayList<Long>()
+        val observer = ConnectionObserver(
+            snapshot = { """{"flows":[{"id":"x","logicalOutbound":"a","finalOutboundTag":"b"}]}""" },
+            publish = { published.add(it.runtimeGeneration) },
+            isCurrent = { current },
+            maps = {
+                current = false
+                RequestDisplayMaps()
+            },
+            runtimeGeneration = 1L,
+            scope = this,
+        )
+        assertFalse(observer.pollOnce())
+        assertTrue(published.isEmpty())
+    }
+
+    @Test
     fun snapshotFailureDoesNotStopVpn() = runBlocking {
         var vpnAlive = true
         val observer = ConnectionObserver(
@@ -134,5 +168,15 @@ class RequestFlowMapperTest {
         )
         assertEquals("leaf-x", mapped.finalProfileName)
         assertEquals("", mapped.routerStableTag)
+    }
+}
+
+class RequestFlowBinderBudgetTest {
+    @Test
+    fun threeHundredFlowsStayUnderBinderLimit() {
+        assertTrue(io.nekohasekai.sagernet.aidl.RequestFlowBinderBudget.isWithinBinderLimit())
+        assertTrue(
+            io.nekohasekai.sagernet.aidl.RequestFlowBinderBudget.worstCasePayloadBytes() < 1_000_000
+        )
     }
 }

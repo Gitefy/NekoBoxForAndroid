@@ -9,14 +9,15 @@ import (
 	"unicode/utf8"
 
 	"github.com/sagernet/sing-box/common/trafficcontrol"
+	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/common/observable"
 )
 
 const (
 	connectionHistoryMax       = 300
 	connectionHistoryMaxAge    = 10 * time.Minute
-	boundRuleText              = 512
-	boundShortText             = 256
+	boundRuleText              = 256
+	boundShortText             = 128
 	boundTagText               = 128
 	boundAddressText           = 64
 	boundIDText                = 64
@@ -71,11 +72,23 @@ func newConnectionHistory(now func() time.Time) *connectionHistory {
 	}
 }
 
-func addrString(addr interface{ IsValid() bool; String() string }) string {
-	if !addr.IsValid() {
-		return ""
+func rawIP(addr M.Socksaddr) string {
+	if addr.Addr.IsValid() {
+		return addr.Addr.String()
 	}
-	return addr.String()
+	return ""
+}
+
+func destinationIPAndPort(dest, origin M.Socksaddr) (string, int) {
+	ip := rawIP(dest)
+	if ip == "" {
+		ip = rawIP(origin)
+	}
+	port := int(dest.Port)
+	if port == 0 {
+		port = int(origin.Port)
+	}
+	return ip, port
 }
 
 func boundString(value string, limit int) string {
@@ -119,9 +132,12 @@ func flowFromTracker(meta *trafficcontrol.TrackerMetadata) connectionFlow {
 	if logical == "" {
 		logical = meta.Metadata.Outbound
 	}
+	destIP, destPort := destinationIPAndPort(meta.Metadata.Destination, meta.Metadata.OriginDestination)
 	origin := ""
-	if meta.Metadata.OriginDestination.IsValid() {
-		origin = boundString(meta.Metadata.OriginDestination.String(), boundAddressText)
+	if originIP := rawIP(meta.Metadata.OriginDestination); originIP != "" {
+		origin = boundString(originIP, boundAddressText)
+	} else if meta.Metadata.OriginDestination.IsValid() {
+		origin = boundString(meta.Metadata.OriginDestination.AddrString(), boundAddressText)
 	}
 	closedAt := int64(0)
 	if !meta.ClosedAt.IsZero() {
@@ -144,8 +160,8 @@ func flowFromTracker(meta *trafficcontrol.TrackerMetadata) connectionFlow {
 		UID:                uid,
 		PackageNames:       packages,
 		Domain:             boundString(domain, boundShortText),
-		DestinationAddress: boundString(addrString(meta.Metadata.Destination), boundAddressText),
-		DestinationPort:    int(meta.Metadata.Destination.Port),
+		DestinationAddress: boundString(destIP, boundAddressText),
+		DestinationPort:    destPort,
 		OriginDestination:  origin,
 		MatchedRuleText:    boundString(ruleText, boundRuleText),
 		Chain:              boundString(strings.Join(meta.Chain, ","), boundRuleText),

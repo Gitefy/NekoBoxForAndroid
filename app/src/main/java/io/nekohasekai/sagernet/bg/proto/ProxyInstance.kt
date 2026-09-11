@@ -76,7 +76,7 @@ class ProxyInstance(profile: ProxyEntity, var service: BaseService.Interface? = 
     }
 
     fun syncRequestObserver() {
-        val enabled = (service?.data?.requestObserverCount?.get() ?: 0) > 0
+        val enabled = service?.data?.binder?.requestObservers?.hasSubscribers() == true
         connectionObserver?.setEnabled(enabled)
     }
 

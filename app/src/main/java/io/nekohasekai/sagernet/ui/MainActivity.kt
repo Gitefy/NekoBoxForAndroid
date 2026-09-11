@@ -31,6 +31,9 @@ import io.nekohasekai.sagernet.aidl.SpeedDisplayData
 import io.nekohasekai.sagernet.aidl.TrafficDataBatch
 import io.nekohasekai.sagernet.bg.ApplyErrorMessages
 import io.nekohasekai.sagernet.bg.BaseService
+import io.nekohasekai.sagernet.bg.ApplyCommandWaiter
+import io.nekohasekai.sagernet.bg.CallbackWithCommandResult
+import io.nekohasekai.sagernet.bg.CommandOutcome
 import io.nekohasekai.sagernet.bg.SagerConnection
 import io.nekohasekai.sagernet.bg.UserStartTarget
 import io.nekohasekai.sagernet.database.DataStore
@@ -59,12 +62,14 @@ import moe.matsuri.nb4a.utils.Util
 
 class MainActivity : ThemedActivity(),
     SagerConnection.Callback,
+    CallbackWithCommandResult,
     OnPreferenceDataStoreChangeListener,
     NavigationView.OnNavigationItemSelectedListener {
 
     lateinit var binding: LayoutMainBinding
     lateinit var navigation: NavigationView
     private var currentMainFragment: ToolbarFragment? = null
+    private val requestObserverGate = RequestObserverUiGate()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -494,6 +499,7 @@ class MainActivity : ThemedActivity(),
 
     val connection = SagerConnection(SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND, true)
     override fun onServiceConnected(service: ISagerNetService) {
+        RequestStore.resetGenerationFence()
         val state = try {
             BaseService.State.values()[service.state]
         } catch (_: RemoteException) {
@@ -507,15 +513,22 @@ class MainActivity : ThemedActivity(),
                 longArrayOf()
             }
         )
+        if (requestObserverGate.shouldEnableAfterConnect() || currentMainFragment is RequestFragment) {
+            connection.setRequestObserverEnabled(true)
+        }
     }
 
     private var runtimeUrlTestSelections = longArrayOf()
 
     override fun onServiceDisconnected() {
+        ApplyCommandWaiter.failAll()
+        RequestStore.resetGenerationFence()
         RequestStore.clear()
         changeState(BaseService.State.Idle)
     }
     override fun onBinderDied() {
+        ApplyCommandWaiter.failAll()
+        RequestStore.resetGenerationFence()
         connection.disconnect(this)
         connection.connect(this, this)
     }
@@ -544,13 +557,23 @@ class MainActivity : ThemedActivity(),
     }
 
     override fun cbRequestUpdate(data: RequestFlowBatch) {
-        RequestStore.replace(data.items)
+        RequestStore.applyBatch(data)
+    }
+
+    override fun onCommandResult(
+        requestId: String,
+        outcome: CommandOutcome,
+        instanceGeneration: Long,
+        persisted: Boolean,
+        errorCode: String?,
+    ) {
+        ApplyCommandWaiter.onCommandResult(requestId, outcome)
     }
 
     fun setRequestPageVisible(visible: Boolean) {
-        try {
-            connection.service?.setRequestObserverEnabled(visible)
-        } catch (_: RemoteException) {
+        val binderConnected = requestObserverGate.onPageVisibility(visible, connection.service != null)
+        if (binderConnected) {
+            connection.setRequestObserverEnabled(visible)
         }
     }
 

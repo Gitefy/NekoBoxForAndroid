@@ -35,7 +35,6 @@ import kotlinx.coroutines.sync.withLock
 import libcore.Libcore
 import moe.matsuri.nb4a.Protocols
 import moe.matsuri.nb4a.utils.Util
-import java.util.concurrent.atomic.AtomicInteger
 import java.net.UnknownHostException
 import java.util.concurrent.ConcurrentHashMap
 
@@ -97,7 +96,6 @@ class BaseService {
         @Volatile var urlTestRefreshJob: Job? = null
         @Volatile var applyGeneration: Long = 0L
         @Volatile var applyRequest: ApplyRequest? = null
-        val requestObserverCount = AtomicInteger(0)
 
         fun changeState(s: State, msg: String? = null) {
             if (state == s && msg == null) return
@@ -112,11 +110,16 @@ class BaseService {
         private val callbacks = object : RemoteCallbackList<ISagerNetServiceCallback>() {
             override fun onCallbackDied(callback: ISagerNetServiceCallback?, cookie: Any?) {
                 super.onCallbackDied(callback, cookie)
-                callback?.let(callbackIdMap::remove)
+                callback?.let { dead ->
+                    callbackIdMap.remove(dead)
+                    requestObservers.remove(dead.asBinder())
+                    data?.proxy?.syncRequestObserver()
+                }
             }
         }
 
         val callbackIdMap = ConcurrentHashMap<ISagerNetServiceCallback, Int>()
+        val requestObservers = RequestObserverSubscriptions()
 
         override val coroutineContext = Dispatchers.Main.immediate + Job()
 
@@ -163,6 +166,8 @@ class BaseService {
         override fun unregisterCallback(cb: ISagerNetServiceCallback) {
             callbackIdMap.remove(cb)
             callbacks.unregister(cb)
+            requestObservers.remove(cb.asBinder())
+            data?.proxy?.syncRequestObserver()
         }
 
         override fun resetTraffic(profileIds: LongArray) {
@@ -171,10 +176,10 @@ class BaseService {
             }
         }
 
-        override fun setRequestObserverEnabled(enabled: Boolean) {
+        override fun setRequestObserverEnabled(cb: ISagerNetServiceCallback, enabled: Boolean) {
             val holder = data ?: return
-            if (enabled) holder.requestObserverCount.incrementAndGet()
-            else holder.requestObserverCount.updateAndGet { if (it > 0) it - 1 else 0 }
+            val client = cb.asBinder() ?: return
+            if (enabled) requestObservers.enable(client) else requestObservers.disable(client)
             holder.proxy?.syncRequestObserver()
         }
 
@@ -224,6 +229,7 @@ class BaseService {
         override fun close() {
             callbacks.kill()
             callbackIdMap.clear()
+            requestObservers.clear()
             cancel()
             data = null
         }

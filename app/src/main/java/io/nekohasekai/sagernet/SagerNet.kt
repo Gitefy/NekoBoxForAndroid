@@ -255,13 +255,18 @@ class SagerNet : Application(),
         }
 
         fun reloadServiceFully() {
-            val request = ApplyRequest(
-                kind = CommandKind.RELOAD,
-                targetProfileId = null,
-                routerStableTag = null,
-                routerMemberId = null,
-                forceFullReload = true,
+            reloadServiceFully(
+                ApplyRequest(
+                    kind = CommandKind.RELOAD,
+                    targetProfileId = null,
+                    routerStableTag = null,
+                    routerMemberId = null,
+                    forceFullReload = true,
+                )
             )
+        }
+
+        fun reloadServiceFully(request: ApplyRequest) {
             application.sendBroadcast(applyExtras(Intent(Action.APPLY).setPackage(application.packageName), request))
             if (!DataStore.serviceState.started) {
                 ContextCompat.startForegroundService(

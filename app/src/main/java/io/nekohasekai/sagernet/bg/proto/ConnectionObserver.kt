@@ -48,7 +48,9 @@ class ConnectionObserver(
         if (!isCurrent()) return false
         return try {
             val parsed = RequestFlowParser.parseSnapshot(snapshot())
-            val mapped = parsed.map { RequestFlowMapper.map(it, maps()) }
+            val displayMaps = maps()
+            val mapped = parsed.map { RequestFlowMapper.map(it, displayMaps) }
+            if (!isCurrent()) return false
             publish(RequestFlowBatch(ArrayList(mapped), runtimeGeneration))
             true
         } catch (e: Exception) {

@@ -1,5 +1,6 @@
 package io.nekohasekai.sagernet.ui
 
+import io.nekohasekai.sagernet.aidl.RequestFlowBatch
 import io.nekohasekai.sagernet.aidl.RequestFlowData
 import io.nekohasekai.sagernet.bg.proto.RequestFlowMapper
 
@@ -14,12 +15,26 @@ object RequestStore {
     @Volatile
     var kindFilter: String = FILTER_ALL
 
+    @Volatile
+    private var acceptedGeneration: Long? = null
+
     private val listeners = mutableListOf<() -> Unit>()
 
     const val FILTER_ALL = "all"
     const val FILTER_PROXY = RequestFlowMapper.KIND_PROXY
     const val FILTER_DIRECT = RequestFlowMapper.KIND_DIRECT
     const val FILTER_BLOCK = RequestFlowMapper.KIND_BLOCK
+
+    fun applyBatch(batch: RequestFlowBatch) {
+        val previous = acceptedGeneration
+        if (previous != null && batch.runtimeGeneration < previous) return
+        acceptedGeneration = batch.runtimeGeneration
+        replace(batch.items)
+    }
+
+    fun resetGenerationFence() {
+        acceptedGeneration = null
+    }
 
     fun replace(next: List<RequestFlowData>) {
         items = next

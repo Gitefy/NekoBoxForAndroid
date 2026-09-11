@@ -14,6 +14,7 @@ import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.aidl.RequestFlowData
 import io.nekohasekai.sagernet.bg.proto.RequestFlowMapper
+import io.nekohasekai.sagernet.bg.RequestReloadAck
 import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.RequestRuleApply
 import io.nekohasekai.sagernet.database.RequestRuleFactory
@@ -95,7 +96,9 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
 
         fun bind(flow: RequestFlowData) {
             appView.text = appLabel(flow)
-            val host = flow.domain.ifBlank { listOf(flow.destinationAddress, flow.destinationPort.takeIf { it > 0 }?.toString()).filterNotNull().joinToString(":") }
+            val host = flow.domain.ifBlank {
+                RequestDestination.formatHostPort(flow.destinationAddress, flow.destinationPort)
+            }
             targetView.text = listOf(flow.network.uppercase(Locale.US), host).filter { it.isNotBlank() }.joinToString(" · ")
             routeView.text = when (flow.kind) {
                 RequestFlowMapper.KIND_DIRECT -> "DIRECT"
@@ -136,7 +139,7 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
             appendLine("Package: ${flow.packageName}")
             appendLine("UID: ${flow.uid}")
             appendLine("Domain: ${flow.domain}")
-            appendLine("Destination: ${flow.destinationAddress}:${flow.destinationPort}")
+            appendLine("Destination: ${RequestDestination.formatHostPort(flow.destinationAddress, flow.destinationPort)}")
             appendLine("Network: ${flow.network}")
             appendLine("Rule: ${flow.matchedRuleText}")
             appendLine("Logical: ${flow.logicalOutbound}")
@@ -168,7 +171,7 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
             matchLabels.add(getString(R.string.request_match_app))
             matchKinds.add(RequestRuleFactory.MatchKind.APP)
         }
-        if (flow.destinationAddress.isNotBlank()) {
+        if (RequestDestination.isRawIp(flow.destinationAddress)) {
             matchLabels.add(getString(R.string.request_match_ip))
             matchKinds.add(RequestRuleFactory.MatchKind.DEST_IP)
         }
@@ -242,10 +245,9 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
                             }.getOrDefault(false)
                         },
                         reload = {
-                            runCatching {
-                                SagerNet.reloadServiceFully()
-                                true
-                            }.getOrDefault(false)
+                            RequestReloadAck.awaitApplied(
+                                send = { request -> SagerNet.reloadServiceFully(request) },
+                            )
                         },
                     )
                     onMainDispatcher {

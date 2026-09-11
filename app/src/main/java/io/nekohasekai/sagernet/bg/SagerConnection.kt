@@ -124,6 +124,13 @@ class SagerConnection(
 
     var service: ISagerNetService? = null
 
+    fun setRequestObserverEnabled(enabled: Boolean) {
+        try {
+            service?.setRequestObserverEnabled(serviceCallback, enabled)
+        } catch (_: RemoteException) {
+        }
+    }
+
     fun updateConnectionId(id: Int) {
         connectionId = id
         try {

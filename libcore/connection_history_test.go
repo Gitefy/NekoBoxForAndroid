@@ -2,9 +2,15 @@ package libcore
 
 import (
 	"encoding/json"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gofrs/uuid/v5"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/trafficcontrol"
+	M "github.com/sagernet/sing/common/metadata"
 )
 
 func TestNewConnectionAppearsInSnapshot(t *testing.T) {
@@ -109,6 +115,65 @@ func TestBoundStringTruncatesRuleText(t *testing.T) {
 	long := strings.Repeat("r", boundRuleText+40)
 	if got := boundString(long, boundRuleText); len([]rune(got)) != boundRuleText {
 		t.Fatalf("len=%d", len([]rune(got)))
+	}
+}
+
+func TestDestinationIPv4IsSeparatedFromPort(t *testing.T) {
+	flow := flowFromTracker(&trafficcontrol.TrackerMetadata{
+		ID: uuid.FromStringOrNil("11111111-1111-1111-1111-111111111111"),
+		Metadata: adapter.InboundContext{
+			Destination: M.SocksaddrFrom(netip.MustParseAddr("1.2.3.4"), 443),
+		},
+		CreatedAt: time.UnixMilli(1),
+	})
+	if flow.DestinationAddress != "1.2.3.4" {
+		t.Fatalf("destinationAddress=%q", flow.DestinationAddress)
+	}
+	if flow.DestinationPort != 443 {
+		t.Fatalf("destinationPort=%d", flow.DestinationPort)
+	}
+	if strings.Contains(flow.DestinationAddress, ":") {
+		t.Fatalf("port leaked into destinationAddress: %q", flow.DestinationAddress)
+	}
+}
+
+func TestSniffedDomainUsesOriginDestinationIpFallback(t *testing.T) {
+	flow := flowFromTracker(&trafficcontrol.TrackerMetadata{
+		ID: uuid.FromStringOrNil("22222222-2222-2222-2222-222222222222"),
+		Metadata: adapter.InboundContext{
+			Domain:              "youtube.com",
+			Destination:         M.Socksaddr{Fqdn: "youtube.com", Port: 443},
+			OriginDestination:   M.SocksaddrFrom(netip.MustParseAddr("142.250.1.1"), 443),
+		},
+		CreatedAt: time.UnixMilli(1),
+	})
+	if flow.Domain != "youtube.com" {
+		t.Fatalf("domain=%q", flow.Domain)
+	}
+	if flow.DestinationAddress != "142.250.1.1" {
+		t.Fatalf("destinationAddress=%q", flow.DestinationAddress)
+	}
+	if flow.DestinationPort != 443 {
+		t.Fatalf("destinationPort=%d", flow.DestinationPort)
+	}
+}
+
+func TestDestinationIPv6IsRawWithoutPort(t *testing.T) {
+	flow := flowFromTracker(&trafficcontrol.TrackerMetadata{
+		ID: uuid.FromStringOrNil("33333333-3333-3333-3333-333333333333"),
+		Metadata: adapter.InboundContext{
+			Destination: M.SocksaddrFrom(netip.MustParseAddr("2001:db8::1"), 443),
+		},
+		CreatedAt: time.UnixMilli(1),
+	})
+	if flow.DestinationAddress != "2001:db8::1" {
+		t.Fatalf("destinationAddress=%q", flow.DestinationAddress)
+	}
+	if strings.ContainsAny(flow.DestinationAddress, "[]") || strings.Contains(flow.DestinationAddress, ":443") {
+		t.Fatalf("ipv6 must be raw without brackets/port: %q", flow.DestinationAddress)
+	}
+	if flow.DestinationPort != 443 {
+		t.Fatalf("destinationPort=%d", flow.DestinationPort)
 	}
 }
 

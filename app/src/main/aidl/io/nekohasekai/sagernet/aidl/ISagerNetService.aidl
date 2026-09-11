@@ -11,7 +11,7 @@ interface ISagerNetService {
   void registerCallback(in ISagerNetServiceCallback cb, int id);
   oneway void unregisterCallback(in ISagerNetServiceCallback cb);
   oneway void resetTraffic(in long[] profileIds);
-  oneway void setRequestObserverEnabled(boolean enabled);
+  oneway void setRequestObserverEnabled(in ISagerNetServiceCallback cb, boolean enabled);
 
   int urlTest();
 }
