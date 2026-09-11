@@ -3,14 +3,41 @@ package io.nekohasekai.sagernet.database
 import io.nekohasekai.sagernet.bg.ApplyErrorCodes
 import io.nekohasekai.sagernet.database.preference.KeyValuePair
 import io.nekohasekai.sagernet.fmt.BackupSerializer
+import io.nekohasekai.sagernet.ktx.Logs
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.channels.FileLock
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.LockSupport
+import kotlin.coroutines.coroutineContext
 
 object RestoreCoordinator {
     enum class Phase { IDLE, PREPARED, CONFIG_COMMITTED, SAGER_COMMITTED, COMPLETE }
+    enum class LockKind { BOOT_RECOVERY, APPLY, USER_RESTORE }
+
+    data class LockEvent(
+        val op: String,
+        val kind: String,
+        val acquired: Boolean,
+        val phase: String,
+        val pid: Int,
+        val process: String,
+        val error: String? = null,
+        val holder: String? = null,
+    )
+
+    data class AcquireOutcome(
+        val permit: Permit?,
+        val error: String?,
+    )
+
+    @Volatile
+    var lockSink: ((LockEvent) -> Unit)? = null
 
     private val active = AtomicBoolean(false)
     fun isActive(): Boolean = active.get()
@@ -19,13 +46,16 @@ object RestoreCoordinator {
     data class Outcome(val success: Boolean, val phase: Phase, val error: String? = null)
 
     class Permit internal constructor(
+        private val dir: File,
+        val kind: LockKind,
         private val raf: RandomAccessFile,
         private val lock: FileLock,
     ) : AutoCloseable {
         override fun close() {
+            runCatching { clearHolderMeta(dir) }
             runCatching { lock.release() }
             runCatching { raf.close() }
-            active.set(false)
+            if (kind == LockKind.USER_RESTORE) active.set(false)
         }
     }
 
@@ -33,6 +63,7 @@ object RestoreCoordinator {
     fun snapshotFile(dir: File) = File(dir, "restore-journal.prev-config")
     fun sagerSnapshotFile(dir: File) = File(dir, "restore-journal.prev-sager")
     fun lockFile(dir: File) = File(dir, "restore-apply.lock")
+    fun lockMetaFile(dir: File) = File(dir, "restore-apply.lock.meta")
 
     fun readPhase(dir: File): Phase {
         val raw = journalFile(dir).takeIf { it.isFile }?.readText()?.trim().orEmpty()
@@ -43,23 +74,123 @@ object RestoreCoordinator {
         journalFile(dir).writeText(phase.name)
     }
 
-    fun tryExclusivePermit(dir: File): Permit? {
+    fun tryExclusivePermit(dir: File, kind: LockKind = LockKind.APPLY): Permit? {
         dir.mkdirs()
         val file = lockFile(dir)
         if (!file.exists()) file.createNewFile()
+        val pid = diagnosticPid()
+        val process = currentProcessName()
+        val phase = readPhase(dir).name
+        trace(
+            LockEvent("try", kind.name, acquired = false, phase = phase, pid = pid, process = process),
+        )
         val raf = RandomAccessFile(file, "rw")
         val lock = try {
             raf.channel.tryLock()
         } catch (_: Throwable) {
             raf.close()
+            trace(
+                LockEvent("rejected", kind.name, acquired = false, phase = phase, pid = pid, process = process),
+            )
             return null
         }
         if (lock == null) {
             raf.close()
+            trace(
+                LockEvent(
+                    "rejected",
+                    kind.name,
+                    acquired = false,
+                    phase = phase,
+                    pid = pid,
+                    process = process,
+                    holder = readHolderKind(dir)?.name,
+                ),
+            )
             return null
         }
-        active.set(true)
-        return Permit(raf, lock)
+        writeHolderMeta(dir, kind, pid, process)
+        if (kind == LockKind.USER_RESTORE) active.set(true)
+        trace(
+            LockEvent("acquired", kind.name, acquired = true, phase = phase, pid = pid, process = process),
+        )
+        return Permit(dir, kind, raf, lock)
+    }
+
+    suspend fun acquirePermit(
+        dir: File,
+        kind: LockKind,
+        cancelled: () -> Boolean,
+    ): AcquireOutcome = withContext(Dispatchers.IO) {
+        val pid = diagnosticPid()
+        val process = currentProcessName()
+        while (coroutineContext.isActive && !cancelled()) {
+            val permit = tryExclusivePermit(dir, kind)
+            if (permit != null) return@withContext AcquireOutcome(permit, null)
+            val holder = readHolderKind(dir)
+            val phase = readPhase(dir).name
+            if (failsAsUserRestore(kind, holder)) {
+                trace(
+                    LockEvent(
+                        "restore-in-progress",
+                        kind.name,
+                        acquired = false,
+                        phase = phase,
+                        pid = pid,
+                        process = process,
+                        error = ApplyErrorCodes.RESTORE_IN_PROGRESS,
+                        holder = holder?.name,
+                    ),
+                )
+                return@withContext AcquireOutcome(null, ApplyErrorCodes.RESTORE_IN_PROGRESS)
+            }
+            trace(
+                LockEvent(
+                    "wait",
+                    kind.name,
+                    acquired = false,
+                    phase = phase,
+                    pid = pid,
+                    process = process,
+                    holder = holder?.name,
+                ),
+            )
+            runInterruptible { LockSupport.parkNanos(20_000_000L) }
+        }
+        AcquireOutcome(null, null)
+    }
+
+    fun readHolderKind(dir: File): LockKind? {
+        val raw = lockMetaFile(dir).takeIf { it.isFile }?.readText()?.lineSequence()?.firstOrNull()?.trim().orEmpty()
+        return LockKind.entries.firstOrNull { it.name == raw }
+    }
+
+    private fun failsAsUserRestore(kind: LockKind, holder: LockKind?): Boolean {
+        if (holder != LockKind.USER_RESTORE) return false
+        return kind != LockKind.USER_RESTORE
+    }
+
+    private fun writeHolderMeta(dir: File, kind: LockKind, pid: Int, process: String) {
+        lockMetaFile(dir).writeText("${kind.name}\n$pid\n$process")
+    }
+
+    private fun clearHolderMeta(dir: File) {
+        lockMetaFile(dir).delete()
+    }
+
+    private fun diagnosticPid(): Int = runCatching { android.os.Process.myPid() }.getOrDefault(0)
+
+    private fun currentProcessName(): String = runCatching {
+        moe.matsuri.nb4a.utils.JavaUtil.getProcessName()
+    }.getOrElse { "pid-${diagnosticPid()}" }
+
+    private fun trace(event: LockEvent) {
+        Logs.w {
+            "restore-lock op=${event.op} kind=${event.kind} acquired=${event.acquired} " +
+                "phase=${event.phase} pid=${event.pid} process=${event.process} " +
+                "holder=${event.holder ?: "-"} error=${event.error ?: "-"}"
+        }
+        lockSink?.invoke(event)
     }
 
     fun encodeRows(rows: List<KeyValuePair>): ByteArray {
@@ -130,7 +261,8 @@ object RestoreCoordinator {
         restoreSagerIncoming: () -> Boolean,
         restoreSagerPrevious: (ByteArray) -> Boolean,
     ): Outcome {
-        val permit = tryExclusivePermit(dir) ?: return Outcome(false, readPhase(dir), ApplyErrorCodes.RESTORE_IN_PROGRESS)
+        val acquired = acquirePermitBlocking(dir, LockKind.USER_RESTORE)
+        val permit = acquired.permit ?: return Outcome(false, readPhase(dir), acquired.error ?: ApplyErrorCodes.RESTORE_IN_PROGRESS)
         permit.use {
             val previousConfig = capturePreviousConfig()
             val previousSager = capturePreviousSager()
@@ -155,13 +287,37 @@ object RestoreCoordinator {
         }
     }
 
-    fun recoverOnBoot(
+    private fun acquirePermitBlocking(dir: File, kind: LockKind): AcquireOutcome {
+        while (true) {
+            val permit = tryExclusivePermit(dir, kind)
+            if (permit != null) return AcquireOutcome(permit, null)
+            val holder = readHolderKind(dir)
+            if (failsAsUserRestore(kind, holder)) {
+                return AcquireOutcome(null, ApplyErrorCodes.RESTORE_IN_PROGRESS)
+            }
+            LockSupport.parkNanos(20_000_000L)
+        }
+    }
+
+    suspend fun recoverOnBoot(
         dir: File,
         restoreConfig: (List<KeyValuePair>) -> Boolean,
         restoreSagerPrevious: (ByteArray) -> Boolean,
     ): Outcome {
-        val permit = tryExclusivePermit(dir) ?: return Outcome(false, readPhase(dir), ApplyErrorCodes.RESTORE_IN_PROGRESS)
-        permit.use { return recoverLocked(dir, restoreConfig, restoreSagerPrevious) }
+        val pid = diagnosticPid()
+        val process = currentProcessName()
+        trace(
+            LockEvent("recoverOnBoot-begin", LockKind.BOOT_RECOVERY.name, false, readPhase(dir).name, pid, process),
+        )
+        val acquired = acquirePermit(dir, LockKind.BOOT_RECOVERY) { false }
+        val permit = acquired.permit ?: return Outcome(false, readPhase(dir), acquired.error ?: ApplyErrorCodes.RESTORE_IN_PROGRESS)
+        return permit.use {
+            val out = recoverLocked(dir, restoreConfig, restoreSagerPrevious)
+            trace(
+                LockEvent("recoverOnBoot-end", LockKind.BOOT_RECOVERY.name, true, out.phase.name, pid, process, error = out.error),
+            )
+            out
+        }
     }
 
     fun recoverLocked(
@@ -169,8 +325,13 @@ object RestoreCoordinator {
         restoreConfig: (List<KeyValuePair>) -> Boolean,
         restoreSagerPrevious: (ByteArray) -> Boolean,
     ): Outcome {
+        val pid = diagnosticPid()
+        val process = currentProcessName()
+        trace(
+            LockEvent("recovery-begin", "held", true, readPhase(dir).name, pid, process),
+        )
         val phase = readPhase(dir)
-        return when (phase) {
+        val out = when (phase) {
             Phase.IDLE, Phase.COMPLETE -> {
                 cleanup(dir)
                 Outcome(true, Phase.IDLE, null)
@@ -184,6 +345,10 @@ object RestoreCoordinator {
                 Outcome(true, Phase.COMPLETE, null)
             }
         }
+        trace(
+            LockEvent("recovery-end", "held", true, out.phase.name, pid, process, error = out.error),
+        )
+        return out
     }
 
     private fun rollbackBoth(

@@ -106,10 +106,20 @@ object Theme {
         }
     }
 
-    var currentNightMode = -1
+    const val UNPINNED_NIGHT_MODE = -1
+
+    var currentNightMode = UNPINNED_NIGHT_MODE
     fun getNightMode(): Int {
-        if (currentNightMode == -1) {
-            currentNightMode = DataStore.nightTheme
+        val ready = DataStore.configurationStore.isReady()
+        return getNightMode(ready, if (ready) DataStore.nightTheme else 0)
+    }
+
+    fun getNightMode(storeReady: Boolean, committedNightTheme: Int): Int {
+        if (!storeReady) {
+            return getNightMode(0)
+        }
+        if (currentNightMode == UNPINNED_NIGHT_MODE) {
+            currentNightMode = committedNightTheme
         }
         return getNightMode(currentNightMode)
     }
@@ -133,6 +143,13 @@ object Theme {
 
     fun applyNightTheme() {
         AppCompatDelegate.setDefaultNightMode(getNightMode())
+    }
+
+    fun applyCommittedAppearance(context: Context) {
+        currentNightMode = UNPINNED_NIGHT_MODE
+        apply(context)
+        applyNightTheme()
+        AppLocale.apply()
     }
 
 }

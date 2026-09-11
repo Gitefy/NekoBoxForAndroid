@@ -71,6 +71,15 @@ abstract class ThemedActivity : AppCompatActivity {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        if (!DataStore.configurationStore.isReady()) return
+        val expected = if (isDialog) Theme.getDialogTheme() else Theme.getTheme()
+        if (themeResId != 0 && expected != themeResId) {
+            ActivityCompat.recreate(this)
+        }
+    }
+
     fun snackbar(@StringRes resId: Int): Snackbar = snackbar("").setText(resId)
     fun snackbar(text: CharSequence): Snackbar = snackbarInternal(text).apply {
         view.findViewById<TextView>(com.google.android.material.R.id.snackbar_text).apply {

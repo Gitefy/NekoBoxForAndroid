@@ -288,17 +288,8 @@ class BaseService {
             }
             if (request.kind == CommandKind.START && data.state == State.Stopped) {
                 val dir = SagerNet.application.filesDir
-                val permit = withContext(Dispatchers.IO) {
-                    RestoreCoordinator.tryExclusivePermit(dir)
-                }
+                val permit = acquireApplyPermit(dir, generation)
                 if (permit == null) {
-                    if (ApplyCoordinator.isCurrent(generation)) {
-                        data.binder.finishApply(
-                            request,
-                            generation,
-                            ApplyResult(request.requestId, CommandOutcome.FAILED, generation, false, ApplyErrorCodes.RESTORE_IN_PROGRESS),
-                        )
-                    }
                     return
                 }
                 withContext(Dispatchers.IO) {
@@ -313,17 +304,8 @@ class BaseService {
                 return
             }
             val dir = SagerNet.application.filesDir
-            val permit = withContext(Dispatchers.IO) {
-                RestoreCoordinator.tryExclusivePermit(dir)
-            }
+            val permit = acquireApplyPermit(dir, generation)
             if (permit == null) {
-                if (ApplyCoordinator.isCurrent(generation)) {
-                    data.binder.finishApply(
-                        request,
-                        generation,
-                        ApplyResult(request.requestId, CommandOutcome.FAILED, generation, false, ApplyErrorCodes.RESTORE_IN_PROGRESS),
-                    )
-                }
                 return
             }
             try {
@@ -506,6 +488,28 @@ class BaseService {
             }
         }
 
+        suspend fun acquireApplyPermit(dir: java.io.File, generation: Long): RestoreCoordinator.Permit? {
+            val acquired = RestoreCoordinator.acquirePermit(
+                dir,
+                RestoreCoordinator.LockKind.APPLY,
+            ) { !ApplyCoordinator.isCurrent(generation) }
+            if (acquired.permit != null) return acquired.permit
+            if (acquired.error == ApplyErrorCodes.RESTORE_IN_PROGRESS && ApplyCoordinator.isCurrent(generation)) {
+                data.binder.finishApply(
+                    data.applyRequest ?: return null,
+                    generation,
+                    ApplyResult(
+                        (data.applyRequest ?: return null).requestId,
+                        CommandOutcome.FAILED,
+                        generation,
+                        false,
+                        ApplyErrorCodes.RESTORE_IN_PROGRESS,
+                    ),
+                )
+            }
+            return null
+        }
+
         fun applyErrorMessage(errorCode: String?): String {
             this as Context
             val res = ApplyErrorMessages.stringRes(errorCode)
@@ -682,17 +686,13 @@ class BaseService {
                     val permit = withContext(Dispatchers.IO) {
                         val held = data.pendingRestorePermit
                         data.pendingRestorePermit = null
-                        held ?: RestoreCoordinator.tryExclusivePermit(dir)
-                    }
+                        held
+                    } ?: acquireApplyPermit(dir, generation)
                     if (permit == null) {
-                        if (ApplyCoordinator.isCurrent(generation)) {
-                            data.binder.finishApply(
-                                request,
-                                generation,
-                                ApplyResult(request.requestId, CommandOutcome.FAILED, generation, false, ApplyErrorCodes.RESTORE_IN_PROGRESS),
-                            )
-                        }
-                        stopRunner(false, "restore in progress")
+                        stopRunner(
+                            false,
+                            if (RestoreCoordinator.isActive()) applyErrorMessage(ApplyErrorCodes.RESTORE_IN_PROGRESS) else null,
+                        )
                         return@launch
                     }
                     try {

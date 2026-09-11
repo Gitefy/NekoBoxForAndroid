@@ -9,6 +9,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.file.Files
+import kotlinx.coroutines.runBlocking
 
 class RestoreCoordinatorTest {
 
@@ -87,11 +88,13 @@ class RestoreCoordinatorTest {
         RestoreCoordinator.journalFile(dir).writeText(RestoreCoordinator.Phase.PREPARED.name)
         var cfg = "NEW_CFG"
         var sager = "NEW_SAGER"
-        val recovered = RestoreCoordinator.recoverOnBoot(
+        val recovered = runBlocking {
+            RestoreCoordinator.recoverOnBoot(
             dir,
             { rows -> cfg = rows.first().string ?: ""; true },
             { bytes -> sager = String(bytes); true },
         )
+        }
         assertTrue(recovered.success)
         assertEquals("old", cfg)
         assertEquals("OLD_SAGER", sager)
@@ -109,11 +112,13 @@ class RestoreCoordinatorTest {
         RestoreCoordinator.journalFile(dir).writeText(RestoreCoordinator.Phase.CONFIG_COMMITTED.name)
         var cfg = "NEW_CFG"
         var sager = "NEW_SAGER"
-        val recovered = RestoreCoordinator.recoverOnBoot(
+        val recovered = runBlocking {
+            RestoreCoordinator.recoverOnBoot(
             dir,
             { rows -> cfg = rows.first().string ?: ""; true },
             { bytes -> sager = String(bytes); true },
         )
+        }
         assertTrue(recovered.success)
         assertEquals("old", cfg)
         assertEquals("OLD_SAGER", sager)
@@ -130,11 +135,13 @@ class RestoreCoordinatorTest {
         RestoreCoordinator.journalFile(dir).writeText(RestoreCoordinator.Phase.SAGER_COMMITTED.name)
         var cfg = "NEW_CFG"
         var sager = "NEW_SAGER"
-        val recovered = RestoreCoordinator.recoverOnBoot(
+        val recovered = runBlocking {
+            RestoreCoordinator.recoverOnBoot(
             dir,
             { rows -> cfg = rows.first().string ?: ""; true },
             { bytes -> sager = String(bytes); true },
         )
+        }
         assertTrue(recovered.success)
         assertEquals("NEW_CFG", cfg)
         assertEquals("NEW_SAGER", sager)
@@ -144,9 +151,9 @@ class RestoreCoordinatorTest {
     @Test
     fun bgApplyCannotEnterWhileRestoreLockHeld() {
         val dir = dir()
-        val held = RestoreCoordinator.tryExclusivePermit(dir)
+        val held = RestoreCoordinator.tryExclusivePermit(dir, RestoreCoordinator.LockKind.USER_RESTORE)
         assertNotNull(held)
-        assertNull(RestoreCoordinator.tryExclusivePermit(dir))
+        assertNull(RestoreCoordinator.tryExclusivePermit(dir, RestoreCoordinator.LockKind.APPLY))
         assertTrue(RestoreCoordinator.isActive())
         held!!.close()
         val second = RestoreCoordinator.tryExclusivePermit(dir)

@@ -21,6 +21,7 @@ import io.nekohasekai.sagernet.bg.ServiceNotification
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.RestoreCoordinator
 import io.nekohasekai.sagernet.ktx.Logs
+import io.nekohasekai.sagernet.ktx.onMainDispatcher
 import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
 import io.nekohasekai.sagernet.ui.MainActivity
 import io.nekohasekai.sagernet.utils.*
@@ -91,6 +92,10 @@ class SagerNet : Application(),
             Theme.applyNightTheme()
             AppLocale.apply()
             runOnDefaultDispatcher {
+                DataStore.awaitReady()
+                onMainDispatcher {
+                    Theme.applyCommittedAppearance(this@SagerNet)
+                }
                 DefaultNetworkListener.start(this) {
                     underlyingNetwork = it
                 }
