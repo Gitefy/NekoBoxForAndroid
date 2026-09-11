@@ -31,9 +31,9 @@ class RouterRuntimeException(
     val reason: Reason,
 ) : IllegalStateException(
     when (reason) {
-        Reason.MISSING -> "Proxy group ${groupName.ifBlank { groupId.toString() }} is missing"
-        Reason.DISABLED -> "Proxy group ${groupName.ifBlank { groupId.toString() }} is disabled"
-        Reason.EMPTY -> "Proxy group ${groupName.ifBlank { groupId.toString() }} has no available nodes"
+        Reason.MISSING -> "Strategy group ${groupName.ifBlank { groupId.toString() }} is missing"
+        Reason.DISABLED -> "Strategy group ${groupName.ifBlank { groupId.toString() }} is disabled"
+        Reason.EMPTY -> "Strategy group ${groupName.ifBlank { groupId.toString() }} has no available nodes"
     }
 ) {
     enum class Reason { MISSING, DISABLED, EMPTY }

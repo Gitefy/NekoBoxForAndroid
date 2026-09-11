@@ -7,10 +7,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceFragmentCompat
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import io.nekohasekai.sagernet.R
-import io.nekohasekai.sagernet.SagerNet
-import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.RouterGroup
 import io.nekohasekai.sagernet.database.RouterGroupRepository
@@ -129,58 +126,10 @@ class RouterGroupListFragment : PreferenceFragmentCompat() {
         }
 
         setOnPreferenceClickListener {
-            if (mode == RouterGroup.MODE_SELECTOR && members.isNotEmpty()) {
-                showNodeSelectionDialog(this@toPreference, members)
-            } else {
-                startActivity(Intent(requireContext(), RouterGroupSettingsActivity::class.java).apply {
-                    putExtra(RouterGroupSettingsActivity.EXTRA_ROUTER_ID, id)
-                })
-            }
+            startActivity(Intent(requireContext(), RouterGroupSettingsActivity::class.java).apply {
+                putExtra(RouterGroupSettingsActivity.EXTRA_ROUTER_ID, id)
+            })
             true
-        }
-    }
-
-    private fun showNodeSelectionDialog(group: RouterGroup, members: List<RouterMember>) {
-        lifecycleScope.launch(Dispatchers.IO) {
-            val proxies = SagerDatabase.proxyDao.getEntities(members.map { it.proxyId })
-            val proxyMap = proxies.associateBy { it.id }
-            val orderedProxies = members.mapNotNull { proxyMap[it.proxyId] }
-            withContext(Dispatchers.Main) {
-                if (!isAdded) return@withContext
-                if (orderedProxies.isEmpty()) {
-                    startActivity(Intent(requireContext(), RouterGroupSettingsActivity::class.java).apply {
-                        putExtra(RouterGroupSettingsActivity.EXTRA_ROUTER_ID, group.id)
-                    })
-                    return@withContext
-                }
-                val items = orderedProxies.map { it.displayName() }.toTypedArray()
-                val currentIndex = orderedProxies.indexOfFirst { it.id == group.selectedProxyId }
-                MaterialAlertDialogBuilder(requireContext())
-                    .setTitle(group.name.ifBlank { group.stableTag })
-                    .setSingleChoiceItems(items, currentIndex) { dialog, which ->
-                        val chosen = orderedProxies[which]
-                        lifecycleScope.launch(Dispatchers.IO) {
-                            runCatching {
-                                RouterGroupRepository.select(group.id, chosen.id)
-                            }.onSuccess { updated ->
-                                if (DataStore.serviceState.started) {
-                                    SagerNet.reloadService(updated.stableTag, chosen.id)
-                                }
-                            }
-                            withContext(Dispatchers.Main) {
-                                rebuild()
-                            }
-                        }
-                        dialog.dismiss()
-                    }
-                    .setNeutralButton(R.string.router_edit_group) { _, _ ->
-                        startActivity(Intent(requireContext(), RouterGroupSettingsActivity::class.java).apply {
-                            putExtra(RouterGroupSettingsActivity.EXTRA_ROUTER_ID, group.id)
-                        })
-                    }
-                    .setNegativeButton(android.R.string.cancel, null)
-                    .show()
-            }
         }
     }
 }

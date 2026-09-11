@@ -180,7 +180,7 @@ object RouterGroupRepository {
     fun select(routerId: Long, proxyId: Long): RouterGroup = synchronized(routerSyncLock) {
         SagerDatabase.instance.runInTransaction<RouterGroup> {
             val group = SagerDatabase.routerGroupDao.getById(routerId)
-                ?: throw IllegalArgumentException("Proxy group does not exist")
+                ?: throw IllegalArgumentException("Strategy group does not exist")
             check(group.enabled && group.mode == RouterGroup.MODE_SELECTOR) {
                 "Only an enabled selector group accepts a manual selection"
             }
