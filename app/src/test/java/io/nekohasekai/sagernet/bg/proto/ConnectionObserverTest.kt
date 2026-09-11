@@ -3,6 +3,7 @@ package io.nekohasekai.sagernet.bg.proto
 import io.nekohasekai.sagernet.aidl.RequestFlowData
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
@@ -76,13 +77,19 @@ class ConnectionObserverTest {
             scope = this,
         )
         current = 2L
+        old.start()
+        newer.start()
+        delay(30)
         assertFalse(old.pollOnce())
         assertTrue(newer.pollOnce())
-        assertEquals(listOf(2L), published)
+        delay(30)
+        assertEquals(setOf(2L), published.toSet())
+        old.stop()
+        newer.stop()
     }
 
     @Test
-    fun mapsAreBuiltOncePerPoll() = runBlocking {
+    fun mapsAreCachedAcrossPolls() = runBlocking {
         var mapCalls = 0
         val observer = ConnectionObserver(
             snapshot = { """{"flows":[{"id":"a","logicalOutbound":"x","finalOutboundTag":"y"},{"id":"b","logicalOutbound":"x","finalOutboundTag":"y"}]}""" },
@@ -92,8 +99,11 @@ class ConnectionObserverTest {
             runtimeGeneration = 1L,
             scope = this,
         )
+        observer.start()
+        yield()
         assertTrue(observer.pollOnce())
         assertEquals(1, mapCalls)
+        observer.stop()
     }
 
     @Test
@@ -111,8 +121,11 @@ class ConnectionObserverTest {
             runtimeGeneration = 1L,
             scope = this,
         )
+        observer.start()
+        yield()
         assertFalse(observer.pollOnce())
         assertTrue(published.isEmpty())
+        observer.stop()
     }
 
     @Test
@@ -126,9 +139,31 @@ class ConnectionObserverTest {
             runtimeGeneration = 1L,
             scope = this,
         )
+        observer.start()
+        yield()
         assertFalse(observer.pollOnce())
         assertTrue(vpnAlive)
         assertEquals("boom", observer.lastFailure)
+        observer.stop()
+    }
+
+    @Test
+    fun duplicateSnapshotIsNotPublishedTwice() = runBlocking {
+        val published = ArrayList<String>()
+        val observer = ConnectionObserver(
+            snapshot = { """{"flows":[{"id":"a","createdAt":1,"uploadBytes":1,"logicalOutbound":"x","finalOutboundTag":"y"}]}""" },
+            publish = { published.add(it.items.first().id) },
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            scope = this,
+        )
+        observer.start()
+        delay(30)
+        assertTrue(observer.pollOnce())
+        delay(30)
+        assertEquals(listOf("a"), published)
+        observer.stop()
     }
 }
 

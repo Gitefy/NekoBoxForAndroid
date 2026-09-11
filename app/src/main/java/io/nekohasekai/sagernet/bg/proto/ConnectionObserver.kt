@@ -1,6 +1,7 @@
 package io.nekohasekai.sagernet.bg.proto
 
 import io.nekohasekai.sagernet.aidl.RequestFlowBatch
+import io.nekohasekai.sagernet.aidl.RequestFlowData
 import io.nekohasekai.sagernet.ktx.Logs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -10,7 +11,7 @@ import kotlinx.coroutines.launch
 
 class ConnectionObserver(
     private val snapshot: () -> String,
-    private val publish: (RequestFlowBatch) -> Unit,
+    private val publish: suspend (RequestFlowBatch) -> Unit,
     private val isCurrent: () -> Boolean,
     private val maps: () -> RequestDisplayMaps,
     private val runtimeGeneration: Long,
@@ -30,12 +31,34 @@ class ConnectionObserver(
     var lastFailure: String? = null
         private set
 
+    private val gate = Any()
     private var job: Job? = null
     private var loggedFailure = false
+    private var mapsCache: RequestDisplayMaps? = null
+    private var lastFingerprint: String? = null
+    private val publisher = RequestSnapshotPublisher(
+        scope = scope,
+        isActive = { enabled && isCurrent() },
+        deliver = { batch -> publish(batch) },
+    )
+
+    val publisherLaunches: Int
+        get() = publisher.launches
 
     fun setEnabled(value: Boolean) {
-        enabled = value
-        if (value) startLocked() else stopLocked()
+        synchronized(gate) {
+            if (value) {
+                enabled = true
+                lastFingerprint = null
+                if (job?.isActive == true) {
+                    scope.launch { pollOnce() }
+                } else {
+                    startLocked()
+                }
+            } else {
+                stopLocked()
+            }
+        }
     }
 
     fun start() = setEnabled(true)
@@ -45,13 +68,21 @@ class ConnectionObserver(
     }
 
     fun pollOnce(): Boolean {
-        if (!isCurrent()) return false
+        if (!enabled || !isCurrent()) return false
         return try {
             val parsed = RequestFlowParser.parseSnapshot(snapshot())
-            val displayMaps = maps()
+            val displayMaps = synchronized(gate) {
+                mapsCache ?: maps().also { mapsCache = it }
+            }
             val mapped = parsed.map { RequestFlowMapper.map(it, displayMaps) }
-            if (!isCurrent()) return false
-            publish(RequestFlowBatch(ArrayList(mapped), runtimeGeneration))
+            if (!enabled || !isCurrent()) return false
+            val fingerprint = fingerprintOf(mapped)
+            synchronized(gate) {
+                if (!enabled || !isCurrent()) return false
+                if (fingerprint == lastFingerprint) return true
+                lastFingerprint = fingerprint
+            }
+            publisher.submit(RequestFlowBatch(ArrayList(mapped), runtimeGeneration))
             true
         } catch (e: Exception) {
             lastFailure = e.message
@@ -79,8 +110,18 @@ class ConnectionObserver(
 
     private fun stopLocked() {
         enabled = false
+        lastFingerprint = null
+        publisher.shutdown()
         job?.cancel()
         job = null
         pollActive = false
+    }
+
+    companion object {
+        fun fingerprintOf(mapped: List<RequestFlowData>): String {
+            return mapped.joinToString(separator = "|") { flow ->
+                "${flow.id}:${flow.createdAt}:${flow.uploadBytes}:${flow.downloadBytes}:${flow.closed}:${flow.logicalOutbound}:${flow.finalOutboundTag}"
+            }
+        }
     }
 }

@@ -8,7 +8,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 class ProxyInstance(profile: ProxyEntity, var service: BaseService.Interface? = null) :
@@ -52,9 +51,7 @@ class ProxyInstance(profile: ProxyEntity, var service: BaseService.Interface? = 
                     runCatching { box.connectionSnapshot()?.value.orEmpty() }.getOrDefault("")
                 },
                 publish = { batch ->
-                    runtimeScope.launch {
-                        svc.data.binder.broadcast { it.cbRequestUpdate(batch) }
-                    }
+                    svc.data.binder.publishRequestSnapshot(batch)
                 },
                 isCurrent = { svc.data.proxy === this@ProxyInstance },
                 maps = {

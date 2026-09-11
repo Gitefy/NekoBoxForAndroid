@@ -14,37 +14,42 @@ import (
 )
 
 const (
-	connectionHistoryMax       = 300
-	connectionHistoryMaxAge    = 10 * time.Minute
-	boundRuleText              = 256
-	boundShortText             = 128
-	boundTagText               = 128
-	boundAddressText           = 64
-	boundIDText                = 64
+	connectionHistoryMax    = 300
+	connectionHistoryMaxAge = 10 * time.Minute
+	boundRuleText           = 256
+	boundShortText          = 128
+	boundTagText            = 128
+	boundAddressText        = 64
+	boundIDText             = 64
 )
 
 type connectionFlow struct {
-	ID                   string `json:"id"`
-	CreatedAt            int64  `json:"createdAt"`
-	ClosedAt             int64  `json:"closedAt"`
-	Closed               bool   `json:"closed"`
-	Network              string `json:"network"`
-	UID                  int32  `json:"uid"`
-	PackageNames         string `json:"packageNames"`
-	Domain               string `json:"domain"`
-	DestinationAddress   string `json:"destinationAddress"`
-	DestinationPort      int    `json:"destinationPort"`
-	OriginDestination    string `json:"originDestination"`
-	MatchedRuleText      string `json:"matchedRuleText"`
-	Chain                string `json:"chain"`
-	LogicalOutbound      string `json:"logicalOutbound"`
-	FinalOutboundTag     string `json:"finalOutboundTag"`
-	UploadBytes          int64  `json:"uploadBytes"`
-	DownloadBytes        int64  `json:"downloadBytes"`
+	ID                 string `json:"id"`
+	CreatedAt          int64  `json:"createdAt"`
+	ClosedAt           int64  `json:"closedAt"`
+	Closed             bool   `json:"closed"`
+	Network            string `json:"network"`
+	UID                int32  `json:"uid"`
+	PackageNames       string `json:"packageNames"`
+	Domain             string `json:"domain"`
+	DestinationAddress string `json:"destinationAddress"`
+	DestinationPort    int    `json:"destinationPort"`
+	OriginDestination  string `json:"originDestination"`
+	MatchedRuleText    string `json:"matchedRuleText"`
+	Chain              string `json:"chain"`
+	LogicalOutbound    string `json:"logicalOutbound"`
+	FinalOutboundTag   string `json:"finalOutboundTag"`
+	UploadBytes        int64  `json:"uploadBytes"`
+	DownloadBytes      int64  `json:"downloadBytes"`
 }
 
 type connectionSnapshotEnvelope struct {
 	Flows []connectionFlow `json:"flows"`
+}
+
+type liveConnectionSource interface {
+	Connections() []*trafficcontrol.TrackerMetadata
+	ClosedConnections() []*trafficcontrol.TrackerMetadata
 }
 
 type connectionHistory struct {
@@ -57,6 +62,10 @@ type connectionHistory struct {
 	unsub   func()
 	stopCh  chan struct{}
 	stopped bool
+
+	liveScans      int
+	trackerConverts int
+	evictPasses    int
 }
 
 func newConnectionHistory(now func() time.Time) *connectionHistory {
@@ -172,11 +181,84 @@ func flowFromTracker(meta *trafficcontrol.TrackerMetadata) connectionFlow {
 	}
 }
 
+func preferText(keep, incoming string, locked bool) string {
+	if locked {
+		if keep != "" {
+			return keep
+		}
+		return incoming
+	}
+	if incoming != "" {
+		return incoming
+	}
+	return keep
+}
+
+func mergeConnectionFlow(dst *connectionFlow, src connectionFlow) {
+	if dst.ID == "" {
+		*dst = src
+		return
+	}
+	closed := dst.Closed || src.Closed
+	closedAt := dst.ClosedAt
+	if src.Closed && src.ClosedAt > closedAt {
+		closedAt = src.ClosedAt
+	}
+	created := dst.CreatedAt
+	if created == 0 || (src.CreatedAt > 0 && src.CreatedAt < created) {
+		created = src.CreatedAt
+	}
+	upload := dst.UploadBytes
+	if src.UploadBytes > upload {
+		upload = src.UploadBytes
+	}
+	download := dst.DownloadBytes
+	if src.DownloadBytes > download {
+		download = src.DownloadBytes
+	}
+	identityLocked := dst.Closed && !src.Closed
+	dst.CreatedAt = created
+	dst.Network = preferText(dst.Network, src.Network, identityLocked)
+	if !identityLocked || dst.UID == 0 {
+		if src.UID != 0 {
+			dst.UID = src.UID
+		}
+	}
+	dst.PackageNames = preferText(dst.PackageNames, src.PackageNames, identityLocked)
+	dst.Domain = preferText(dst.Domain, src.Domain, identityLocked)
+	dst.DestinationAddress = preferText(dst.DestinationAddress, src.DestinationAddress, identityLocked)
+	if !identityLocked || dst.DestinationPort == 0 {
+		if src.DestinationPort != 0 {
+			dst.DestinationPort = src.DestinationPort
+		}
+	}
+	dst.OriginDestination = preferText(dst.OriginDestination, src.OriginDestination, identityLocked)
+	dst.MatchedRuleText = preferText(dst.MatchedRuleText, src.MatchedRuleText, identityLocked)
+	dst.Chain = preferText(dst.Chain, src.Chain, identityLocked)
+	dst.LogicalOutbound = preferText(dst.LogicalOutbound, src.LogicalOutbound, identityLocked)
+	dst.FinalOutboundTag = preferText(dst.FinalOutboundTag, src.FinalOutboundTag, identityLocked)
+	dst.UploadBytes = upload
+	dst.DownloadBytes = download
+	dst.Closed = closed
+	dst.ClosedAt = closedAt
+}
+
 func (h *connectionHistory) Upsert(flow connectionFlow) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.stopped {
+		return
+	}
 	h.upsertLocked(flow)
 	h.evictLocked()
+}
+
+func (h *connectionHistory) ApplyEvent(meta *trafficcontrol.TrackerMetadata) {
+	if meta == nil {
+		return
+	}
+	h.trackerConverts++
+	h.Upsert(flowFromTracker(meta))
 }
 
 func (h *connectionHistory) upsertLocked(flow connectionFlow) {
@@ -184,14 +266,22 @@ func (h *connectionHistory) upsertLocked(flow connectionFlow) {
 		return
 	}
 	if existing, ok := h.byID[flow.ID]; ok {
-		*existing = flow
+		mergeConnectionFlow(existing, flow)
 		return
 	}
 	copied := flow
 	h.byID[flow.ID] = &copied
 }
 
+func flowLess(a, b connectionFlow) bool {
+	if a.CreatedAt == b.CreatedAt {
+		return a.ID > b.ID
+	}
+	return a.CreatedAt > b.CreatedAt
+}
+
 func (h *connectionHistory) evictLocked() {
+	h.evictPasses++
 	cutoff := h.now().Add(-h.maxAge).UnixMilli()
 	for id, flow := range h.byID {
 		created := flow.CreatedAt
@@ -207,11 +297,31 @@ func (h *connectionHistory) evictLocked() {
 		all = append(all, flow)
 	}
 	sort.Slice(all, func(i, j int) bool {
-		return all[i].CreatedAt > all[j].CreatedAt
+		return flowLess(*all[i], *all[j])
 	})
 	for _, extra := range all[h.max:] {
 		delete(h.byID, extra.ID)
 	}
+}
+
+func (h *connectionHistory) mergeTrackers(metas []*trafficcontrol.TrackerMetadata) {
+	if len(metas) == 0 {
+		return
+	}
+	flows := make([]connectionFlow, 0, len(metas))
+	for _, meta := range metas {
+		h.trackerConverts++
+		flows = append(flows, flowFromTracker(meta))
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.stopped {
+		return
+	}
+	for _, flow := range flows {
+		h.upsertLocked(flow)
+	}
+	h.evictLocked()
 }
 
 func (h *connectionHistory) Snapshot() []connectionFlow {
@@ -223,10 +333,7 @@ func (h *connectionHistory) Snapshot() []connectionFlow {
 		out = append(out, *flow)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].CreatedAt == out[j].CreatedAt {
-			return out[i].ID > out[j].ID
-		}
-		return out[i].CreatedAt > out[j].CreatedAt
+		return flowLess(out[i], out[j])
 	})
 	return out
 }
@@ -243,13 +350,15 @@ func (h *connectionHistory) Attach(manager *trafficcontrol.Manager) {
 	if manager == nil {
 		return
 	}
-	for _, meta := range manager.Connections() {
-		h.Upsert(flowFromTracker(meta))
-	}
-	for _, meta := range manager.ClosedConnections() {
-		h.Upsert(flowFromTracker(meta))
+	h.mu.Lock()
+	stopped := h.stopped
+	h.mu.Unlock()
+	if stopped {
+		return
 	}
 	sub, done, err := manager.SubscribeEvents()
+	h.MergeLive(manager)
+	h.mergeClosed(manager)
 	if err != nil || sub == nil {
 		return
 	}
@@ -262,14 +371,13 @@ func (h *connectionHistory) Attach(manager *trafficcontrol.Manager) {
 	h.unsub = func() { manager.UnSubscribeEvents(sub) }
 	stopCh := h.stopCh
 	h.mu.Unlock()
-	go h.listen(sub, done, stopCh, manager)
+	go h.listen(sub, done, stopCh)
 }
 
 func (h *connectionHistory) listen(
 	sub observable.Subscription[trafficcontrol.ConnectionEvent],
 	done <-chan struct{},
 	stopCh <-chan struct{},
-	manager *trafficcontrol.Manager,
 ) {
 	for {
 		select {
@@ -282,24 +390,25 @@ func (h *connectionHistory) listen(
 				return
 			}
 			if event.Metadata != nil {
-				h.Upsert(flowFromTracker(event.Metadata))
-			}
-			if manager != nil {
-				for _, meta := range manager.Connections() {
-					h.Upsert(flowFromTracker(meta))
-				}
+				h.ApplyEvent(event.Metadata)
 			}
 		}
 	}
 }
 
-func (h *connectionHistory) MergeLive(manager *trafficcontrol.Manager) {
-	if manager == nil {
+func (h *connectionHistory) MergeLive(source liveConnectionSource) {
+	if source == nil {
 		return
 	}
-	for _, meta := range manager.Connections() {
-		h.Upsert(flowFromTracker(meta))
+	h.liveScans++
+	h.mergeTrackers(source.Connections())
+}
+
+func (h *connectionHistory) mergeClosed(source liveConnectionSource) {
+	if source == nil {
+		return
 	}
+	h.mergeTrackers(source.ClosedConnections())
 }
 
 func (h *connectionHistory) Dispose() {

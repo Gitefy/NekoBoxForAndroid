@@ -1,5 +1,6 @@
 package io.nekohasekai.sagernet.ui
 
+import android.content.res.Configuration
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
@@ -8,6 +9,8 @@ import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.RadioGroup
 import android.widget.TextView
+import androidx.recyclerview.widget.DiffUtil
+import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import io.nekohasekai.sagernet.R
@@ -20,15 +23,18 @@ import io.nekohasekai.sagernet.database.RequestRuleApply
 import io.nekohasekai.sagernet.database.RequestRuleFactory
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.ktx.FixedLinearLayoutManager
-import io.nekohasekai.sagernet.ktx.app
 import io.nekohasekai.sagernet.ktx.onMainDispatcher
 import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
+import io.nekohasekai.sagernet.utils.PackageCache
 import java.util.Locale
 
 class RequestFragment : ToolbarFragment(R.layout.layout_request) {
 
     private lateinit var list: RecyclerView
     private lateinit var adapter: RequestAdapter
+    private val labels = RequestAppLabelCache { pkg ->
+        runCatching { PackageCache.loadLabel(pkg) }.getOrNull()?.takeUnless { it == pkg }
+    }
     private val listener = { refresh() }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
@@ -59,6 +65,12 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
         refresh()
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        labels.clear()
+        refresh()
+    }
+
     override fun onStart() {
         super.onStart()
         (activity as? MainActivity)?.setRequestPageVisible(true)
@@ -75,17 +87,32 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
     }
 
     private fun refresh() {
-        adapter.items = RequestStore.filtered()
-        adapter.notifyDataSetChanged()
+        val next = RequestStore.filtered()
+        adapter.submitList(next)
+        runOnDefaultDispatcher {
+            val misses = labels.resolveMissing(next.map { it.packageName })
+            if (misses > 0) {
+                onMainDispatcher {
+                    adapter.notifyItemRangeChanged(0, adapter.itemCount, PAYLOAD_LABEL)
+                }
+            }
+        }
     }
 
-    inner class RequestAdapter : RecyclerView.Adapter<RequestHolder>() {
-        var items: List<RequestFlowData> = emptyList()
+    inner class RequestAdapter : ListAdapter<RequestFlowData, RequestHolder>(DIFF) {
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RequestHolder {
             return RequestHolder(layoutInflater.inflate(R.layout.layout_request_item, parent, false))
         }
-        override fun getItemCount() = items.size
-        override fun onBindViewHolder(holder: RequestHolder, position: Int) = holder.bind(items[position])
+        override fun onBindViewHolder(holder: RequestHolder, position: Int) = holder.bind(getItem(position))
+        override fun onBindViewHolder(holder: RequestHolder, position: Int, payloads: MutableList<Any>) {
+            val item = getItem(position)
+            if (payloads.isEmpty()) {
+                holder.bind(item)
+                return
+            }
+            if (payloads.contains(PAYLOAD_STATS)) holder.bindStats(item)
+            if (payloads.contains(PAYLOAD_LABEL)) holder.bindApp(item)
+        }
     }
 
     inner class RequestHolder(view: View) : RecyclerView.ViewHolder(view) {
@@ -95,7 +122,7 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
         private val metaView: TextView = view.findViewById(R.id.request_meta)
 
         fun bind(flow: RequestFlowData) {
-            appView.text = appLabel(flow)
+            bindApp(flow)
             val host = flow.domain.ifBlank {
                 RequestDestination.formatHostPort(flow.destinationAddress, flow.destinationPort)
             }
@@ -109,21 +136,23 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
                     if (left.isBlank()) right else "$left › $right"
                 }
             }
+            bindStats(flow)
+            itemView.setOnClickListener { showDetail(flow) }
+        }
+
+        fun bindApp(flow: RequestFlowData) {
+            appView.text = appLabel(flow)
+        }
+
+        fun bindStats(flow: RequestFlowData) {
             val state = if (flow.closed) "closed" else "active"
             metaView.text = "↑ ${formatBytes(flow.uploadBytes)}  ↓ ${formatBytes(flow.downloadBytes)}  $state"
-            itemView.setOnClickListener { showDetail(flow) }
         }
     }
 
     private fun appLabel(flow: RequestFlowData): String {
         val pkg = flow.packageName.substringBefore(',')
-        if (pkg.isNotBlank()) {
-            val label = runCatching {
-                val pm = app.packageManager
-                pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
-            }.getOrNull()
-            return label ?: pkg
-        }
+        if (pkg.isNotBlank()) return labels.display(pkg)
         return if (flow.uid > 0) "UID ${flow.uid}" else ""
     }
 
@@ -262,5 +291,21 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
+    }
+
+    companion object {
+        const val PAYLOAD_STATS = "stats"
+        const val PAYLOAD_LABEL = "label"
+        private val DIFF = object : DiffUtil.ItemCallback<RequestFlowData>() {
+            override fun areItemsTheSame(oldItem: RequestFlowData, newItem: RequestFlowData): Boolean {
+                return RequestFlowDiff.sameItem(oldItem, newItem)
+            }
+            override fun areContentsTheSame(oldItem: RequestFlowData, newItem: RequestFlowData): Boolean {
+                return RequestFlowDiff.sameContent(oldItem, newItem)
+            }
+            override fun getChangePayload(oldItem: RequestFlowData, newItem: RequestFlowData): Any? {
+                return if (RequestFlowDiff.statsOnly(oldItem, newItem)) PAYLOAD_STATS else null
+            }
+        }
     }
 }

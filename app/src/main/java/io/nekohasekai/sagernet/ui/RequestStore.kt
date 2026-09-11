@@ -37,7 +37,9 @@ object RequestStore {
     }
 
     fun replace(next: List<RequestFlowData>) {
-        items = next
+        val copy = next.toList()
+        if (copy == items) return
+        items = copy
         notifyListeners()
     }
 

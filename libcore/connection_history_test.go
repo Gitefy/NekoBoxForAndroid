@@ -2,6 +2,7 @@ package libcore
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/netip"
 	"strings"
 	"testing"
@@ -175,6 +176,141 @@ func TestDestinationIPv6IsRawWithoutPort(t *testing.T) {
 	if flow.DestinationPort != 443 {
 		t.Fatalf("destinationPort=%d", flow.DestinationPort)
 	}
+}
+
+type countingLiveSource struct {
+	live  []*trafficcontrol.TrackerMetadata
+	closed []*trafficcontrol.TrackerMetadata
+	liveCalls   int
+	closedCalls int
+}
+
+func (c *countingLiveSource) Connections() []*trafficcontrol.TrackerMetadata {
+	c.liveCalls++
+	return c.live
+}
+
+func (c *countingLiveSource) ClosedConnections() []*trafficcontrol.TrackerMetadata {
+	c.closedCalls++
+	return c.closed
+}
+
+func TestEventPathDoesNotEnumerateLiveConnections(t *testing.T) {
+	src := &countingLiveSource{
+		live: []*trafficcontrol.TrackerMetadata{{
+			ID:        uuid.FromStringOrNil("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+			CreatedAt: time.UnixMilli(1),
+		}},
+	}
+	h := newConnectionHistory(func() time.Time { return time.UnixMilli(10) })
+	h.ApplyEvent(src.live[0])
+	if src.liveCalls != 0 {
+		t.Fatalf("event path liveCalls=%d", src.liveCalls)
+	}
+	if h.liveScans != 0 {
+		t.Fatalf("liveScans=%d", h.liveScans)
+	}
+	h.MergeLive(src)
+	if src.liveCalls != 1 || h.liveScans != 1 {
+		t.Fatalf("liveCalls=%d scans=%d", src.liveCalls, h.liveScans)
+	}
+}
+
+func TestClosedIsNotReopenedByStaleLiveMerge(t *testing.T) {
+	now := time.UnixMilli(8_000_000)
+	h := newConnectionHistory(func() time.Time { return now })
+	h.Upsert(connectionFlow{
+		ID:               "closed",
+		CreatedAt:        now.UnixMilli(),
+		Closed:           true,
+		ClosedAt:         now.UnixMilli(),
+		UploadBytes:      40,
+		DownloadBytes:    80,
+		LogicalOutbound:  "router-us",
+		FinalOutboundTag: "us-la-03",
+	})
+	h.Upsert(connectionFlow{
+		ID:               "closed",
+		CreatedAt:        now.UnixMilli(),
+		Closed:           false,
+		UploadBytes:      10,
+		DownloadBytes:    20,
+		LogicalOutbound:  "stale",
+		FinalOutboundTag: "old-node",
+	})
+	got := h.Snapshot()
+	if len(got) != 1 {
+		t.Fatalf("got=%v", got)
+	}
+	flow := got[0]
+	if !flow.Closed || flow.UploadBytes != 40 || flow.DownloadBytes != 80 {
+		t.Fatalf("closed/bytes rolled back: %+v", flow)
+	}
+	if flow.LogicalOutbound != "router-us" || flow.FinalOutboundTag != "us-la-03" {
+		t.Fatalf("outbound rolled back: %+v", flow)
+	}
+}
+
+func TestDisposeRejectsFurtherUpserts(t *testing.T) {
+	h := newConnectionHistory(time.Now)
+	h.Dispose()
+	h.Upsert(connectionFlow{ID: "late", CreatedAt: time.Now().UnixMilli()})
+	if len(h.Snapshot()) != 0 {
+		t.Fatal("disposed history must not accept data")
+	}
+}
+
+func TestBatchMergeEvictsOnce(t *testing.T) {
+	now := time.UnixMilli(9_000_000)
+	h := newConnectionHistory(func() time.Time { return now })
+	metas := make([]*trafficcontrol.TrackerMetadata, 0, 8)
+	for i := 0; i < 8; i++ {
+		metas = append(metas, &trafficcontrol.TrackerMetadata{
+			ID:        uuid.FromStringOrNil(fmt.Sprintf("11111111-1111-1111-1111-%012d", i+1)),
+			CreatedAt: now.Add(time.Duration(i) * time.Millisecond),
+		})
+	}
+	before := h.evictPasses
+	h.mergeTrackers(metas)
+	if h.evictPasses != before+1 {
+		t.Fatalf("evictPasses delta=%d", h.evictPasses-before)
+	}
+	if h.trackerConverts < 8 {
+		t.Fatalf("converts=%d", h.trackerConverts)
+	}
+}
+
+func TestHistoryIsAvailableBeforeFirstSnapshotMerge(t *testing.T) {
+	now := time.UnixMilli(10_000_000)
+	h := newConnectionHistory(func() time.Time { return now })
+	h.Upsert(connectionFlow{ID: "prior", CreatedAt: now.UnixMilli(), Domain: "example.com"})
+	got := h.Snapshot()
+	if len(got) != 1 || got[0].Domain != "example.com" {
+		t.Fatalf("first open should see prior events: %v", got)
+	}
+}
+
+func BenchmarkUpsertThreeHundredFlows(b *testing.B) {
+	now := time.UnixMilli(11_000_000)
+	flows := make([]connectionFlow, 300)
+	for i := range flows {
+		flows[i] = connectionFlow{ID: "f-" + itoa(i), CreatedAt: now.UnixMilli() + int64(i), UploadBytes: int64(i)}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		h := newConnectionHistory(func() time.Time { return now })
+		h.mergeNamed(flows)
+	}
+}
+
+func (h *connectionHistory) mergeNamed(flows []connectionFlow) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, flow := range flows {
+		h.upsertLocked(flow)
+	}
+	h.evictLocked()
 }
 
 func itoa(v int) string {

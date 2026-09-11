@@ -28,5 +28,6 @@ class RequestObserverSubscriptionsTest {
         assertFalse(subs.hasSubscribers())
         subs.remove("traffic-client")
         assertFalse(subs.hasSubscribers())
+        assertFalse(subs.contains("traffic-client"))
     }
 }

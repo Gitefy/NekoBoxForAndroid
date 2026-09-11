@@ -146,6 +146,16 @@ class BaseService {
 
         private val broadcastMutex = Mutex()
 
+        suspend fun publishRequestSnapshot(batch: io.nekohasekai.sagernet.aidl.RequestFlowBatch) {
+            if (!requestObservers.hasSubscribers()) return
+            broadcast { cb ->
+                val token = cb.asBinder() ?: return@broadcast
+                if (requestObservers.contains(token)) {
+                    cb.cbRequestUpdate(batch)
+                }
+            }
+        }
+
         suspend fun broadcast(work: (ISagerNetServiceCallback) -> Unit) {
             broadcastMutex.withLock {
                 val count = callbacks.beginBroadcast()

@@ -19,6 +19,8 @@ class RequestObserverSubscriptions {
 
     fun hasSubscribers(): Boolean = subscribers.isNotEmpty()
 
+    fun contains(client: Any): Boolean = subscribers.contains(client)
+
     fun clear() {
         subscribers.clear()
     }

@@ -140,11 +140,9 @@ class SagerNet : Application(),
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        // UI_HIDDEN fires often; FreeOSMemory can spike CPU without proven battery wins.
-        // Cooldown keeps the safety valve without thrashing on every background transition.
         val now = SystemClock.elapsedRealtime()
         val previous = lastForceGcElapsedRealtime.get()
-        if (now - previous < FORCE_GC_COOLDOWN_MS) return
+        if (!NativeGcPolicy.shouldForceNativeGc(level, now, previous, FORCE_GC_COOLDOWN_MS)) return
         if (!lastForceGcElapsedRealtime.compareAndSet(previous, now)) return
         Libcore.forceGc()
     }
