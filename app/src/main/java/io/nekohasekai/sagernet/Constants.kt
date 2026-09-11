@@ -239,6 +239,12 @@ object Action {
     const val CLOSE = "io.nekohasekai.sagernet.CLOSE"
     const val RELOAD = "io.nekohasekai.sagernet.RELOAD"
 
+    // S2-B2 unified apply path: START/RELOAD/STOP as a single small request.
+    const val APPLY = "io.nekohasekai.sagernet.APPLY"
+    const val EXTRA_REQUEST_ID = "requestId"
+    const val EXTRA_KIND = "kind"
+    const val EXTRA_TARGET_PROFILE_ID = "targetProfileId"
+
     // const val SWITCH_WAKE_LOCK = "io.nekohasekai.sagernet.SWITCH_WAKELOCK"
     const val RESET_UPSTREAM_CONNECTIONS = "moe.nb4a.RESET_UPSTREAM_CONNECTIONS"
 

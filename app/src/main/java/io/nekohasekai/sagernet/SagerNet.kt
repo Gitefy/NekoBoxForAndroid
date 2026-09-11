@@ -32,6 +32,8 @@ import moe.matsuri.nb4a.utils.JavaUtil
 import java.util.concurrent.atomic.AtomicLong
 import moe.matsuri.nb4a.utils.cleanWebview
 import java.io.File
+import io.nekohasekai.sagernet.bg.ApplyRequest
+import io.nekohasekai.sagernet.bg.CommandKind
 import androidx.work.Configuration as WorkConfiguration
 
 class SagerNet : Application(),
@@ -197,6 +199,22 @@ class SagerNet : Application(),
         fun startService() = ContextCompat.startForegroundService(
             application, Intent(application, SagerConnection.serviceClass)
         )
+
+        /**
+         * S2-B2 unified apply path: explicit START with optional captured
+         * target. Keeps the legal explicit foreground-service launch, then the
+         * receiver's ApplyRequest handler performs readiness+flush+snapshot
+         * validation before the core start.
+         */
+        fun startServiceViaApply(request: ApplyRequest) {
+            startService()
+            application.sendBroadcast(
+                Intent(Action.APPLY).setPackage(application.packageName)
+                    .putExtra(Action.EXTRA_REQUEST_ID, request.requestId)
+                    .putExtra(Action.EXTRA_KIND, request.kind.name)
+                    .putExtra(Action.EXTRA_TARGET_PROFILE_ID, request.targetProfileId ?: -1L)
+            )
+        }
 
         fun reloadService(routerTag: String? = null, routerProxyId: Long? = null) =
             application.sendBroadcast(Intent(Action.RELOAD).setPackage(application.packageName).apply {

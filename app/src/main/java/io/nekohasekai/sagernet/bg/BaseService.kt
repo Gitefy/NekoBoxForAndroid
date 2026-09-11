@@ -61,11 +61,39 @@ class BaseService {
             when (intent.action) {
                 Intent.ACTION_SHUTDOWN -> service.persistStats()
                 Action.RELOAD -> runOnDefaultDispatcher {
-                    service.reload(
+                    // S2-B2 compat adapter: legacy RELOAD broadcast is normalized
+                    // into the same ApplyRequest path as the new APPLY action.
+                    val request = ApplyService.broadcastToRequest(
                         intent.getStringExtra(Action.EXTRA_ROUTER_TAG),
                         intent.getLongExtra(Action.EXTRA_ROUTER_PROXY_ID, 0L).takeIf { it > 0L },
                         intent.getBooleanExtra(Action.EXTRA_FORCE_FULL_RELOAD, false),
                     )
+                    val (generation, _) = ApplyCoordinator.accept(request)
+                    val result = ApplyService.applyCommitted(request, generation)
+                    ApplyCoordinator.publish(request, generation, result)
+                    if (result.outcome == CommandOutcome.FAILED) {
+                        // Preserve legacy behavior for failed handshakes.
+                        service.reload(
+                            intent.getStringExtra(Action.EXTRA_ROUTER_TAG),
+                            intent.getLongExtra(Action.EXTRA_ROUTER_PROXY_ID, 0L).takeIf { it > 0L },
+                            intent.getBooleanExtra(Action.EXTRA_FORCE_FULL_RELOAD, false),
+                        )
+                    }
+                }
+                Action.APPLY -> runOnDefaultDispatcher {
+                    // Unified receiver entry (S2-B2): the request already carries
+                    // its captured target; readiness+flush+snapshot validation
+                    // happens inside applyCommitted before any core call.
+                    val request = ApplyRequest(
+                        requestId = intent.getStringExtra(Action.EXTRA_REQUEST_ID) ?: ApplyRequest.generateRequestId(),
+                        kind = CommandKind.valueOf(intent.getStringExtra(Action.EXTRA_KIND) ?: CommandKind.RELOAD.name),
+                        targetProfileId = intent.getLongExtra(Action.EXTRA_TARGET_PROFILE_ID, -1L).takeIf { it > 0L },
+                        routerStableTag = null,
+                        routerMemberId = null,
+                    )
+                    val (generation, _) = ApplyCoordinator.accept(request)
+                    val result = ApplyService.applyCommitted(request, generation)
+                    ApplyCoordinator.publish(request, generation, result)
                 }
                 // Action.SWITCH_WAKE_LOCK -> runOnDefaultDispatcher { service.switchWakeLock() }
                 PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED -> {
@@ -435,6 +463,7 @@ class BaseService {
             BootReceiver.enabled = DataStore.persistAcrossReboot
             if (!data.closeReceiverRegistered) {
                 val filter = IntentFilter().apply {
+                    addAction(Action.APPLY)
                     addAction(Action.RELOAD)
                     addAction(Intent.ACTION_SHUTDOWN)
                     addAction(Action.CLOSE)

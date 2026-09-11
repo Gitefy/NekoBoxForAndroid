@@ -100,6 +100,15 @@ class SagerConnection(
             }
         }
 
+        override fun commandResult(requestId: String, outcome: Int, instanceGeneration: Long, persisted: Boolean, errorCode: String?) {
+            val callback = callback ?: return
+            runOnMainDispatcher {
+                if (callback is CallbackWithCommandResult) {
+                    callback.onCommandResult(requestId, CommandOutcome.values()[outcome], instanceGeneration, persisted, errorCode)
+                }
+            }
+        }
+
     }
 
     private var binder: IBinder? = null

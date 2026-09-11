@@ -9,4 +9,5 @@ oneway interface ISagerNetServiceCallback {
   void cbSpeedUpdate(in SpeedDisplayData stats);
   void cbTrafficUpdate(in TrafficDataBatch stats);
   void cbSelectorUpdate(long id);
+  void commandResult(String requestId, int outcome, long instanceGeneration, boolean persisted, String errorCode);
 }
