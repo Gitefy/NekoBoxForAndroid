@@ -124,6 +124,11 @@ object Theme {
         return getNightMode(currentNightMode)
     }
 
+    fun nightDelegateMode(storeReady: Boolean, committedNightTheme: Int): Int? {
+        if (!storeReady) return null
+        return getNightMode(storeReady, committedNightTheme)
+    }
+
     fun getNightMode(mode: Int): Int {
         return when (mode) {
             0 -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
@@ -142,12 +147,13 @@ object Theme {
     }
 
     fun applyNightTheme() {
-        AppCompatDelegate.setDefaultNightMode(getNightMode())
+        val ready = DataStore.configurationStore.isReady()
+        val mode = nightDelegateMode(ready, if (ready) DataStore.nightTheme else 0) ?: return
+        AppCompatDelegate.setDefaultNightMode(mode)
     }
 
-    fun applyCommittedAppearance(context: Context) {
+    fun applyCommittedAppearance(@Suppress("UNUSED_PARAMETER") context: Context) {
         currentNightMode = UNPINNED_NIGHT_MODE
-        apply(context)
         applyNightTheme()
         AppLocale.apply()
     }

@@ -33,4 +33,18 @@ class ThemeColdStartTest {
         assertEquals("zh-CN", appearance.appLanguage)
         assertEquals(AppCompatDelegate.MODE_NIGHT_YES, Theme.getNightMode(appearance.nightTheme))
     }
+
+    @Test
+    fun loadingDoesNotOverrideAlreadyAppliedNightMode() {
+        assertEquals(null, Theme.nightDelegateMode(storeReady = false, committedNightTheme = 1))
+        assertEquals(
+            AppCompatDelegate.MODE_NIGHT_YES,
+            Theme.nightDelegateMode(storeReady = true, committedNightTheme = 1),
+        )
+        Theme.currentNightMode = Theme.UNPINNED_NIGHT_MODE
+        assertEquals(
+            AppCompatDelegate.MODE_NIGHT_NO,
+            Theme.nightDelegateMode(storeReady = true, committedNightTheme = 2),
+        )
+    }
 }

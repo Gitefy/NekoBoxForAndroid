@@ -56,6 +56,8 @@
         <item name="actionOverflowMenuStyle">@style/Widget.SagerNet.PopupMenu.Overflow</item>
         <item name="bottomSheetDialogTheme">@style/ThemeOverlay.SagerNet.BottomSheetDialog</item>
         <item name="materialButtonStyle">@style/Widget.SagerNet.Button</item>
+        <item name="android:windowBackground">@color/page_background</item>
+        <item name="android:colorBackground">@color/page_background</item>
 
     </style>
 
@@ -201,6 +203,13 @@
     <style name="Widget.SagerNet.PopupMenu.Overflow" parent="Widget.MaterialComponents.PopupMenu.Overflow">
         <item name="android:popupBackground">@drawable/bg_popup_menu</item>
         <item name="android:popupAnimationStyle">@style/PopupMenuAnimation</item>
+    </style>
+
+    <style name="ThemeOverlay.SagerNet.ToolbarPopup" parent="ThemeOverlay.AppCompat.Dark">
+        <item name="android:colorBackground">#303030</item>
+        <item name="colorSurface">#303030</item>
+        <item name="android:textColorPrimary">@color/white</item>
+        <item name="android:textColorSecondary">#B3FFFFFF</item>
     </style>
 
     <style name="ShapeAppearanceOverlay.SagerNet.BottomSheet" parent="">
@@ -585,6 +594,12 @@
         <item name="colorMaterial100">@color/color_ng_black_primary</item>
         <item name="colorMaterial300">@color/color_ng_black_primary</item>
         <item name="cardElevatedSurfaceColor">@color/card_elevated_black</item>
+        <item name="android:windowBackground">@color/card_elevated_black</item>
+        <item name="android:colorBackground">@color/card_elevated_black</item>
+        <item name="colorSurface">@color/card_elevated_black</item>
+        <item name="colorOnSurface">@color/white</item>
+        <item name="android:textColorPrimary">@color/white</item>
+        <item name="android:textColorSecondary">#B3FFFFFF</item>
 
         <item name="selectedColorPrimary">@color/color_ng_black_accent</item>
         <item name="fabColorBackground">@color/color_ng_black_accent</item>
@@ -612,6 +627,12 @@
         <item name="colorMaterial100">@color/color_ng_black_primary</item>
         <item name="colorMaterial300">@color/color_ng_black_primary</item>
         <item name="cardElevatedSurfaceColor">@color/card_elevated_black</item>
+        <item name="android:windowBackground">@color/card_elevated_black</item>
+        <item name="android:colorBackground">@color/card_elevated_black</item>
+        <item name="colorSurface">@color/card_elevated_black</item>
+        <item name="colorOnSurface">@color/white</item>
+        <item name="android:textColorPrimary">@color/white</item>
+        <item name="android:textColorSecondary">#B3FFFFFF</item>
 
         <item name="selectedColorPrimary">@color/color_ng_black_accent</item>
         <item name="fabColorBackground">@color/color_ng_black_accent</item>

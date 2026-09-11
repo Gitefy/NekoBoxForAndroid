@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.widget.TextView
 import androidx.annotation.StringRes
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.app.ActivityCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -76,6 +77,18 @@ abstract class ThemedActivity : AppCompatActivity {
         if (!DataStore.configurationStore.isReady()) return
         val expected = if (isDialog) Theme.getDialogTheme() else Theme.getTheme()
         if (themeResId != 0 && expected != themeResId) {
+            ActivityCompat.recreate(this)
+            return
+        }
+        val isNight = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+        val nightMismatch = when (Theme.getNightMode()) {
+            AppCompatDelegate.MODE_NIGHT_YES -> !isNight
+            AppCompatDelegate.MODE_NIGHT_NO -> isNight
+            else -> false
+        }
+        if (nightMismatch) {
+            Theme.applyNightTheme()
             ActivityCompat.recreate(this)
         }
     }

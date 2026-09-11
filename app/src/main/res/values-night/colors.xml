@@ -33,5 +33,6 @@
     <color name="card_elevated_teal">#10211F</color>
     <color name="card_elevated_yellow">#2C2A17</color>
     <color name="card_elevated_black">#151515</color>
+    <color name="page_background">#121212</color>
     <color name="card_elevated_verdant_mint">#10241C</color>
 </resources>
