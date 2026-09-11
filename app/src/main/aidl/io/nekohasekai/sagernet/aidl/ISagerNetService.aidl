@@ -5,6 +5,7 @@ import io.nekohasekai.sagernet.aidl.ISagerNetServiceCallback;
 interface ISagerNetService {
   int getState();
   String getProfileName();
+  int getPid();
   long[] getCurrentUrlTestSelections();
 
   void registerCallback(in ISagerNetServiceCallback cb, int id);

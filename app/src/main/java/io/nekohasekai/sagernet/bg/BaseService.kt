@@ -117,6 +117,7 @@ class BaseService {
         override val coroutineContext = Dispatchers.Main.immediate + Job()
 
         override fun getState(): Int = (data?.state ?: State.Idle).ordinal
+        override fun getPid(): Int = android.os.Process.myPid()
         override fun getProfileName(): String = data?.proxy?.displayProfileName ?: "Idle"
         override fun getCurrentUrlTestSelections(): LongArray =
             data?.takeIf { it.state == State.Connected }?.proxy?.currentUrlTestSelections()
