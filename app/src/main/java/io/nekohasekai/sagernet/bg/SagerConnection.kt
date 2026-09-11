@@ -10,6 +10,7 @@ import io.nekohasekai.sagernet.Action
 import io.nekohasekai.sagernet.Key
 import io.nekohasekai.sagernet.aidl.ISagerNetService
 import io.nekohasekai.sagernet.aidl.ISagerNetServiceCallback
+import io.nekohasekai.sagernet.aidl.RequestFlowBatch
 import io.nekohasekai.sagernet.aidl.SpeedDisplayData
 import io.nekohasekai.sagernet.aidl.TrafficDataBatch
 import io.nekohasekai.sagernet.database.DataStore
@@ -43,6 +44,7 @@ class SagerConnection(
         fun cbSpeedUpdate(stats: SpeedDisplayData) {}
         suspend fun cbTrafficUpdate(data: TrafficDataBatch) {}
         fun cbSelectorUpdate(id: Long) {}
+        fun cbRequestUpdate(data: RequestFlowBatch) {}
 
         fun stateChanged(state: BaseService.State, profileName: String?, msg: String?)
 
@@ -90,6 +92,13 @@ class SagerConnection(
             val callback = callback ?: return
             runOnMainDispatcher {
                 callback.cbSelectorUpdate(id)
+            }
+        }
+
+        override fun cbRequestUpdate(stats: RequestFlowBatch) {
+            val callback = callback ?: return
+            runOnMainDispatcher {
+                callback.cbRequestUpdate(stats)
             }
         }
 

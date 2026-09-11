@@ -35,6 +35,7 @@ import kotlinx.coroutines.sync.withLock
 import libcore.Libcore
 import moe.matsuri.nb4a.Protocols
 import moe.matsuri.nb4a.utils.Util
+import java.util.concurrent.atomic.AtomicInteger
 import java.net.UnknownHostException
 import java.util.concurrent.ConcurrentHashMap
 
@@ -96,6 +97,7 @@ class BaseService {
         @Volatile var urlTestRefreshJob: Job? = null
         @Volatile var applyGeneration: Long = 0L
         @Volatile var applyRequest: ApplyRequest? = null
+        val requestObserverCount = AtomicInteger(0)
 
         fun changeState(s: State, msg: String? = null) {
             if (state == s && msg == null) return
@@ -167,6 +169,13 @@ class BaseService {
             launch(Dispatchers.Default) {
                 data?.proxy?.looper?.resetTraffic(profileIds)
             }
+        }
+
+        override fun setRequestObserverEnabled(enabled: Boolean) {
+            val holder = data ?: return
+            if (enabled) holder.requestObserverCount.incrementAndGet()
+            else holder.requestObserverCount.updateAndGet { if (it > 0) it - 1 else 0 }
+            holder.proxy?.syncRequestObserver()
         }
 
         override fun urlTest(): Int {

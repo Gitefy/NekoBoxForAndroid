@@ -15,6 +15,7 @@ import (
 
 	"github.com/matsuridayo/libneko/protect_server"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/trafficcontrol"
 	"github.com/sagernet/sing-box/common/urltest"
 	"github.com/sagernet/sing-box/experimental/v2rayapi"
 	"github.com/sagernet/sing-box/protocol/group"
@@ -98,6 +99,8 @@ type BoxInstance struct {
 	connectionManager adapter.ConnectionManager
 	selector          *group.Selector
 	pauseManager      pause.Manager
+	trafficManager    *trafficcontrol.Manager
+	connHistory       *connectionHistory
 }
 
 func NewSingBoxInstance(config string, localTransport LocalDNSTransport) (b *BoxInstance, err error) {
@@ -146,6 +149,8 @@ func NewSingBoxInstance(config string, localTransport LocalDNSTransport) (b *Box
 		cancel:            cancel,
 		pauseManager:      service.FromContext[pause.Manager](ctx),
 		connectionManager: service.FromContext[adapter.ConnectionManager](ctx),
+		trafficManager:    service.PtrFromContext[trafficcontrol.Manager](ctx),
+		connHistory:       newConnectionHistory(nil),
 	}
 
 	// selector
@@ -166,7 +171,14 @@ func (b *BoxInstance) Start() (err error) {
 
 	if b.state == 0 {
 		b.state = 1
-		return b.Box.Start()
+		err := b.Box.Start()
+		if err != nil {
+			return err
+		}
+		if b.connHistory != nil {
+			b.connHistory.Attach(b.trafficManager)
+		}
+		return nil
 	}
 	return errors.New("already started")
 }
@@ -183,6 +195,11 @@ func (b *BoxInstance) Close() (err error) {
 	}
 	b.state = 2
 
+	if b.connHistory != nil {
+		b.connHistory.Dispose()
+		b.connHistory = nil
+	}
+
 	// clear main instance
 	if mainInstance == b {
 		mainInstance = nil
@@ -198,6 +215,21 @@ func (b *BoxInstance) Close() (err error) {
 	}
 
 	return nil
+}
+
+func (b *BoxInstance) ConnectionSnapshot() *StringBox {
+	if b == nil {
+		return wrapString(`{"flows":[]}`)
+	}
+	b.access.Lock()
+	history := b.connHistory
+	manager := b.trafficManager
+	b.access.Unlock()
+	if history == nil {
+		return wrapString(`{"flows":[]}`)
+	}
+	history.MergeLive(manager)
+	return wrapString(history.SnapshotJSON())
 }
 
 func (b *BoxInstance) Sleep() {
