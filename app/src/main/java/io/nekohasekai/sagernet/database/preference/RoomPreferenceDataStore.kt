@@ -132,22 +132,36 @@ open class RoomPreferenceDataStore(
                 readinessFlow.value = StoreReadiness.Failed(e.javaClass.simpleName.takeIf { it.isNotBlank() } ?: "StorePrimeFailed")
                 return@launch
             }
+            var catchUpError: Throwable? = null
             snapshotLock.withLock {
-                fun catchUp() {
+                fun catchUp(): Boolean {
                     while (bootDirty.compareAndSet(true, false)) {
                         try {
                             val epoch = cache.captureReadEpoch()
                             cache.merge(tableSnapshot(), epoch)
                         } catch (e: Throwable) {
                             Logs.w(e) { "bootstrap catchup read failed" }
-                            break
+                            catchUpError = e
+                            return false
                         }
                     }
+                    return true
                 }
-                catchUp()
+                if (!catchUp()) {
+                    bootstrapDone = false
+                    return@withLock
+                }
                 bootstrapDone = true
-                catchUp()
+                if (!catchUp()) {
+                    bootstrapDone = false
+                    return@withLock
+                }
                 readinessFlow.value = StoreReadiness.Ready
+            }
+            catchUpError?.let { e ->
+                readinessFlow.value = StoreReadiness.Failed(
+                    e.javaClass.simpleName.takeIf { it.isNotBlank() } ?: "StorePrimeFailed",
+                )
             }
         }
         primeJob = job

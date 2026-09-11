@@ -32,6 +32,7 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
     private lateinit var isProxyApps: SwitchPreference
     /** S1-B3: guards against a second "reset settings" click while awaiting the durable fence. */
     private var settingsResetInProgress = false
+    private val setupGate = SettingsPreferenceSetupGate()
 
     private lateinit var globalCustomConfig: EditConfigPreference
 
@@ -54,9 +55,16 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
         fun setEnabledAll(enabled: Boolean) {
             for (i in 0 until screen.preferenceCount) screen.getPreference(i).isEnabled = enabled
         }
+        fun onStoreReady() {
+            setupGate.applyReadySequence(
+                { DataStore.initGlobal() },
+                { configurePreferencesOnce() },
+                { setEnabledAll(true) },
+            )
+        }
         when (val r = DataStore.configurationStore.readiness) {
             is io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore.StoreReadiness.Ready -> {
-                DataStore.initGlobal()
+                onStoreReady()
             }
             is io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore.StoreReadiness.Failed -> {
                 setEnabledAll(false)
@@ -69,8 +77,7 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
                             owner.lifecycleScope.launch {
                                 when (val nr = DataStore.configurationStore.retryPrime()) {
                                     is io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore.StoreReadiness.Ready -> {
-                                        DataStore.initGlobal()
-                                        setEnabledAll(true)
+                                        onStoreReady()
                                     }
                                     else -> {}
                                 }
@@ -78,7 +85,6 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
                         }.show()
                     }
                 }
-                return
             }
             else -> {
                 setEnabledAll(false)
@@ -87,8 +93,7 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
                     owner.lifecycleScope.launch {
                         when (val nr = DataStore.configurationStore.awaitReady()) {
                             is io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore.StoreReadiness.Ready -> {
-                                DataStore.initGlobal()
-                                setEnabledAll(true)
+                                onStoreReady()
                             }
                             is io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore.StoreReadiness.Failed -> {
                                 com.google.android.material.snackbar.Snackbar.make(
@@ -97,8 +102,7 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
                                     owner.lifecycleScope.launch {
                                         when (val rr = DataStore.configurationStore.retryPrime()) {
                                             is io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore.StoreReadiness.Ready -> {
-                                                DataStore.initGlobal()
-                                                setEnabledAll(true)
+                                                onStoreReady()
                                             }
                                             else -> {}
                                         }
@@ -109,10 +113,11 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
                         }
                     }
                 }
-                return
             }
         }
+    }
 
+    private fun configurePreferencesOnce() {
         val appTheme = findPreference<ColorPickerPreference>(Key.APP_THEME)!!
         appTheme.setOnPreferenceChangeListener { _, newTheme ->
             if (DataStore.serviceState.started) {

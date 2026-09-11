@@ -7,6 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -123,5 +124,36 @@ class StoreAsyncReadinessTest {
         assertEquals(0, dao.allReads.get())
         dao.latch.countDown()
         runBlocking { store.awaitReady() }
+    }
+
+    @Test
+    fun bootstrapCatchupFailureDoesNotPublishReady() {
+        val primeGate = CountDownLatch(1)
+        val reads = AtomicInteger(0)
+        val failCatchup = AtomicBoolean(true)
+        var observe: ((Set<String>) -> Unit)? = null
+        val src = RoomPreferenceDataStore.InvalidationSource { obs -> observe = obs }
+        val dao = BlockingFakeDao(CountDownLatch(0))
+        val store = RoomPreferenceDataStore(dao, invalidationSource = src, tableSnapshot = {
+            val n = reads.incrementAndGet()
+            if (n == 1) {
+                if (!primeGate.await(10, TimeUnit.SECONDS)) error("prime gate not released")
+                emptyList()
+            } else if (failCatchup.get()) {
+                throw IllegalStateException("injected catchup failure")
+            } else {
+                emptyList()
+            }
+        })
+        assertTrue(store.readiness is RoomPreferenceDataStore.StoreReadiness.Loading)
+        observe!!.invoke(setOf("KeyValuePair"))
+        primeGate.countDown()
+        val failed = runBlocking { store.awaitReady() }
+        assertTrue(failed is RoomPreferenceDataStore.StoreReadiness.Failed)
+        assertFalse(store.isReady())
+        failCatchup.set(false)
+        val retried = runBlocking { store.retryPrime() }
+        assertTrue(retried is RoomPreferenceDataStore.StoreReadiness.Ready)
+        assertTrue(store.isReady())
     }
 }
