@@ -26,6 +26,7 @@ import io.nekohasekai.sagernet.Key
 import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.aidl.ISagerNetService
+import io.nekohasekai.sagernet.aidl.RequestFlowBatch
 import io.nekohasekai.sagernet.aidl.SpeedDisplayData
 import io.nekohasekai.sagernet.aidl.TrafficDataBatch
 import io.nekohasekai.sagernet.bg.ApplyErrorMessages
@@ -445,6 +446,7 @@ class MainActivity : ThemedActivity(),
 
             R.id.nav_group -> displayFragment(GroupFragment())
             R.id.nav_route -> displayFragment(RouteFragment())
+            R.id.nav_request -> displayFragment(RequestFragment())
             R.id.nav_settings -> displayFragment(SettingsFragment())
             R.id.nav_traffic -> displayFragment(WebviewFragment())
             R.id.nav_tools -> displayFragment(BackupFragment())
@@ -509,7 +511,10 @@ class MainActivity : ThemedActivity(),
 
     private var runtimeUrlTestSelections = longArrayOf()
 
-    override fun onServiceDisconnected() = changeState(BaseService.State.Idle)
+    override fun onServiceDisconnected() {
+        RequestStore.clear()
+        changeState(BaseService.State.Idle)
+    }
     override fun onBinderDied() {
         connection.disconnect(this)
         connection.connect(this, this)
@@ -536,6 +541,17 @@ class MainActivity : ThemedActivity(),
 
     override suspend fun cbTrafficUpdate(data: TrafficDataBatch) {
         ProfileManager.postUpdate(data.items)
+    }
+
+    override fun cbRequestUpdate(data: RequestFlowBatch) {
+        RequestStore.replace(data.items)
+    }
+
+    fun setRequestPageVisible(visible: Boolean) {
+        try {
+            connection.service?.setRequestObserverEnabled(visible)
+        } catch (_: RemoteException) {
+        }
     }
 
     override fun cbSelectorUpdate(id: Long) {

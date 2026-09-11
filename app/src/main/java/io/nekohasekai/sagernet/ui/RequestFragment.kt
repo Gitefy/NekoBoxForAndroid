@@ -1,0 +1,264 @@
+package io.nekohasekai.sagernet.ui
+
+import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
+import android.view.View
+import android.view.ViewGroup
+import android.widget.EditText
+import android.widget.RadioGroup
+import android.widget.TextView
+import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import io.nekohasekai.sagernet.R
+import io.nekohasekai.sagernet.SagerNet
+import io.nekohasekai.sagernet.aidl.RequestFlowData
+import io.nekohasekai.sagernet.bg.proto.RequestFlowMapper
+import io.nekohasekai.sagernet.database.ProfileManager
+import io.nekohasekai.sagernet.database.RequestRuleApply
+import io.nekohasekai.sagernet.database.RequestRuleFactory
+import io.nekohasekai.sagernet.database.SagerDatabase
+import io.nekohasekai.sagernet.ktx.FixedLinearLayoutManager
+import io.nekohasekai.sagernet.ktx.app
+import io.nekohasekai.sagernet.ktx.onMainDispatcher
+import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
+import java.util.Locale
+
+class RequestFragment : ToolbarFragment(R.layout.layout_request) {
+
+    private lateinit var list: RecyclerView
+    private lateinit var adapter: RequestAdapter
+    private val listener = { refresh() }
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        toolbar.setTitle(R.string.menu_request)
+        list = view.findViewById(R.id.request_list)
+        list.layoutManager = FixedLinearLayoutManager(list)
+        adapter = RequestAdapter()
+        list.adapter = adapter
+        view.findViewById<EditText>(R.id.request_search).addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                RequestStore.query = s?.toString().orEmpty()
+                refresh()
+            }
+        })
+        view.findViewById<RadioGroup>(R.id.request_filter).setOnCheckedChangeListener { _, checkedId ->
+            RequestStore.kindFilter = when (checkedId) {
+                R.id.request_filter_proxy -> RequestStore.FILTER_PROXY
+                R.id.request_filter_direct -> RequestStore.FILTER_DIRECT
+                R.id.request_filter_block -> RequestStore.FILTER_BLOCK
+                else -> RequestStore.FILTER_ALL
+            }
+            refresh()
+        }
+        RequestStore.addListener(listener)
+        refresh()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        (activity as? MainActivity)?.setRequestPageVisible(true)
+    }
+
+    override fun onStop() {
+        (activity as? MainActivity)?.setRequestPageVisible(false)
+        super.onStop()
+    }
+
+    override fun onDestroyView() {
+        RequestStore.removeListener(listener)
+        super.onDestroyView()
+    }
+
+    private fun refresh() {
+        adapter.items = RequestStore.filtered()
+        adapter.notifyDataSetChanged()
+    }
+
+    inner class RequestAdapter : RecyclerView.Adapter<RequestHolder>() {
+        var items: List<RequestFlowData> = emptyList()
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RequestHolder {
+            return RequestHolder(layoutInflater.inflate(R.layout.layout_request_item, parent, false))
+        }
+        override fun getItemCount() = items.size
+        override fun onBindViewHolder(holder: RequestHolder, position: Int) = holder.bind(items[position])
+    }
+
+    inner class RequestHolder(view: View) : RecyclerView.ViewHolder(view) {
+        private val appView: TextView = view.findViewById(R.id.request_app)
+        private val targetView: TextView = view.findViewById(R.id.request_target)
+        private val routeView: TextView = view.findViewById(R.id.request_route)
+        private val metaView: TextView = view.findViewById(R.id.request_meta)
+
+        fun bind(flow: RequestFlowData) {
+            appView.text = appLabel(flow)
+            val host = flow.domain.ifBlank { listOf(flow.destinationAddress, flow.destinationPort.takeIf { it > 0 }?.toString()).filterNotNull().joinToString(":") }
+            targetView.text = listOf(flow.network.uppercase(Locale.US), host).filter { it.isNotBlank() }.joinToString(" · ")
+            routeView.text = when (flow.kind) {
+                RequestFlowMapper.KIND_DIRECT -> "DIRECT"
+                RequestFlowMapper.KIND_BLOCK -> "REJECT"
+                else -> {
+                    val left = flow.routerName.ifBlank { flow.logicalOutbound }
+                    val right = flow.finalProfileName.ifBlank { flow.finalOutboundTag }
+                    if (left.isBlank()) right else "$left › $right"
+                }
+            }
+            val state = if (flow.closed) "closed" else "active"
+            metaView.text = "↑ ${formatBytes(flow.uploadBytes)}  ↓ ${formatBytes(flow.downloadBytes)}  $state"
+            itemView.setOnClickListener { showDetail(flow) }
+        }
+    }
+
+    private fun appLabel(flow: RequestFlowData): String {
+        val pkg = flow.packageName.substringBefore(',')
+        if (pkg.isNotBlank()) {
+            val label = runCatching {
+                val pm = app.packageManager
+                pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+            }.getOrNull()
+            return label ?: pkg
+        }
+        return if (flow.uid > 0) "UID ${flow.uid}" else ""
+    }
+
+    private fun formatBytes(value: Long): String {
+        if (value < 1024) return "$value B"
+        if (value < 1024 * 1024) return "${value / 1024} KB"
+        return String.format(Locale.US, "%.1f MB", value / (1024.0 * 1024.0))
+    }
+
+    private fun showDetail(flow: RequestFlowData) {
+        val body = buildString {
+            appendLine("App: ${appLabel(flow)}")
+            appendLine("Package: ${flow.packageName}")
+            appendLine("UID: ${flow.uid}")
+            appendLine("Domain: ${flow.domain}")
+            appendLine("Destination: ${flow.destinationAddress}:${flow.destinationPort}")
+            appendLine("Network: ${flow.network}")
+            appendLine("Rule: ${flow.matchedRuleText}")
+            appendLine("Logical: ${flow.logicalOutbound}")
+            appendLine("Router: ${flow.routerName.ifBlank { flow.routerStableTag }}")
+            appendLine("Actual: ${flow.finalProfileName.ifBlank { flow.finalOutboundTag }}")
+            appendLine("Upload: ${formatBytes(flow.uploadBytes)}")
+            appendLine("Download: ${formatBytes(flow.downloadBytes)}")
+            appendLine("Start: ${flow.createdAt}")
+            appendLine("Closed: ${if (flow.closed) flow.closedAt else "active"}")
+        }
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.menu_request)
+            .setMessage(body)
+            .setPositiveButton(R.string.request_add_rule) { _, _ -> showCreateRule(flow) }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun showCreateRule(flow: RequestFlowData) {
+        val matchLabels = mutableListOf<String>()
+        val matchKinds = mutableListOf<RequestRuleFactory.MatchKind>()
+        if (flow.domain.isNotBlank()) {
+            matchLabels.add(getString(R.string.request_match_exact_domain))
+            matchKinds.add(RequestRuleFactory.MatchKind.EXACT_DOMAIN)
+            matchLabels.add(getString(R.string.request_match_domain_suffix))
+            matchKinds.add(RequestRuleFactory.MatchKind.DOMAIN_SUFFIX)
+        }
+        if (flow.packageName.isNotBlank()) {
+            matchLabels.add(getString(R.string.request_match_app))
+            matchKinds.add(RequestRuleFactory.MatchKind.APP)
+        }
+        if (flow.destinationAddress.isNotBlank()) {
+            matchLabels.add(getString(R.string.request_match_ip))
+            matchKinds.add(RequestRuleFactory.MatchKind.DEST_IP)
+        }
+        if (matchKinds.isEmpty()) return
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.request_match)
+            .setItems(matchLabels.toTypedArray()) { _, which ->
+                showOutboundPicker(flow, matchKinds[which])
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun showOutboundPicker(flow: RequestFlowData, match: RequestRuleFactory.MatchKind) {
+        runOnDefaultDispatcher {
+            val routers = SagerDatabase.routerGroupDao.all().filter { it.enabled }
+            val labels = mutableListOf(
+                getString(R.string.route_bypass),
+                getString(R.string.route_block),
+                getString(R.string.route_proxy),
+            )
+            val kinds = mutableListOf(
+                RequestRuleFactory.OutboundKind.DIRECT,
+                RequestRuleFactory.OutboundKind.REJECT,
+                RequestRuleFactory.OutboundKind.PROXY,
+            )
+            val tags = mutableListOf("", "", "")
+            routers.forEach { router ->
+                labels.add(router.name.ifBlank { router.stableTag })
+                kinds.add(RequestRuleFactory.OutboundKind.ROUTER)
+                tags.add(router.stableTag)
+            }
+            onMainDispatcher {
+                MaterialAlertDialogBuilder(requireContext())
+                    .setTitle(R.string.request_outbound)
+                    .setItems(labels.toTypedArray()) { _, which ->
+                        confirmSave(flow, match, kinds[which], tags[which], routers.associate { it.stableTag to it.id })
+                    }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show()
+            }
+        }
+    }
+
+    private fun confirmSave(
+        flow: RequestFlowData,
+        match: RequestRuleFactory.MatchKind,
+        outbound: RequestRuleFactory.OutboundKind,
+        routerTag: String,
+        routers: Map<String, Long>,
+    ) {
+        val draft = RequestRuleFactory.build(
+            match = match,
+            outboundKind = outbound,
+            domain = flow.domain,
+            packageName = flow.packageName.substringBefore(','),
+            destinationIp = flow.destinationAddress,
+            routerStableTag = routerTag,
+            routersByStableTag = routers,
+        ) ?: return
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.request_save_apply)
+            .setMessage(draft.name)
+            .setPositiveButton(R.string.request_save_apply) { _, _ ->
+                runOnDefaultDispatcher {
+                    val result = RequestRuleApply.saveAndApply(
+                        persist = {
+                            runCatching {
+                                ProfileManager.createRule(draft.toRuleEntity())
+                                true
+                            }.getOrDefault(false)
+                        },
+                        reload = {
+                            runCatching {
+                                SagerNet.reloadServiceFully()
+                                true
+                            }.getOrDefault(false)
+                        },
+                    )
+                    onMainDispatcher {
+                        val msg = when (result.outcome) {
+                            RequestRuleApply.Outcome.APPLIED -> getString(R.string.request_rule_applied)
+                            RequestRuleApply.Outcome.RELOAD_FAILED -> getString(R.string.request_rule_saved_reload_failed)
+                            RequestRuleApply.Outcome.PERSIST_FAILED -> getString(R.string.request_rule_persist_failed)
+                        }
+                        (activity as? MainActivity)?.snackbar(msg)?.show()
+                    }
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+}
