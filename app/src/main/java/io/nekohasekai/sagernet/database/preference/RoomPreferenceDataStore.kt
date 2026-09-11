@@ -113,31 +113,41 @@ open class RoomPreferenceDataStore(
     private var latestWholeTableOutcome: WholeTableOutcome? = null
 
     init {
-        readinessFlow.value = StoreReadiness.Loading
-        launchPrime()
         invalidationSource?.onInvalidate { tables ->
             if ("KeyValuePair" in tables) {
                 if (!bootstrapDone) bootDirty.set(true)
                 else runCatching { readAndMergeSnapshot() }.onFailure { Logs.w(it) }
             }
         }
+        readinessFlow.value = StoreReadiness.Loading
+        launchPrime()
     }
 
     private fun launchPrime() {
         val job = readinessScope.launch {
-            val result: StoreReadiness = runCatching { readAndMergeSnapshot() }.fold(
-                onSuccess = { StoreReadiness.Ready },
-                onFailure = { e ->
-                    Logs.w(e) { "Store prime failed; entering Failed state" }
-                    StoreReadiness.Failed(e.javaClass.simpleName.takeIf { it.isNotBlank() } ?: "StorePrimeFailed")
-                },
-            )
-            readinessFlow.value = result
-            if (result is StoreReadiness.Ready) {
-                if (bootDirty.compareAndSet(true, false)) {
-                    runCatching { readAndMergeSnapshot() }.onFailure { Logs.w(it) }
+            val primeResult = runCatching { readAndMergeSnapshot() }
+            if (primeResult.isFailure) {
+                val e = primeResult.exceptionOrNull()!!
+                Logs.w(e) { "Store prime failed; entering Failed state" }
+                readinessFlow.value = StoreReadiness.Failed(e.javaClass.simpleName.takeIf { it.isNotBlank() } ?: "StorePrimeFailed")
+                return@launch
+            }
+            snapshotLock.withLock {
+                fun catchUp() {
+                    while (bootDirty.compareAndSet(true, false)) {
+                        try {
+                            val epoch = cache.captureReadEpoch()
+                            cache.merge(tableSnapshot(), epoch)
+                        } catch (e: Throwable) {
+                            Logs.w(e) { "bootstrap catchup read failed" }
+                            break
+                        }
+                    }
                 }
+                catchUp()
                 bootstrapDone = true
+                catchUp()
+                readinessFlow.value = StoreReadiness.Ready
             }
         }
         primeJob = job

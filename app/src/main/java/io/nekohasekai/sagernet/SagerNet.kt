@@ -196,41 +196,78 @@ class SagerNet : Application(),
             )
         }
 
-        fun startService() = ContextCompat.startForegroundService(
-            application, Intent(application, SagerConnection.serviceClass)
+        fun applyExtras(intent: Intent, request: ApplyRequest, generation: Long? = null): Intent {
+            intent.putExtra(Action.EXTRA_REQUEST_ID, request.requestId)
+            intent.putExtra(Action.EXTRA_KIND, request.kind.name)
+            intent.putExtra(Action.EXTRA_TARGET_PROFILE_ID, request.targetProfileId ?: -1L)
+            if (request.routerStableTag != null) {
+                intent.putExtra(Action.EXTRA_ROUTER_TAG, request.routerStableTag)
+            }
+            if (request.routerMemberId != null) {
+                intent.putExtra(Action.EXTRA_ROUTER_PROXY_ID, request.routerMemberId)
+            }
+            if (request.forceFullReload) {
+                intent.putExtra(Action.EXTRA_FORCE_FULL_RELOAD, true)
+            }
+            if (generation != null) {
+                intent.putExtra(Action.EXTRA_INSTANCE_GENERATION, generation)
+            }
+            return intent
+        }
+
+        fun startService() = startServiceViaApply(
+            ApplyRequest(kind = CommandKind.START, targetProfileId = null, routerStableTag = null, routerMemberId = null),
         )
 
-        /**
-         * S2-B2 unified apply path: explicit START with optional captured
-         * target. Keeps the legal explicit foreground-service launch, then the
-         * receiver's ApplyRequest handler performs readiness+flush+snapshot
-         * validation before the core start.
-         */
         fun startServiceViaApply(request: ApplyRequest) {
-            startService()
-            application.sendBroadcast(
-                Intent(Action.APPLY).setPackage(application.packageName)
-                    .putExtra(Action.EXTRA_REQUEST_ID, request.requestId)
-                    .putExtra(Action.EXTRA_KIND, request.kind.name)
-                    .putExtra(Action.EXTRA_TARGET_PROFILE_ID, request.targetProfileId ?: -1L)
+            ContextCompat.startForegroundService(
+                application,
+                applyExtras(Intent(application, SagerConnection.serviceClass), request),
             )
         }
 
-        fun reloadService(routerTag: String? = null, routerProxyId: Long? = null) =
-            application.sendBroadcast(Intent(Action.RELOAD).setPackage(application.packageName).apply {
-                if (routerTag != null && routerProxyId != null) {
-                    putExtra(Action.EXTRA_ROUTER_TAG, routerTag)
-                    putExtra(Action.EXTRA_ROUTER_PROXY_ID, routerProxyId)
-                }
-            })
+        fun reloadService(routerTag: String? = null, routerProxyId: Long? = null) {
+            val request = ApplyRequest(
+                kind = CommandKind.RELOAD,
+                targetProfileId = routerProxyId,
+                routerStableTag = routerTag,
+                routerMemberId = routerProxyId?.let { if (it > 0L) it else null },
+            )
+            application.sendBroadcast(applyExtras(Intent(Action.APPLY).setPackage(application.packageName), request))
+            if (!DataStore.serviceState.started) {
+                ContextCompat.startForegroundService(
+                    application,
+                    applyExtras(Intent(application, SagerConnection.serviceClass), request),
+                )
+            }
+        }
 
-        fun reloadServiceFully() =
-            application.sendBroadcast(Intent(Action.RELOAD).setPackage(application.packageName).apply {
-                putExtra(Action.EXTRA_FORCE_FULL_RELOAD, true)
-            })
+        fun reloadServiceFully() {
+            val request = ApplyRequest(
+                kind = CommandKind.RELOAD,
+                targetProfileId = null,
+                routerStableTag = null,
+                routerMemberId = null,
+                forceFullReload = true,
+            )
+            application.sendBroadcast(applyExtras(Intent(Action.APPLY).setPackage(application.packageName), request))
+            if (!DataStore.serviceState.started) {
+                ContextCompat.startForegroundService(
+                    application,
+                    applyExtras(Intent(application, SagerConnection.serviceClass), request),
+                )
+            }
+        }
 
-        fun stopService() =
-            application.sendBroadcast(Intent(Action.CLOSE).setPackage(application.packageName))
+        fun stopService() {
+            val request = ApplyRequest(
+                kind = CommandKind.STOP,
+                targetProfileId = null,
+                routerStableTag = null,
+                routerMemberId = null,
+            )
+            application.sendBroadcast(applyExtras(Intent(Action.APPLY).setPackage(application.packageName), request))
+        }
 
         var underlyingNetwork: Network? = null
 

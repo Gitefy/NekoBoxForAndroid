@@ -49,8 +49,69 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
 
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         preferenceManager.preferenceDataStore = DataStore.configurationStore
-        DataStore.initGlobal()
         addPreferencesFromResource(R.xml.global_preferences)
+        val screen = preferenceScreen
+        fun setEnabledAll(enabled: Boolean) {
+            for (i in 0 until screen.preferenceCount) screen.getPreference(i).isEnabled = enabled
+        }
+        when (val r = DataStore.configurationStore.readiness) {
+            is io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore.StoreReadiness.Ready -> {
+                DataStore.initGlobal()
+            }
+            is io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore.StoreReadiness.Failed -> {
+                setEnabledAll(false)
+                viewLifecycleOwnerLiveData.observe(this) { owner ->
+                    owner ?: return@observe
+                    owner.lifecycleScope.launch {
+                        com.google.android.material.snackbar.Snackbar.make(
+                            requireView(), "Settings load failed: ${r.errorCode}", com.google.android.material.snackbar.Snackbar.LENGTH_INDEFINITE
+                        ).setAction("Retry") {
+                            owner.lifecycleScope.launch {
+                                when (val nr = DataStore.configurationStore.retryPrime()) {
+                                    is io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore.StoreReadiness.Ready -> {
+                                        DataStore.initGlobal()
+                                        setEnabledAll(true)
+                                    }
+                                    else -> {}
+                                }
+                            }
+                        }.show()
+                    }
+                }
+                return
+            }
+            else -> {
+                setEnabledAll(false)
+                viewLifecycleOwnerLiveData.observe(this) { owner ->
+                    owner ?: return@observe
+                    owner.lifecycleScope.launch {
+                        when (val nr = DataStore.configurationStore.awaitReady()) {
+                            is io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore.StoreReadiness.Ready -> {
+                                DataStore.initGlobal()
+                                setEnabledAll(true)
+                            }
+                            is io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore.StoreReadiness.Failed -> {
+                                com.google.android.material.snackbar.Snackbar.make(
+                                    requireView(), "Settings load failed: ${nr.errorCode}", com.google.android.material.snackbar.Snackbar.LENGTH_INDEFINITE
+                                ).setAction("Retry") {
+                                    owner.lifecycleScope.launch {
+                                        when (val rr = DataStore.configurationStore.retryPrime()) {
+                                            is io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore.StoreReadiness.Ready -> {
+                                                DataStore.initGlobal()
+                                                setEnabledAll(true)
+                                            }
+                                            else -> {}
+                                        }
+                                    }
+                                }.show()
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                return
+            }
+        }
 
         val appTheme = findPreference<ColorPickerPreference>(Key.APP_THEME)!!
         appTheme.setOnPreferenceChangeListener { _, newTheme ->

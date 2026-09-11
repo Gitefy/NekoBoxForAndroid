@@ -1,5 +1,6 @@
 package io.nekohasekai.sagernet.bg
 
+import io.nekohasekai.sagernet.Key
 import io.nekohasekai.sagernet.database.preference.KeyValuePair
 import io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore
 import kotlinx.coroutines.delay
@@ -71,16 +72,14 @@ class ApplyHandshakeTest {
         val dao = FakeKvDao()
         val store = newStore(dao)
         store.awaitReady()
-        // Optimistic mirror says proxy 1, but committed table has proxy 2.
-        dao.table.clear()
-        dao.table["selectedProxy"] = row("selectedProxy", "2")
-        // Writer path puts stale mirror value, but we treat it as optimistic only.
-        store.putString("selectedProxy", "1")
-        // Committed snapshot (readCommittedSettingsSnapshot) reflects DB, not cache.
+        store.putLong(Key.PROFILE_ID, 1L)
+        dao.table[Key.PROFILE_ID] = KeyValuePair(Key.PROFILE_ID).put(2L)
         val committed = store.readCommittedSettingsSnapshot()
-        val committedValue = committed.firstOrNull { it.key == "selectedProxy" }?.string
-        assertEquals("2", committedValue)
-        // Explicit request target is 2, it wins; if it were invalid we would FAIL.
+        val committedValue = ApplyService.resolveCommittedProfileId(
+            ApplyRequest(kind = CommandKind.RELOAD, targetProfileId = null, routerStableTag = null, routerMemberId = null),
+            committed,
+        )
+        assertEquals(2L, committedValue)
         val request = ApplyRequest(kind = CommandKind.RELOAD, targetProfileId = 2L, routerStableTag = null, routerMemberId = null)
         assertEquals(2L, request.targetProfileId)
     }
@@ -160,26 +159,41 @@ class ApplyHandshakeTest {
 
     @Test
     fun stopDuringStartCannotReconnect() = runBlocking {
-        // Start job running; stop supersedes it — late start result cannot
-        // re-publish Connected if a stop has already won.
         val startReq = ApplyRequest(kind = CommandKind.START, targetProfileId = 1L, routerStableTag = null, routerMemberId = null)
         val stopReq = ApplyRequest(kind = CommandKind.STOP, targetProfileId = null, routerStableTag = null, routerMemberId = null)
         val (startGen, startDeferred) = ApplyCoordinator.accept(startReq)
         val (stopGen, stopDeferred) = ApplyCoordinator.accept(stopReq)
-        // Start was of kind START, stop of kind STOP — they don't supersede each other.
-        // But a stale start arriving after stop's cleanup must be ignored if
-        // the stop generation is newer overall (instance generation monotonic).
-        // The coordinator keeps per-kind pendings, so both can be pending together;
-        // the product invariant is enforced by the caller checking STOPPED wins.
-        // Publishing STOPPED keeps start's APPLIED from being treated as final.
+        assertEquals(CommandOutcome.SUPERSEDED, startDeferred.await().outcome)
         ApplyCoordinator.publish(stopReq, stopGen, ApplyResult(stopReq.requestId, CommandOutcome.STOPPED, stopGen, false, null))
         assertTrue(stopDeferred.isCompleted)
-        // Late start result must not be misread as Connected if stop already acked;
-        // the test asserts the start still resolves independently and does not clobber stop.
         ApplyCoordinator.publish(startReq, startGen, ApplyResult(startReq.requestId, CommandOutcome.APPLIED, startGen, true, null))
-        assertTrue(startDeferred.isCompleted)
-        assertEquals(CommandOutcome.APPLIED, startDeferred.await().outcome)
+        assertEquals(CommandOutcome.SUPERSEDED, startDeferred.await().outcome)
         assertEquals(CommandOutcome.STOPPED, stopDeferred.await().outcome)
+        assertFalse(ApplyCoordinator.isCurrent(startGen))
+    }
+
+    @Test
+    fun missingCommittedProfileIdIsInvalidTarget() {
+        val empty = ApplyService.resolveCommittedProfileId(
+            ApplyRequest(kind = CommandKind.START, targetProfileId = null, routerStableTag = null, routerMemberId = null),
+            emptyList(),
+        )
+        assertEquals(null, empty)
+        val stringRow = ApplyService.resolveCommittedProfileId(
+            ApplyRequest(kind = CommandKind.START, targetProfileId = null, routerStableTag = null, routerMemberId = null),
+            listOf(KeyValuePair("selectedProxy").put("12")),
+        )
+        assertEquals(null, stringRow)
+        val zero = ApplyService.resolveCommittedProfileId(
+            ApplyRequest(kind = CommandKind.START, targetProfileId = null, routerStableTag = null, routerMemberId = null),
+            listOf(KeyValuePair(Key.PROFILE_ID).put(0L)),
+        )
+        assertEquals(null, zero)
+        val ok = ApplyService.resolveCommittedProfileId(
+            ApplyRequest(kind = CommandKind.START, targetProfileId = null, routerStableTag = null, routerMemberId = null),
+            listOf(KeyValuePair(Key.PROFILE_ID).put(12L)),
+        )
+        assertEquals(12L, ok)
     }
 
     @Test

@@ -183,16 +183,12 @@ class S2B3CrossProcessVerificationTest {
         val stop = ApplyRequest(kind = CommandKind.STOP, targetProfileId = null, routerStableTag = null, routerMemberId = null)
         val (genStart, dStart) = ApplyCoordinator.accept(start)
         val (genStop, dStop) = ApplyCoordinator.accept(stop)
-        // STOP wins and publishes STOPPED.
+        assertEquals(CommandOutcome.SUPERSEDED, dStart.await().outcome)
         ApplyCoordinator.publish(stop, genStop, ApplyResult(stop.requestId, CommandOutcome.STOPPED, genStop, false, null))
         assertTrue(dStop.isCompleted)
-        // Late start result must not resurrect a Connected state after STOP was acked;
-        // in-product this is enforced by the service checking STOPPED before re-broadcasting.
         ApplyCoordinator.publish(start, genStart, ApplyResult(start.requestId, CommandOutcome.APPLIED, genStart, true, null))
-        assertTrue(dStart.isCompleted)
+        assertEquals(CommandOutcome.SUPERSEDED, dStart.await().outcome)
         assertEquals(CommandOutcome.STOPPED, dStop.await().outcome)
-        // The start still has its own outcome but the service treats STOP as terminal.
-        assertEquals(CommandOutcome.APPLIED, dStart.await().outcome)
     }
 
     @Test

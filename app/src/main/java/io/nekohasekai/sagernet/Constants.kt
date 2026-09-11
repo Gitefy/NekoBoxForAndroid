@@ -244,6 +244,7 @@ object Action {
     const val EXTRA_REQUEST_ID = "requestId"
     const val EXTRA_KIND = "kind"
     const val EXTRA_TARGET_PROFILE_ID = "targetProfileId"
+    const val EXTRA_INSTANCE_GENERATION = "instanceGeneration"
 
     // const val SWITCH_WAKE_LOCK = "io.nekohasekai.sagernet.SWITCH_WAKELOCK"
     const val RESET_UPSTREAM_CONNECTIONS = "moe.nb4a.RESET_UPSTREAM_CONNECTIONS"

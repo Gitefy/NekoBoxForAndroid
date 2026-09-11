@@ -10,6 +10,7 @@ import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.database.routerStableId
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.app
+import io.nekohasekai.sagernet.ktx.onMainDispatcher
 import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
 import io.nekohasekai.sagernet.utils.ConnectionResetDebouncer
 import io.nekohasekai.sagernet.utils.PackageCache
@@ -113,10 +114,14 @@ class NativeInterface : BoxPlatformInterface, NB4AInterface {
                 .filterValues { it == tag }.keys.firstOrNull() ?: -1
             val ent = SagerDatabase.proxyDao.getById(id) ?: return@runOnDefaultDispatcher
             // traffic & title
+            val title = ServiceNotification.genTitle(ent)
             proxy.apply {
                 looper?.selectMain(id)
-                displayProfileName = ServiceNotification.genTitle(ent)
-                service.data.notification?.postNotificationTitle(displayProfileName)
+                displayProfileName = title
+            }
+            onMainDispatcher {
+                if (DataStore.baseService !== service || service.data.proxy !== proxy) return@onMainDispatcher
+                service.data.notification?.postNotificationTitle(title)
             }
             // post binder
             service.data.binder.broadcast { b ->

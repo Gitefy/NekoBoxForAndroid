@@ -60,40 +60,8 @@ class BaseService {
         val receiver = broadcastReceiver { ctx, intent ->
             when (intent.action) {
                 Intent.ACTION_SHUTDOWN -> service.persistStats()
-                Action.RELOAD -> runOnDefaultDispatcher {
-                    // S2-B2 compat adapter: legacy RELOAD broadcast is normalized
-                    // into the same ApplyRequest path as the new APPLY action.
-                    val request = ApplyService.broadcastToRequest(
-                        intent.getStringExtra(Action.EXTRA_ROUTER_TAG),
-                        intent.getLongExtra(Action.EXTRA_ROUTER_PROXY_ID, 0L).takeIf { it > 0L },
-                        intent.getBooleanExtra(Action.EXTRA_FORCE_FULL_RELOAD, false),
-                    )
-                    val (generation, _) = ApplyCoordinator.accept(request)
-                    val result = ApplyService.applyCommitted(request, generation)
-                    ApplyCoordinator.publish(request, generation, result)
-                    if (result.outcome == CommandOutcome.FAILED) {
-                        // Preserve legacy behavior for failed handshakes.
-                        service.reload(
-                            intent.getStringExtra(Action.EXTRA_ROUTER_TAG),
-                            intent.getLongExtra(Action.EXTRA_ROUTER_PROXY_ID, 0L).takeIf { it > 0L },
-                            intent.getBooleanExtra(Action.EXTRA_FORCE_FULL_RELOAD, false),
-                        )
-                    }
-                }
-                Action.APPLY -> runOnDefaultDispatcher {
-                    // Unified receiver entry (S2-B2): the request already carries
-                    // its captured target; readiness+flush+snapshot validation
-                    // happens inside applyCommitted before any core call.
-                    val request = ApplyRequest(
-                        requestId = intent.getStringExtra(Action.EXTRA_REQUEST_ID) ?: ApplyRequest.generateRequestId(),
-                        kind = CommandKind.valueOf(intent.getStringExtra(Action.EXTRA_KIND) ?: CommandKind.RELOAD.name),
-                        targetProfileId = intent.getLongExtra(Action.EXTRA_TARGET_PROFILE_ID, -1L).takeIf { it > 0L },
-                        routerStableTag = null,
-                        routerMemberId = null,
-                    )
-                    val (generation, _) = ApplyCoordinator.accept(request)
-                    val result = ApplyService.applyCommitted(request, generation)
-                    ApplyCoordinator.publish(request, generation, result)
+                Action.RELOAD, Action.APPLY, Action.CLOSE -> runOnDefaultDispatcher {
+                    service.handleApplyIntent(intent)
                 }
                 // Action.SWITCH_WAKE_LOCK -> runOnDefaultDispatcher { service.switchWakeLock() }
                 PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED -> {
@@ -124,6 +92,8 @@ class BaseService {
         val binder = Binder(this)
         var connectingJob: Job? = null
         @Volatile var urlTestRefreshJob: Job? = null
+        @Volatile var applyGeneration: Long = 0L
+        @Volatile var applyRequest: ApplyRequest? = null
 
         fun changeState(s: State, msg: String? = null) {
             if (state == s && msg == null) return
@@ -222,6 +192,23 @@ class BaseService {
             broadcast { it.missingPlugin(profileName, pluginName) }
         }
 
+        fun commandResult(result: ApplyResult) = launch {
+            broadcast {
+                it.commandResult(
+                    result.requestId,
+                    result.outcome.ordinal,
+                    result.instanceGeneration,
+                    result.persisted,
+                    result.errorCode,
+                )
+            }
+        }
+
+        fun finishApply(request: ApplyRequest, generation: Long, result: ApplyResult) {
+            ApplyCoordinator.publish(request, generation, result)
+            commandResult(result)
+        }
+
         override fun close() {
             callbacks.kill()
             callbackIdMap.clear()
@@ -238,40 +225,140 @@ class BaseService {
         fun onBind(intent: Intent): IBinder? =
             if (intent.action == Action.SERVICE) data.binder else null
 
+        fun parseApplyRequest(intent: Intent?, defaultKind: CommandKind = CommandKind.START): ApplyRequest {
+            intent ?: return ApplyRequest(
+                kind = defaultKind,
+                targetProfileId = null,
+                routerStableTag = null,
+                routerMemberId = null,
+            )
+            val kind = runCatching {
+                CommandKind.valueOf(intent.getStringExtra(Action.EXTRA_KIND) ?: defaultKind.name)
+            }.getOrDefault(
+                when (intent.action) {
+                    Action.CLOSE -> CommandKind.STOP
+                    Action.RELOAD -> CommandKind.RELOAD
+                    else -> defaultKind
+                }
+            )
+            val routerTag = intent.getStringExtra(Action.EXTRA_ROUTER_TAG)
+            val routerProxyId = intent.getLongExtra(Action.EXTRA_ROUTER_PROXY_ID, 0L).takeIf { it > 0L }
+            return if (intent.action == Action.RELOAD && intent.getStringExtra(Action.EXTRA_KIND) == null) {
+                ApplyService.broadcastToRequest(
+                    routerTag,
+                    routerProxyId,
+                    intent.getBooleanExtra(Action.EXTRA_FORCE_FULL_RELOAD, false),
+                )
+            } else {
+                ApplyRequest(
+                    requestId = intent.getStringExtra(Action.EXTRA_REQUEST_ID) ?: ApplyRequest.generateRequestId(),
+                    kind = if (intent.action == Action.CLOSE && intent.getStringExtra(Action.EXTRA_KIND) == null) {
+                        CommandKind.STOP
+                    } else kind,
+                    targetProfileId = intent.getLongExtra(Action.EXTRA_TARGET_PROFILE_ID, -1L).takeIf { it > 0L },
+                    routerStableTag = routerTag,
+                    routerMemberId = routerProxyId,
+                    forceFullReload = intent.getBooleanExtra(Action.EXTRA_FORCE_FULL_RELOAD, false),
+                )
+            }
+        }
+
+        suspend fun handleApplyIntent(intent: Intent) {
+            val request = parseApplyRequest(intent, CommandKind.RELOAD)
+            val reused = intent.getLongExtra(Action.EXTRA_INSTANCE_GENERATION, -1L)
+            val generation = if (reused > 0L) {
+                if (!ApplyCoordinator.isCurrent(reused)) return
+                reused
+            } else {
+                ApplyCoordinator.accept(request).first
+            }
+            data.applyGeneration = generation
+            data.applyRequest = request
+            val failed = ApplyService.validateCommitted(request, generation)
+            if (failed != null) {
+                if (ApplyCoordinator.isCurrent(generation)) data.binder.finishApply(request, generation, failed)
+                return
+            }
+            if (!ApplyCoordinator.isCurrent(generation)) return
+            when (request.kind) {
+                CommandKind.START -> {
+                    if (data.state == State.Stopped) startRunner(request, generation)
+                    else completeApply(request, generation, CommandOutcome.APPLIED, true)
+                }
+                CommandKind.STOP -> stopRunner(
+                    restart = false,
+                    msg = null,
+                    stopRequest = request,
+                    stopGeneration = generation,
+                )
+                CommandKind.RELOAD -> executeReload(request, generation)
+            }
+        }
+
+        private fun completeApply(
+            request: ApplyRequest,
+            generation: Long,
+            outcome: CommandOutcome,
+            persisted: Boolean,
+            errorCode: String? = null,
+        ) {
+            if (!ApplyCoordinator.isCurrent(generation)) return
+            data.binder.finishApply(
+                request,
+                generation,
+                ApplyResult(request.requestId, outcome, generation, persisted, errorCode),
+            )
+        }
+
         fun reload(
             routerTag: String? = null,
             routerProxyId: Long? = null,
             forceFullReload: Boolean = false,
         ) {
-            // Invoked from RELOAD broadcast on Dispatchers.Default and from binder;
-            // never assume a worker thread, but keep the fast paths allocation-free.
-            if (DataStore.selectedProxy == 0L) {
-                stopRunner(false, (this as Context).getString(R.string.profile_empty))
+            runOnDefaultDispatcher {
+                handleApplyIntent(
+                    android.content.Intent(Action.APPLY).apply {
+                        putExtra(Action.EXTRA_KIND, CommandKind.RELOAD.name)
+                        if (routerTag != null) putExtra(Action.EXTRA_ROUTER_TAG, routerTag)
+                        if (routerProxyId != null) putExtra(Action.EXTRA_ROUTER_PROXY_ID, routerProxyId)
+                        if (forceFullReload) putExtra(Action.EXTRA_FORCE_FULL_RELOAD, true)
+                    },
+                )
+            }
+        }
+
+        private fun executeReload(request: ApplyRequest, generation: Long) {
+            val committed = DataStore.configurationStore.readCommittedSettingsSnapshot()
+            val profileId = ApplyService.resolveCommittedProfileId(request, committed)
+            if (profileId == null) {
+                completeApply(request, generation, CommandOutcome.FAILED, false, ApplyErrorCodes.INVALID_TARGET)
                 return
             }
-            val routerReloadRequested = routerTag != null && routerProxyId != null
+            val routerReloadRequested = request.routerStableTag != null && request.routerMemberId != null
             if (routerReloadRequested && dbOffMain {
-                    trySelectRouter(routerTag!!, routerProxyId!!)
+                    trySelectRouter(request.routerStableTag!!, request.routerMemberId!!)
                 }
-            ) return
-            if (!forceFullReload && !routerReloadRequested && canReloadSelector()) {
-                val ent = dbOffMain {
-                    SagerDatabase.proxyDao.getById(DataStore.selectedProxy)
-                }
-                val tag = data.proxy!!.config.profileTagMap[ent?.id] ?: ""
-                if (tag.isNotBlank() && ent != null) {
-                    // select from GUI
-                    data.proxy!!.box.selectOutbound(tag)
-                    // or select from webui
-                    // => selector_OnProxySelected
-                }
+            ) {
+                completeApply(request, generation, CommandOutcome.APPLIED, true)
                 return
+            }
+            if (!request.forceFullReload && !routerReloadRequested && canReloadSelector(profileId)) {
+                val ent = dbOffMain { SagerDatabase.proxyDao.getById(profileId) }
+                val tag = data.proxy?.config?.profileTagMap?.get(ent?.id) ?: ""
+                if (tag.isNotBlank() && ent != null && data.proxy?.box != null) {
+                    data.proxy!!.box.selectOutbound(tag)
+                    completeApply(request, generation, CommandOutcome.APPLIED, true)
+                    return
+                }
             }
             val s = data.state
             when {
-                s == State.Stopped -> startRunner()
-                s.canStop -> stopRunner(true)
-                else -> Logs.w({ "Illegal state $s when invoking use" })
+                s == State.Stopped -> startRunner(request, generation)
+                s.canStop -> stopRunner(true, null, request, generation)
+                else -> {
+                    Logs.w({ "Illegal state $s when invoking reload" })
+                    completeApply(request, generation, CommandOutcome.FAILED, false, ApplyErrorCodes.CORE_FAILED)
+                }
             }
         }
 
@@ -323,11 +410,17 @@ class BaseService {
             return true
         }
 
-        fun canReloadSelector(): Boolean {
+        fun canReloadSelector(): Boolean = canReloadSelector(
+            ApplyService.resolveCommittedProfileId(
+                ApplyRequest(kind = CommandKind.RELOAD, targetProfileId = null, routerStableTag = null, routerMemberId = null),
+                DataStore.configurationStore.readCommittedSettingsSnapshot(),
+            ) ?: 0L
+        )
+
+        private fun canReloadSelector(profileId: Long): Boolean {
             val selectorGroupId = data.proxy?.config?.selectorGroupId ?: -1L
-            if (selectorGroupId < 0L) return false
-            val ent = SagerDatabase.proxyDao.getById(DataStore.selectedProxy) ?: return false
-            // Same selector group => hot-switch only. Avoid a full temporary buildConfig.
+            if (selectorGroupId < 0L || profileId <= 0L) return false
+            val ent = SagerDatabase.proxyDao.getById(profileId) ?: return false
             return ent.groupId == selectorGroupId
         }
 
@@ -335,9 +428,11 @@ class BaseService {
             data.proxy!!.launch()
         }
 
-        fun startRunner() {
+        fun startRunner(request: ApplyRequest? = data.applyRequest, generation: Long? = data.applyGeneration) {
             this as Context
-            startForegroundService(Intent(this, javaClass))
+            val intent = Intent(this, javaClass)
+            if (request != null) SagerNet.applyExtras(intent, request, generation)
+            startForegroundService(intent)
         }
 
         fun killProcesses() {
@@ -353,7 +448,12 @@ class BaseService {
             }
         }
 
-        fun stopRunner(restart: Boolean = false, msg: String? = null) {
+        fun stopRunner(
+            restart: Boolean = false,
+            msg: String? = null,
+            stopRequest: ApplyRequest? = null,
+            stopGeneration: Long? = null,
+        ) {
             DataStore.baseService = null
             DataStore.vpnService = null
             DataStore.mixedInboundAuthed = false
@@ -380,8 +480,16 @@ class BaseService {
 
                 // change the state
                 data.changeState(State.Stopped, msg)
-                // stop the service if nothing has bound to it
                 if (restart) startRunner() else {
+                    val req = stopRequest ?: data.applyRequest
+                    val gen = stopGeneration ?: data.applyGeneration
+                    if (req != null && req.kind == CommandKind.STOP && ApplyCoordinator.isCurrent(gen)) {
+                        data.binder.finishApply(
+                            req,
+                            gen,
+                            ApplyResult(req.requestId, CommandOutcome.STOPPED, gen, true, null),
+                        )
+                    }
                     stopSelf()
                 }
             }
@@ -478,11 +586,21 @@ class BaseService {
                 data.closeReceiverRegistered = true
             }
 
+            val request = parseApplyRequest(intent, CommandKind.START)
+            val reused = intent?.getLongExtra(Action.EXTRA_INSTANCE_GENERATION, -1L) ?: -1L
+            val generation = if (reused > 0L) {
+                if (!ApplyCoordinator.isCurrent(reused)) return Service.START_NOT_STICKY
+                reused
+            } else {
+                ApplyCoordinator.accept(request).first
+            }
+            data.applyGeneration = generation
+            data.applyRequest = request
+
             data.changeState(State.Connecting)
             data.connectingJob = data.binder.launch(start = CoroutineStart.LAZY) {
                 try {
                     val startedAt = SystemClock.elapsedRealtime()
-                    // S2-B1 [E03] + readiness: promote with app name; title from DB is async and never blocks startup.
                     val placeholderNotification = onMainDispatcher {
                         createNotification(getString(R.string.app_name)).also { data.notification = it }
                     }
@@ -490,33 +608,42 @@ class BaseService {
                         stopRunner(false, "${getString(R.string.service_failed)}foreground service")
                         return@launch
                     }
-                    // Gate business on config-store readiness; the start must not branch on a mid-load empty table.
-                    when (val r = DataStore.configurationStore.awaitReady()) {
-                        is io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore.StoreReadiness.Ready -> {}
-                        is io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore.StoreReadiness.Failed ->
-                            error("settings not ready: ${r.errorCode}")
-                        else -> error("settings not ready")
+                    val failed = ApplyService.validateCommitted(request, generation)
+                    if (failed != null) {
+                        if (ApplyCoordinator.isCurrent(generation)) data.binder.finishApply(request, generation, failed)
+                        stopRunner(false, getString(R.string.profile_empty))
+                        return@launch
                     }
-                    // DB-dependent resolution now runs only on Ready; invalidation-backup is ready too (coalesced).
-                    val profile = onDefaultDispatcher {
-                        runCatching { SagerDatabase.proxyDao.getById(DataStore.selectedProxy) }
-                            .getOrNull()
+                    if (!ApplyCoordinator.isCurrent(generation)) return@launch
+                    val profile = withContext(Dispatchers.IO) {
+                        val committed = DataStore.configurationStore.readCommittedSettingsSnapshot()
+                        val profileId = ApplyService.resolveCommittedProfileId(request, committed)
+                            ?: return@withContext null
+                        runCatching { SagerDatabase.proxyDao.getById(profileId) }.getOrNull()
                     }
                     if (profile == null) {
+                        if (ApplyCoordinator.isCurrent(generation)) {
+                            data.binder.finishApply(
+                                request,
+                                generation,
+                                ApplyResult(request.requestId, CommandOutcome.FAILED, generation, false, ApplyErrorCodes.INVALID_TARGET),
+                            )
+                        }
                         onMainDispatcher { stopRunner(false, getString(R.string.profile_empty)) }
                         return@launch
                     }
-                    val proxy = ProxyInstance(profile, this@Interface)
+                    val (proxy, title) = withContext(Dispatchers.Default) {
+                        val instance = ProxyInstance(profile, this@Interface)
+                        instance to ServiceNotification.genTitle(profile)
+                    }
                     data.proxy = proxy
-                    // Replace placeholder title asynchronously; failure here does not abort the running core.
                     onMainDispatcher {
-                        runCatching { ServiceNotification.genTitle(profile) }
-                            .onSuccess { title -> data.notification?.let { runCatching { it.postNotificationTitle(title) } } }
+                        data.notification?.let { runCatching { it.postNotificationTitle(title) } }
                     }
                     val notificationReadyAt = SystemClock.elapsedRealtime()
 
                     onDefaultDispatcher {
-                        Executable.killAll()    // clean up old processes
+                        Executable.killAll()
                         preInit()
                         proxy.init()
                         DataStore.currentProfile = profile.id
@@ -528,15 +655,30 @@ class BaseService {
 
                         startProcesses()
                     }
+                    if (!ApplyCoordinator.isCurrent(generation) || data.state == State.Stopping) {
+                        return@launch
+                    }
                     data.changeState(State.Connected)
+                    data.binder.finishApply(
+                        request,
+                        generation,
+                        ApplyResult(request.requestId, CommandOutcome.APPLIED, generation, true, null),
+                    )
 
                     lateInit()
                     Logs.i({
                         "$tag startup completed in ${SystemClock.elapsedRealtime() - startedAt} ms " +
                             "(notification=${notificationReadyAt - startedAt} ms)"
                     })
-                } catch (_: CancellationException) { // if the job was cancelled, it is canceller's responsibility to call stopRunner
+                } catch (_: CancellationException) {
                 } catch (_: UnknownHostException) {
+                    if (ApplyCoordinator.isCurrent(generation)) {
+                        data.binder.finishApply(
+                            request,
+                            generation,
+                            ApplyResult(request.requestId, CommandOutcome.FAILED, generation, false, ApplyErrorCodes.CORE_FAILED),
+                        )
+                    }
                     stopRunner(false, getString(R.string.invalid_server))
                 } catch (e: PluginManager.PluginNotFoundException) {
                     onMainDispatcher {
@@ -544,13 +686,26 @@ class BaseService {
                     }
                     Logs.w(e)
                     data.binder.missingPlugin(e.plugin)
+                    if (ApplyCoordinator.isCurrent(generation)) {
+                        data.binder.finishApply(
+                            request,
+                            generation,
+                            ApplyResult(request.requestId, CommandOutcome.FAILED, generation, false, ApplyErrorCodes.CORE_FAILED),
+                        )
+                    }
                     stopRunner(false, null)
                 } catch (exc: Throwable) {
                     if (exc.javaClass.name.endsWith("proxyerror")) {
-                        // error from golang
                         Logs.w(exc.readableMessage)
                     } else {
                         Logs.w(exc)
+                    }
+                    if (ApplyCoordinator.isCurrent(generation)) {
+                        data.binder.finishApply(
+                            request,
+                            generation,
+                            ApplyResult(request.requestId, CommandOutcome.FAILED, generation, false, ApplyErrorCodes.CORE_FAILED),
+                        )
                     }
                     stopRunner(
                         false, "${getString(R.string.service_failed)}: ${exc.readableMessage}"

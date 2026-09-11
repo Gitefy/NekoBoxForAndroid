@@ -38,4 +38,5 @@ object ApplyErrorCodes {
     const val INVALID_TARGET = "INVALID_TARGET"
     const val NOT_READY = "NOT_READY"
     const val TIMEOUT = "TIMEOUT"
+    const val CORE_FAILED = "CORE_FAILED"
 }

@@ -135,7 +135,12 @@ object DataStore : OnPreferenceDataStoreChangeListener {
             group = dbOffMain { SagerDatabase.groupDao.getById(cur) }
         }
         if (group != null) return group
-        configurationStore.awaitReady()
+        when (val r = configurationStore.awaitReady()) {
+            is RoomPreferenceDataStore.StoreReadiness.Failed ->
+                error("S2-B1: currentGroupAsync refused default write in Failed (${r.errorCode})")
+            is RoomPreferenceDataStore.StoreReadiness.Ready -> {}
+            else -> error("S2-B1: currentGroupAsync called before Ready")
+        }
         return dbOffMain {
             val groups = SagerDatabase.groupDao.allGroups()
             if (groups.isEmpty()) {
@@ -235,6 +240,7 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     val mixedInboundPass: String get() = if (mixedInboundAuthed) mixedSecret else ""
 
     fun initGlobal() {
+        if (configurationStore.readiness !is RoomPreferenceDataStore.StoreReadiness.Ready) return
         if (configurationStore.getString(Key.MIXED_PORT) == null) {
             mixedPort = mixedPort
         }
@@ -242,6 +248,7 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     }
 
     fun sanitizeDeprecatedPreferences() {
+        if (configurationStore.readiness !is RoomPreferenceDataStore.StoreReadiness.Ready) return
         // Cache-aware removal: mirrors the change instantly and persists async,
         // so this stays safe on the main thread (SettingsPreferenceFragment).
         for (key in DEPRECATED_SETTING_KEYS) {
