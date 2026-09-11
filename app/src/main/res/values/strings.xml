@@ -554,6 +554,8 @@
     <string name="translate_platform">Translate Platform</string>
     <string name="menu_tools">Tools</string>
     <string name="menu_log">Logs</string>
+    <string name="log_disabled">Logging is turned off. Enable it in Settings.</string>
+    <string name="log_empty">No logs yet</string>
     <string name="clear_logcat">Clear Logcat</string>
     <string name="wireguard_local_address">Local Address</string>
     <string name="wireguard_public_key">Peer Public Key</string>

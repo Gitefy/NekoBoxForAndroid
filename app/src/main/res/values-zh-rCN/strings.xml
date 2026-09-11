@@ -433,6 +433,8 @@
     <string name="ssh_auth_type_none">无</string>
     <string name="clear_logcat">清空日志</string>
     <string name="menu_log">日志</string>
+    <string name="log_disabled">日志记录已关闭，请在设置中开启日志。</string>
+    <string name="log_empty">暂无日志</string>
     <string name="menu_tools">工具</string>
     <string name="translate_platform">翻译平台</string>
     <string name="wireguard_local_address">本地地址</string>

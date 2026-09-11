@@ -326,7 +326,7 @@
     <color name="card_elevated_red">#FEF0EF</color>
     <color name="card_elevated_teal">#EBF7F5</color>
     <color name="card_elevated_yellow">#FFFDEF</color>
-    <color name="card_elevated_black">#EEEEEE</color>
+    <color name="card_elevated_black">#151515</color>
     <color name="card_elevated_verdant_mint">#EBF9F3</color>
 
 </resources>

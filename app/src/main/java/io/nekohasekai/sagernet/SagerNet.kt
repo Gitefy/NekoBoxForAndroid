@@ -69,7 +69,10 @@ class SagerNet : Application(),
                 filesDir.absolutePath + "/",
                 externalAssets.absolutePath + "/",
                 DataStore.logBufSize,
-                DataStore.logLevel > 0,
+                NekoLogPolicy.desiredEnabled(
+                    DataStore.configurationStore.isReady(),
+                    DataStore.logLevel,
+                ),
                 nativeInterface, nativeInterface, LocalResolverImpl
             )
 
@@ -77,6 +80,13 @@ class SagerNet : Application(),
             JavaUtil.handleWebviewDir(this)
 
             runOnDefaultDispatcher {
+                DataStore.awaitReady()
+                Libcore.setNekoLogEnabled(
+                    NekoLogPolicy.desiredEnabled(
+                        DataStore.configurationStore.isReady(),
+                        DataStore.logLevel,
+                    )
+                )
                 PackageCache.register()
                 cleanWebview()
                 RestoreCoordinator.recoverOnBoot(

@@ -13,8 +13,10 @@ import androidx.appcompat.widget.Toolbar
 import androidx.core.view.ViewCompat
 import androidx.core.view.doOnLayout
 import io.nekohasekai.sagernet.R
+import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.databinding.LayoutLogcatBinding
 import io.nekohasekai.sagernet.ktx.*
+import io.nekohasekai.sagernet.utils.NekoLogPolicy
 import io.nekohasekai.sagernet.widget.ListListener
 import libcore.Libcore
 import moe.matsuri.nb4a.utils.SendLog
@@ -39,6 +41,12 @@ class LogcatFragment : ToolbarFragment(R.layout.layout_logcat),
         ViewCompat.setOnApplyWindowInsetsListener(binding.root, ListListener)
 
         reloadSession()
+        runOnDefaultDispatcher {
+            DataStore.awaitReady()
+            onMainDispatcher {
+                if (view != null) reloadSession()
+            }
+        }
     }
 
     private fun getColorForLine(line: String): ForegroundColorSpan {
@@ -60,9 +68,25 @@ class LogcatFragment : ToolbarFragment(R.layout.layout_logcat),
     }
 
     private fun reloadSession() {
-        val span = SpannableString(
-            String(SendLog.getNekoLog(50 * 1024))
-        )
+        val raw = String(SendLog.getNekoLog(50 * 1024))
+        when (
+            NekoLogPolicy.pageState(
+                DataStore.configurationStore.isReady(),
+                DataStore.logLevel,
+                raw,
+            )
+        ) {
+            NekoLogPolicy.PageState.DISABLED -> {
+                binding.textview.text = getString(R.string.log_disabled)
+                return
+            }
+            NekoLogPolicy.PageState.EMPTY -> {
+                binding.textview.text = getString(R.string.log_empty)
+                return
+            }
+            NekoLogPolicy.PageState.CONTENT -> {}
+        }
+        val span = SpannableString(raw)
         var offset = 0
         for (line in span.lines()) {
             val color = getColorForLine(line)
@@ -93,7 +117,7 @@ class LogcatFragment : ToolbarFragment(R.layout.layout_logcat),
                         return@runOnDefaultDispatcher
                     }
                     onMainDispatcher {
-                        binding.textview.text = ""
+                        reloadSession()
                     }
                 }
 

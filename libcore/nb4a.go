@@ -27,6 +27,10 @@ func NekoLogClear() {
 	neko_log.LogWriter.Truncate()
 }
 
+func SetNekoLogEnabled(enable bool) {
+	neko_log.LogWriterDisable = !enable
+}
+
 func ForceGc() {
 	go debug.FreeOSMemory()
 }
