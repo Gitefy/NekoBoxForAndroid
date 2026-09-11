@@ -39,4 +39,5 @@ object ApplyErrorCodes {
     const val NOT_READY = "NOT_READY"
     const val TIMEOUT = "TIMEOUT"
     const val CORE_FAILED = "CORE_FAILED"
+    const val RESTORE_IN_PROGRESS = "RESTORE_IN_PROGRESS"
 }

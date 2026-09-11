@@ -534,48 +534,50 @@ class BackupFragment : ToolbarFragment(R.layout.layout_backup) {
                 }
             }
 
-            SagerDatabase.instance.runInTransaction {
-                if (decodedProfileData != null) {
-                    SagerDatabase.routerGroupSourceDao.reset()
-                    SagerDatabase.routerMemberDao.reset()
-                    SagerDatabase.routerGroupDao.reset()
-                    SagerDatabase.proxyDao.reset()
-                    SagerDatabase.groupDao.reset()
-
-                    SagerDatabase.groupDao.insert(decodedProfileData.groups)
-                    SagerDatabase.proxyDao.insert(decodedProfileData.profiles)
-                    if (decodedProfileData.routerGroups.isNotEmpty()) {
-                        SagerDatabase.routerGroupDao.insert(decodedProfileData.routerGroups)
+            val outcome = RestoreCoordinator.commit(
+                dir = SagerNet.application.filesDir,
+                configRows = decodedSettings,
+                snapshotConfig = { DataStore.configurationStore.readCommittedSettingsSnapshot() },
+                restoreConfig = { rows -> DataStore.configurationStore.restore(rows).success },
+                restoreSager = {
+                    if (decodedProfileData == null && decodedRules == null) return@commit true
+                    try {
+                        SagerDatabase.instance.runInTransaction {
+                            if (decodedProfileData != null) {
+                                SagerDatabase.routerGroupSourceDao.reset()
+                                SagerDatabase.routerMemberDao.reset()
+                                SagerDatabase.routerGroupDao.reset()
+                                SagerDatabase.proxyDao.reset()
+                                SagerDatabase.groupDao.reset()
+                                SagerDatabase.groupDao.insert(decodedProfileData.groups)
+                                SagerDatabase.proxyDao.insert(decodedProfileData.profiles)
+                                if (decodedProfileData.routerGroups.isNotEmpty()) {
+                                    SagerDatabase.routerGroupDao.insert(decodedProfileData.routerGroups)
+                                }
+                                if (decodedProfileData.routerMembers.isNotEmpty()) {
+                                    SagerDatabase.routerMemberDao.insert(decodedProfileData.routerMembers)
+                                }
+                                if (decodedProfileData.routerSources.isNotEmpty()) {
+                                    SagerDatabase.routerGroupSourceDao.insert(decodedProfileData.routerSources)
+                                }
+                                SagerDatabase.routerGroupDao.clearInvalidSelections()
+                            }
+                            if (decodedRules != null) {
+                                SagerDatabase.rulesDao.reset()
+                                SagerDatabase.rulesDao.insert(decodedRules)
+                            }
+                        }
+                        if (decodedProfileData != null) {
+                            GroupManager.cleanupDanglingRouterMembers()
+                        }
+                        true
+                    } catch (_: Throwable) {
+                        false
                     }
-                    if (decodedProfileData.routerMembers.isNotEmpty()) {
-                        SagerDatabase.routerMemberDao.insert(decodedProfileData.routerMembers)
-                    }
-                    if (decodedProfileData.routerSources.isNotEmpty()) {
-                        SagerDatabase.routerGroupSourceDao.insert(decodedProfileData.routerSources)
-                    }
-                    SagerDatabase.routerGroupDao.clearInvalidSelections()
-                }
-
-                if (decodedRules != null) {
-                    SagerDatabase.rulesDao.reset()
-                    SagerDatabase.rulesDao.insert(decodedRules)
-                }
-            }
-            if (decodedProfileData != null) {
-                GroupManager.cleanupDanglingRouterMembers()
-            }
-            if (decodedSettings != null) {
-                // Single settings-restore authority (S1-B3): the store fences
-                // whatever the writer queue already holds, replaces the table
-                // in one transaction and blocks until the durable result. The
-                // previous duplicate out-of-band PublicDatabase write is gone.
-                val restored = DataStore.configurationStore.restore(decodedSettings)
-                if (!restored.success) {
-                    throw IllegalStateException(
-                        "Settings restore failed: ${restored.failures.firstOrNull()?.reason ?: "unknown"}",
-                    )
-                }
-                // Mirror of profileCacheStore holds editing drafts only; nothing to merge.
+                },
+            )
+            if (!outcome.success) {
+                throw IllegalStateException("Restore failed: ${outcome.error}")
             }
         }
     }

@@ -37,6 +37,9 @@ object ApplyService {
      * the caller must run the real core action and then publish.
      */
     suspend fun validateCommitted(request: ApplyRequest, generation: Long): ApplyResult? {
+        if (io.nekohasekai.sagernet.database.RestoreCoordinator.isActive() && request.kind != CommandKind.STOP) {
+            return ApplyResult(request.requestId, CommandOutcome.FAILED, generation, false, ApplyErrorCodes.RESTORE_IN_PROGRESS)
+        }
         val flushError = if (request.kind != CommandKind.STOP) {
             ApplyCoordinator.awaitReadyAndFlush(DataStore.configurationStore)
         } else {

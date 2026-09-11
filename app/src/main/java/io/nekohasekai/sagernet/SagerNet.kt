@@ -19,6 +19,7 @@ import go.Seq
 import io.nekohasekai.sagernet.bg.SagerConnection
 import io.nekohasekai.sagernet.bg.ServiceNotification
 import io.nekohasekai.sagernet.database.DataStore
+import io.nekohasekai.sagernet.database.RestoreCoordinator
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
 import io.nekohasekai.sagernet.ui.MainActivity
@@ -76,6 +77,7 @@ class SagerNet : Application(),
             runOnDefaultDispatcher {
                 PackageCache.register()
                 cleanWebview()
+                RestoreCoordinator.recoverOnBoot(filesDir, DataStore.configurationStore)
             }
         }
 
