@@ -77,7 +77,11 @@ class SagerNet : Application(),
             runOnDefaultDispatcher {
                 PackageCache.register()
                 cleanWebview()
-                RestoreCoordinator.recoverOnBoot(filesDir, DataStore.configurationStore)
+                RestoreCoordinator.recoverOnBoot(
+                    filesDir,
+                    { DataStore.configurationStore.restore(it).success },
+                    { RestoreCoordinator.installSagerExport(it) },
+                )
             }
         }
 

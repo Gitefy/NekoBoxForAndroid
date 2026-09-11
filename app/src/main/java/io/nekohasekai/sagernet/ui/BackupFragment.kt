@@ -536,10 +536,11 @@ class BackupFragment : ToolbarFragment(R.layout.layout_backup) {
 
             val outcome = RestoreCoordinator.commit(
                 dir = SagerNet.application.filesDir,
-                configRows = decodedSettings,
-                snapshotConfig = { DataStore.configurationStore.readCommittedSettingsSnapshot() },
+                incomingConfig = decodedSettings,
+                capturePreviousConfig = { DataStore.configurationStore.readCommittedSettingsSnapshot() },
+                capturePreviousSager = { RestoreCoordinator.captureSagerExportBytes() },
                 restoreConfig = { rows -> DataStore.configurationStore.restore(rows).success },
-                restoreSager = {
+                restoreSagerIncoming = {
                     if (decodedProfileData == null && decodedRules == null) return@commit true
                     try {
                         SagerDatabase.instance.runInTransaction {
@@ -575,6 +576,7 @@ class BackupFragment : ToolbarFragment(R.layout.layout_backup) {
                         false
                     }
                 },
+                restoreSagerPrevious = { RestoreCoordinator.installSagerExport(it) },
             )
             if (!outcome.success) {
                 throw IllegalStateException("Restore failed: ${outcome.error}")

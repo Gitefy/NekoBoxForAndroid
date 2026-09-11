@@ -16,6 +16,7 @@ import io.nekohasekai.sagernet.aidl.ISagerNetService
 import io.nekohasekai.sagernet.aidl.ISagerNetServiceCallback
 import io.nekohasekai.sagernet.bg.proto.ProxyInstance
 import io.nekohasekai.sagernet.database.DataStore
+import io.nekohasekai.sagernet.database.RestoreCoordinator
 import io.nekohasekai.sagernet.database.RouterGroup
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.database.routerStableId
@@ -91,6 +92,7 @@ class BaseService {
 
         val binder = Binder(this)
         var connectingJob: Job? = null
+        var pendingRestorePermit: RestoreCoordinator.Permit? = null
         @Volatile var urlTestRefreshJob: Job? = null
         @Volatile var applyGeneration: Long = 0L
         @Volatile var applyRequest: ApplyRequest? = null
@@ -275,24 +277,79 @@ class BaseService {
             }
             data.applyGeneration = generation
             data.applyRequest = request
-            val failed = ApplyService.validateCommitted(request, generation)
-            if (failed != null) {
-                if (ApplyCoordinator.isCurrent(generation)) data.binder.finishApply(request, generation, failed)
+            if (request.kind == CommandKind.STOP) {
+                val failed = ApplyService.validateCommitted(request, generation)
+                if (failed != null) {
+                    if (ApplyCoordinator.isCurrent(generation)) data.binder.finishApply(request, generation, failed)
+                    return
+                }
+                stopRunner(restart = false, msg = null, stopRequest = request, stopGeneration = generation)
                 return
             }
-            if (!ApplyCoordinator.isCurrent(generation)) return
-            when (request.kind) {
-                CommandKind.START -> {
-                    if (data.state == State.Stopped) startRunner(request, generation)
-                    else completeApply(request, generation, CommandOutcome.APPLIED, true)
+            if (request.kind == CommandKind.START && data.state == State.Stopped) {
+                val dir = SagerNet.application.filesDir
+                val permit = withContext(Dispatchers.IO) {
+                    RestoreCoordinator.tryExclusivePermit(dir)
                 }
-                CommandKind.STOP -> stopRunner(
-                    restart = false,
-                    msg = null,
-                    stopRequest = request,
-                    stopGeneration = generation,
-                )
-                CommandKind.RELOAD -> executeReload(request, generation)
+                if (permit == null) {
+                    if (ApplyCoordinator.isCurrent(generation)) {
+                        data.binder.finishApply(
+                            request,
+                            generation,
+                            ApplyResult(request.requestId, CommandOutcome.FAILED, generation, false, ApplyErrorCodes.RESTORE_IN_PROGRESS),
+                        )
+                    }
+                    return
+                }
+                withContext(Dispatchers.IO) {
+                    RestoreCoordinator.recoverLocked(
+                        dir,
+                        { DataStore.configurationStore.restore(it).success },
+                        { RestoreCoordinator.installSagerExport(it) },
+                    )
+                }
+                data.pendingRestorePermit = permit
+                startRunner(request, generation)
+                return
+            }
+            val dir = SagerNet.application.filesDir
+            val permit = withContext(Dispatchers.IO) {
+                RestoreCoordinator.tryExclusivePermit(dir)
+            }
+            if (permit == null) {
+                if (ApplyCoordinator.isCurrent(generation)) {
+                    data.binder.finishApply(
+                        request,
+                        generation,
+                        ApplyResult(request.requestId, CommandOutcome.FAILED, generation, false, ApplyErrorCodes.RESTORE_IN_PROGRESS),
+                    )
+                }
+                return
+            }
+            try {
+                withContext(Dispatchers.IO) {
+                    RestoreCoordinator.recoverLocked(
+                        dir,
+                        { DataStore.configurationStore.restore(it).success },
+                        { RestoreCoordinator.installSagerExport(it) },
+                    )
+                }
+                val failed = ApplyService.validateCommitted(request, generation)
+                if (failed != null) {
+                    if (ApplyCoordinator.isCurrent(generation)) data.binder.finishApply(request, generation, failed)
+                    return
+                }
+                if (!ApplyCoordinator.isCurrent(generation)) return
+                when (request.kind) {
+                    CommandKind.START -> {
+                        if (data.state == State.Stopped) startRunner(request, generation)
+                        else completeApply(request, generation, CommandOutcome.APPLIED, true)
+                    }
+                    CommandKind.RELOAD -> executeReload(request, generation)
+                    CommandKind.STOP -> {}
+                }
+            } finally {
+                withContext(Dispatchers.IO) { permit.close() }
             }
         }
 
@@ -590,7 +647,11 @@ class BaseService {
             val request = parseApplyRequest(intent, CommandKind.START)
             val reused = intent?.getLongExtra(Action.EXTRA_INSTANCE_GENERATION, -1L) ?: -1L
             val generation = if (reused > 0L) {
-                if (!ApplyCoordinator.isCurrent(reused)) return Service.START_NOT_STICKY
+                if (!ApplyCoordinator.isCurrent(reused)) {
+                    data.pendingRestorePermit?.close()
+                    data.pendingRestorePermit = null
+                    return Service.START_NOT_STICKY
+                }
                 reused
             } else {
                 ApplyCoordinator.accept(request).first
@@ -606,8 +667,35 @@ class BaseService {
                         createNotification(getString(R.string.app_name)).also { data.notification = it }
                     }
                     if (!placeholderNotification.show()) {
+                        data.pendingRestorePermit?.close()
+                        data.pendingRestorePermit = null
                         stopRunner(false, "${getString(R.string.service_failed)}foreground service")
                         return@launch
+                    }
+                    val dir = SagerNet.application.filesDir
+                    val permit = withContext(Dispatchers.IO) {
+                        val held = data.pendingRestorePermit
+                        data.pendingRestorePermit = null
+                        held ?: RestoreCoordinator.tryExclusivePermit(dir)
+                    }
+                    if (permit == null) {
+                        if (ApplyCoordinator.isCurrent(generation)) {
+                            data.binder.finishApply(
+                                request,
+                                generation,
+                                ApplyResult(request.requestId, CommandOutcome.FAILED, generation, false, ApplyErrorCodes.RESTORE_IN_PROGRESS),
+                            )
+                        }
+                        stopRunner(false, "restore in progress")
+                        return@launch
+                    }
+                    try {
+                    withContext(Dispatchers.IO) {
+                        RestoreCoordinator.recoverLocked(
+                            dir,
+                            { DataStore.configurationStore.restore(it).success },
+                            { RestoreCoordinator.installSagerExport(it) },
+                        )
                     }
                     val failed = ApplyService.validateCommitted(request, generation)
                     if (failed != null) {
@@ -671,6 +759,9 @@ class BaseService {
                         "$tag startup completed in ${SystemClock.elapsedRealtime() - startedAt} ms " +
                             "(notification=${notificationReadyAt - startedAt} ms)"
                     })
+                    } finally {
+                        permit.close()
+                    }
                 } catch (_: CancellationException) {
                 } catch (_: UnknownHostException) {
                     if (ApplyCoordinator.isCurrent(generation)) {
