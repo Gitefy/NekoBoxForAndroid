@@ -179,8 +179,8 @@ private fun parseDnsHosts(value: String): Map<String, List<String>> {
 // serverHostOf parses custom ConfigBean JSON on every call; buildConfig invokes
 // it per hop per profile, so identical beans re-parse repeatedly. Cache by bean
 // content hash; ConfigBean.config is immutable per entity load.
-private val serverHostCache = object : LinkedHashMap<Int, String?>(128, 0.75f, true) {
-    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, String?>): Boolean {
+private val serverHostCache = object : LinkedHashMap<String, String?>(128, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String?>): Boolean {
         return size > 512
     }
 }
@@ -189,7 +189,7 @@ private val serverHostCacheLock = Any()
 private fun serverHostOf(bean: AbstractBean): String? {
     val fallback = bean.serverAddress?.takeIf { it.isNotBlank() }
     if (bean is ConfigBean) {
-        val cacheKey = bean.config.hashCode()
+        val cacheKey = configContentDigest(bean.config)
         synchronized(serverHostCacheLock) {
             if (serverHostCache.containsKey(cacheKey)) return serverHostCache[cacheKey]
         }
@@ -226,6 +226,7 @@ fun buildConfig(
         }
     }
 
+    val snap = ConfigSnapshot.capture()
     val trafficMap = HashMap<String, List<ProxyEntity>>()
     val tagMap = HashMap<Long, String>()
     val globalOutbounds = HashMap<Long, String>()
@@ -307,20 +308,20 @@ fun buildConfig(
     val hostResolvers = HashMap<String, MutableSet<String>>()
     val nonCustomFinalHosts = hashSetOf<String>()
     val groupCache = HashMap<Long, ProxyGroup?>()
-    val isVPN = DataStore.serviceMode == Key.MODE_VPN
+    val isVPN = snap.serviceMode == Key.MODE_VPN
     val deviceInboundTag = if (isVPN) "tun-in" else TAG_MIXED
-    val bind = if (!forTest && DataStore.allowAccess) "0.0.0.0" else LOCALHOST
-    val remoteDns = DataStore.remoteDns.split("\n")
+    val bind = if (!forTest && snap.allowAccess) "0.0.0.0" else LOCALHOST
+    val remoteDns = snap.remoteDns.split("\n")
         .mapNotNull { dns -> dns.trim().takeIf { it.isNotBlank() && !it.startsWith("#") } }
-    val directDNS = DataStore.directDns.split("\n")
+    val directDNS = snap.directDns.split("\n")
         .mapNotNull { dns -> dns.trim().takeIf { it.isNotBlank() && !it.startsWith("#") } }
-    val dnsHosts by lazy { parseDnsHosts(DataStore.dnsHosts) }
-    val enableDnsRouting = DataStore.enableDnsRouting
-    val useFakeDns = DataStore.enableFakeDns && !forTest
-    val needSniff = DataStore.trafficSniffing > 0
+    val dnsHosts by lazy { parseDnsHosts(snap.dnsHosts) }
+    val enableDnsRouting = snap.enableDnsRouting
+    val useFakeDns = snap.enableFakeDns && !forTest
+    val needSniff = snap.trafficSniffing > 0
     val externalIndexMap = ArrayList<IndexEntity>()
-    val ipv6Mode = if (forTest) IPv6Mode.ENABLE else DataStore.ipv6Mode
-    val dialerFallbackDelay = if (DataStore.concurrentDial) "300ms" else "900ms"
+    val ipv6Mode = if (forTest) IPv6Mode.ENABLE else snap.ipv6Mode
+    val dialerFallbackDelay = if (snap.concurrentDial) "300ms" else "900ms"
     val dialerConnectTimeout = "5s"
     fun SingBoxOption.applyDialerTuning() {
         if (forTest) return
@@ -353,12 +354,12 @@ fun buildConfig(
                 cache_file = CacheFile().apply {
                     enabled = true
                     path = "../cache/cache.db"
-                    // if (DataStore.enableClashAPI) {
+                    // if (snap.enableClashAPI) {
                     store_fakeip = true
                     // }
                 }
                 
-                if (DataStore.enableClashAPI) {
+                if (snap.enableClashAPI) {
                     clash_api = ClashAPIOptions().apply {
                         external_controller = "127.0.0.1:9090"
                         external_ui = "../files/yacd"
@@ -368,7 +369,7 @@ fun buildConfig(
         }
 
         log = LogOptions().apply {
-            level = when (DataStore.logLevel) {
+            level = when (snap.logLevel) {
                 0 -> "panic"
                 1 -> "warn"
                 2 -> "info"
@@ -411,31 +412,31 @@ fun buildConfig(
                 type = "tun"
                 tag = "tun-in"
                 interface_name = "tun0"
-                stack = when (DataStore.tunImplementation) {
+                stack = when (snap.tunImplementation) {
                     TunImplementation.GVISOR -> "gvisor"
                     TunImplementation.SYSTEM -> "system"
                     TunImplementation.MIXED -> "mixed"
                     else -> "go"
                 }
-                mtu = DataStore.mtu
+                mtu = snap.mtu
                 // sing-box 1.15 removed legacy inbound fields. Sniffing and the
                 // inbound domain strategy are emitted as route rule actions below.
                 auto_route = true
-                strict_route = DataStore.strictRoute
+                strict_route = snap.strictRoute
                 address = VpnService.tunAddresses(ipv6Mode).map { "${it.host}/${it.prefixLength}" }
             })
             inbounds.add(Inbound_MixedOptions().apply {
                 type = "mixed"
                 tag = TAG_MIXED
                 listen = bind
-                listen_port = DataStore.mixedPort
+                listen_port = snap.mixedPort
                 // sing-box 1.15 rejects legacy inbound fields on listen inbounds
                 // (sniff / sniff_override_destination / domain_strategy); see the
                 // route rule actions below for their replacements.
-                if (DataStore.mixedInboundHasAuth) {
+                if (snap.mixedInboundHasAuth) {
                     users = listOf(User().also { u ->
-                        u.username = DataStore.mixedUsername
-                        u.password = DataStore.mixedSecret
+                        u.username = snap.mixedUsername
+                        u.password = snap.mixedSecret
                     })
                 }
             })
@@ -626,7 +627,7 @@ fun buildConfig(
                         }
                     }
 
-                    if (needGlobal && DataStore.enableTLSFragment) {
+                    if (needGlobal && snap.enableTLSFragment) {
                         val outboundMap = currentOutbound.asMap()
                         val tlsOptions = outboundMap["tls"] as? Map<*, *>
                         if (tlsOptions?.get("enabled") == true) {
@@ -698,7 +699,7 @@ fun buildConfig(
 
                             // no chain rule and not outbound, so need to set to direct
                             if (index == profileList.lastIndex) {
-                                if (DataStore.enableTLSFragment) {
+                                if (snap.enableTLSFragment) {
                                     route.rules.add(Rule_DefaultOptions().apply {
                                         network = listOf("tcp")
                                         inbound = listOf(tag)
@@ -799,11 +800,11 @@ fun buildConfig(
         connectionTestTargetTag = mainProxyTag
 
         // 在应用用户规则之前检查全局模式
-        if (!forTest && DataStore.globalMode) {
+        if (!forTest && snap.globalMode) {
             // 全局模式下的规则处理
             
             // 绕过内部网络（如果启用）
-            if (DataStore.bypassLan) {
+            if (snap.bypassLan) {
                 route.rules.add(Rule_DefaultOptions().apply {
                     ip_cidr = listOf(
                         "224.0.0.0/3",
@@ -874,7 +875,7 @@ fun buildConfig(
                         rulesetUrls.forEach { origUrl ->
                             val (url, isIPRuleset) = processRulesetUrl(origUrl)
                             
-                            val tag = generateRemoteRuleSet(url, ruleSets, DataStore.rulesUpdateInterval)
+                            val tag = generateRemoteRuleSet(url, ruleSets, snap.rulesUpdateInterval)
                             
                             rulesetTags.add(Pair(tag, isIPRuleset))
                             
@@ -1054,7 +1055,7 @@ fun buildConfig(
             type = "direct"
         })
 
-        if (DataStore.enableTLSFragment) {
+        if (snap.enableTLSFragment) {
             // sing-box 1.15 removed the fork-only direct-outbound "fragment"
             // extension (a {length, interval} object). TLS fragmentation now
             // lives in the route "tls_fragment" action / TLS options; emitting
@@ -1158,7 +1159,7 @@ fun buildConfig(
             // - inbound "domain_strategy" -> "resolve" action with the strategy.
             // - "sniff_override_destination" has no sing-box 1.15 equivalent and
             //   is dropped; plain sniffing still works.
-            val inboundResolveStrategy = genDomainStrategy(DataStore.resolveDestination)
+            val inboundResolveStrategy = genDomainStrategy(snap.resolveDestination)
             if (inboundResolveStrategy.isNotEmpty()) {
                 route.rules.add(0, Rule_DefaultOptions().apply {
                     action = "resolve"
@@ -1174,7 +1175,7 @@ fun buildConfig(
                 port = listOf(53)
                 action = "hijack-dns"
             })
-            if (DataStore.bypassLanInCore) {
+            if (snap.bypassLanInCore) {
                 route.rules.add(Rule_DefaultOptions().apply {
                     outbound = TAG_BYPASS
                     ip_is_private = true
@@ -1239,7 +1240,7 @@ fun buildConfig(
             }
         }
 
-        if (!forTest) _hack_custom_config = DataStore.globalCustomConfig
+        if (!forTest) _hack_custom_config = snap.globalCustomConfig
     }.let {
         val configMap = it.asMap()
         Util.mergeJSON(configMap, proxy.requireBean().customConfigJson)
