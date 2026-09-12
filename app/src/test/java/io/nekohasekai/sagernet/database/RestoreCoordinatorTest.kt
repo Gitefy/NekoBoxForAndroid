@@ -5,6 +5,7 @@ import io.nekohasekai.sagernet.database.preference.KeyValuePair
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -16,6 +17,11 @@ class RestoreCoordinatorTest {
     private fun dir() = Files.createTempDirectory("restore-j").toFile()
 
     private fun row(key: String, value: String) = KeyValuePair(key).put(value)
+
+    private fun writeSnapshots(dir: java.io.File, config: ByteArray = RestoreCoordinator.encodeRows(listOf(row("k", "old")))) {
+        RestoreCoordinator.snapshotFile(dir).writeBytes(config)
+        RestoreCoordinator.sagerSnapshotFile(dir).writeBytes("OLD_SAGER".toByteArray())
+    }
 
     @Test
     fun malformedBackupMutatesNothing() {
@@ -182,6 +188,153 @@ class RestoreCoordinatorTest {
         } finally {
             permit.close()
         }
+    }
+
+    @Test
+    fun blankOrInvalidJournalFailsWithoutCleanup() {
+        for (journal in listOf("", "   \n", "NOT_A_PHASE")) {
+            val dir = dir()
+            writeSnapshots(dir)
+            RestoreCoordinator.journalFile(dir).writeText(journal)
+
+            assertNotEquals(RestoreCoordinator.Phase.IDLE, RestoreCoordinator.readPhase(dir))
+            val recovered = RestoreCoordinator.recoverLocked(dir, { true }, { true })
+
+            assertFalse(recovered.success)
+            assertEquals(ApplyErrorCodes.RESTORE_FAILED, recovered.error)
+            assertTrue(RestoreCoordinator.journalFile(dir).exists())
+            assertTrue(RestoreCoordinator.snapshotFile(dir).isFile)
+            assertTrue(RestoreCoordinator.sagerSnapshotFile(dir).isFile)
+        }
+    }
+
+    @Test
+    fun nonRegularJournalFailsWithoutCleanup() {
+        val dir = dir()
+        writeSnapshots(dir)
+        assertTrue(RestoreCoordinator.journalFile(dir).mkdir())
+
+        assertNotEquals(RestoreCoordinator.Phase.IDLE, RestoreCoordinator.readPhase(dir))
+        val recovered = RestoreCoordinator.recoverLocked(dir, { true }, { true })
+
+        assertFalse(recovered.success)
+        assertTrue(RestoreCoordinator.journalFile(dir).isDirectory)
+        assertTrue(RestoreCoordinator.snapshotFile(dir).isFile)
+        assertTrue(RestoreCoordinator.sagerSnapshotFile(dir).isFile)
+    }
+
+    @Test
+    fun orphanedSnapshotsWithoutJournalFailWithoutCleanup() {
+        val dir = dir()
+        writeSnapshots(dir)
+
+        val recovered = RestoreCoordinator.recoverLocked(dir, { true }, { true })
+
+        assertFalse(recovered.success)
+        assertEquals(ApplyErrorCodes.RESTORE_FAILED, recovered.error)
+        assertFalse(RestoreCoordinator.journalFile(dir).exists())
+        assertTrue(RestoreCoordinator.snapshotFile(dir).isFile)
+        assertTrue(RestoreCoordinator.sagerSnapshotFile(dir).isFile)
+    }
+
+    @Test
+    fun preparedRecoveryRequiresBothSnapshots() {
+        for ((configPresent, sagerPresent) in listOf(true to false, false to true, false to false)) {
+            val dir = dir()
+            RestoreCoordinator.journalFile(dir).writeText(RestoreCoordinator.Phase.PREPARED.name)
+            if (configPresent) RestoreCoordinator.snapshotFile(dir).writeBytes(RestoreCoordinator.encodeRows(emptyList()))
+            if (sagerPresent) RestoreCoordinator.sagerSnapshotFile(dir).writeBytes(ByteArray(0))
+            var callbacks = 0
+
+            val recovered = RestoreCoordinator.recoverLocked(
+                dir,
+                { callbacks++; true },
+                { callbacks++; true },
+            )
+
+            assertFalse(recovered.success)
+            assertEquals(ApplyErrorCodes.RESTORE_FAILED, recovered.error)
+            assertEquals(0, callbacks)
+            assertTrue(RestoreCoordinator.journalFile(dir).isFile)
+            assertEquals(configPresent, RestoreCoordinator.snapshotFile(dir).isFile)
+            assertEquals(sagerPresent, RestoreCoordinator.sagerSnapshotFile(dir).isFile)
+        }
+    }
+
+    @Test
+    fun malformedConfigSnapshotFailsWithoutCleanup() {
+        val dir = dir()
+        writeSnapshots(dir, "malformed".toByteArray())
+        RestoreCoordinator.journalFile(dir).writeText(RestoreCoordinator.Phase.CONFIG_COMMITTED.name)
+
+        val recovered = RestoreCoordinator.recoverLocked(dir, { true }, { true })
+
+        assertFalse(recovered.success)
+        assertEquals(ApplyErrorCodes.RESTORE_FAILED, recovered.error)
+        assertTrue(RestoreCoordinator.journalFile(dir).isFile)
+        assertTrue(RestoreCoordinator.snapshotFile(dir).isFile)
+        assertTrue(RestoreCoordinator.sagerSnapshotFile(dir).isFile)
+    }
+
+    @Test
+    fun emptyConfigSnapshotIsValidAndCanRecover() {
+        val dir = dir()
+        writeSnapshots(dir, RestoreCoordinator.encodeRows(emptyList()))
+        RestoreCoordinator.journalFile(dir).writeText(RestoreCoordinator.Phase.PREPARED.name)
+        var restoredRows: List<KeyValuePair>? = null
+
+        val recovered = RestoreCoordinator.recoverLocked(
+            dir,
+            { restoredRows = it; true },
+            { true },
+        )
+
+        assertTrue(recovered.success)
+        assertEquals(emptyList<KeyValuePair>(), restoredRows)
+        assertFalse(RestoreCoordinator.journalFile(dir).exists())
+        assertFalse(RestoreCoordinator.snapshotFile(dir).exists())
+        assertFalse(RestoreCoordinator.sagerSnapshotFile(dir).exists())
+    }
+
+    @Test
+    fun failedOldRecoveryPreventsCommitFromOverwritingMaterials() {
+        val dir = dir()
+        val oldConfig = RestoreCoordinator.encodeRows(listOf(row("old-key", "old-value")))
+        val oldSager = "OLD_SAGER_MATERIAL".toByteArray()
+        RestoreCoordinator.snapshotFile(dir).writeBytes(oldConfig)
+        RestoreCoordinator.sagerSnapshotFile(dir).writeBytes(oldSager)
+        RestoreCoordinator.journalFile(dir).writeText(RestoreCoordinator.Phase.PREPARED.name)
+        var captureCalls = 0
+        var incomingCalls = 0
+
+        val committed = RestoreCoordinator.commit(
+            dir = dir,
+            incomingConfig = listOf(row("new-key", "new-value")),
+            capturePreviousConfig = { captureCalls++; listOf(row("current", "config")) },
+            capturePreviousSager = { captureCalls++; "CURRENT_SAGER".toByteArray() },
+            restoreConfig = { false },
+            restoreSagerIncoming = { incomingCalls++; true },
+            restoreSagerPrevious = { true },
+        )
+
+        assertFalse(committed.success)
+        assertEquals(ApplyErrorCodes.RESTORE_FAILED, committed.error)
+        assertEquals(0, captureCalls)
+        assertEquals(0, incomingCalls)
+        assertEquals(RestoreCoordinator.Phase.PREPARED.name, RestoreCoordinator.journalFile(dir).readText())
+        assertTrue(oldConfig.contentEquals(RestoreCoordinator.snapshotFile(dir).readBytes()))
+        assertTrue(oldSager.contentEquals(RestoreCoordinator.sagerSnapshotFile(dir).readBytes()))
+    }
+
+    @Test
+    fun cleanStateDoesNotBlockRecovery() {
+        val dir = dir()
+
+        val recovered = RestoreCoordinator.recoverLocked(dir, { true }, { true })
+
+        assertTrue(recovered.success)
+        assertEquals(RestoreCoordinator.Phase.IDLE, recovered.phase)
+        assertFalse(RestoreCoordinator.journalFile(dir).exists())
     }
 
     @Test

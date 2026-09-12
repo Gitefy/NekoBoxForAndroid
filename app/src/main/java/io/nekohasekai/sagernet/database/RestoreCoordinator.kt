@@ -17,7 +17,7 @@ import java.util.concurrent.locks.LockSupport
 import kotlin.coroutines.coroutineContext
 
 object RestoreCoordinator {
-    enum class Phase { IDLE, PREPARED, CONFIG_COMMITTED, SAGER_COMMITTED, COMPLETE }
+    enum class Phase { IDLE, PREPARED, CONFIG_COMMITTED, SAGER_COMMITTED, COMPLETE, INVALID }
     enum class LockKind { BOOT_RECOVERY, APPLY, USER_RESTORE }
 
     data class LockEvent(
@@ -75,8 +75,11 @@ object RestoreCoordinator {
     fun lockMetaFile(dir: File) = File(dir, "restore-apply.lock.meta")
 
     fun readPhase(dir: File): Phase {
-        val raw = journalFile(dir).takeIf { it.isFile }?.readText()?.trim().orEmpty()
-        return Phase.entries.firstOrNull { it.name == raw } ?: Phase.IDLE
+        val journal = journalFile(dir)
+        if (!journal.exists()) return Phase.IDLE
+        if (!journal.isFile) return Phase.INVALID
+        val raw = runCatching { journal.readText().trim() }.getOrNull() ?: return Phase.INVALID
+        return Phase.entries.firstOrNull { it != Phase.INVALID && it.name == raw } ?: Phase.INVALID
     }
 
     private fun writePhase(dir: File, phase: Phase) {
@@ -279,6 +282,8 @@ object RestoreCoordinator {
         val acquired = acquirePermitBlocking(dir, LockKind.USER_RESTORE)
         val permit = acquired.permit ?: return Outcome(false, readPhase(dir), acquired.error ?: ApplyErrorCodes.RESTORE_IN_PROGRESS)
         permit.use {
+            val recovery = recoverLocked(dir, restoreConfig, restoreSagerPrevious)
+            if (!recovery.success) return recovery
             val previousConfig = capturePreviousConfig()
             val previousSager = capturePreviousSager()
             snapshotFile(dir).writeBytes(encodeRows(previousConfig))
@@ -356,7 +361,15 @@ object RestoreCoordinator {
         )
         val phase = readPhase(dir)
         val out = when (phase) {
-            Phase.IDLE, Phase.COMPLETE -> {
+            Phase.INVALID -> Outcome(false, phase, ApplyErrorCodes.RESTORE_FAILED)
+            Phase.IDLE -> {
+                if (journalFile(dir).exists() || snapshotFile(dir).exists() || sagerSnapshotFile(dir).exists()) {
+                    Outcome(false, phase, ApplyErrorCodes.RESTORE_FAILED)
+                } else {
+                    Outcome(true, Phase.IDLE, null)
+                }
+            }
+            Phase.COMPLETE -> {
                 cleanup(dir)
                 Outcome(true, Phase.IDLE, null)
             }
@@ -383,19 +396,18 @@ object RestoreCoordinator {
         restoreConfig: (List<KeyValuePair>) -> Boolean,
         restoreSagerPrevious: (ByteArray) -> Boolean,
     ): Boolean {
-        var restored = true
-        if (snapshotFile(dir).isFile) {
-            val configRestored = runCatching {
-                restoreConfig(decodeRows(snapshotFile(dir).readBytes()))
-            }.getOrDefault(false)
-            restored = configRestored && restored
-        }
-        if (sagerSnapshotFile(dir).isFile) {
-            val sagerRestored = runCatching {
-                restoreSagerPrevious(sagerSnapshotFile(dir).readBytes())
-            }.getOrDefault(false)
-            restored = sagerRestored && restored
-        }
+        val configSnapshot = snapshotFile(dir)
+        val sagerSnapshot = sagerSnapshotFile(dir)
+        if (!configSnapshot.isFile || !sagerSnapshot.isFile) return false
+        val previousConfig = runCatching {
+            decodeRows(configSnapshot.readBytes())
+        }.getOrNull() ?: return false
+        val previousSager = runCatching {
+            sagerSnapshot.readBytes()
+        }.getOrNull() ?: return false
+        val configRestored = runCatching { restoreConfig(previousConfig) }.getOrDefault(false)
+        val sagerRestored = runCatching { restoreSagerPrevious(previousSager) }.getOrDefault(false)
+        val restored = configRestored && sagerRestored
         if (restored) cleanup(dir)
         return restored
     }
