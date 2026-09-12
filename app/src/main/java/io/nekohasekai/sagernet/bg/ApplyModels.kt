@@ -40,4 +40,5 @@ object ApplyErrorCodes {
     const val TIMEOUT = "TIMEOUT"
     const val CORE_FAILED = "CORE_FAILED"
     const val RESTORE_IN_PROGRESS = "RESTORE_IN_PROGRESS"
+    const val RESTORE_FAILED = "RESTORE_FAILED"
 }

@@ -2,12 +2,28 @@ package io.nekohasekai.sagernet.bg
 
 import io.nekohasekai.sagernet.Key
 import io.nekohasekai.sagernet.database.DataStore
+import io.nekohasekai.sagernet.database.RestoreCoordinator
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.database.preference.KeyValuePair
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 object ApplyService {
+
+    fun recoveryFailure(
+        request: ApplyRequest,
+        generation: Long,
+        recovery: RestoreCoordinator.Outcome,
+    ): ApplyResult? {
+        if (request.kind == CommandKind.STOP || recovery.success) return null
+        return ApplyResult(
+            request.requestId,
+            CommandOutcome.FAILED,
+            generation,
+            false,
+            recovery.error ?: ApplyErrorCodes.RESTORE_FAILED,
+        )
+    }
 
     suspend fun gateForSettingsApply(): ApplyResult? {
         val flushError = ApplyCoordinator.awaitReadyAndFlush(DataStore.configurationStore)

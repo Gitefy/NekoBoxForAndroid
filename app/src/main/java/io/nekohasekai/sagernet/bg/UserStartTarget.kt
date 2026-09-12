@@ -60,6 +60,7 @@ object ApplyErrorMessages {
         ApplyErrorCodes.NOT_READY -> R.string.settings_not_ready
         ApplyErrorCodes.FLUSH_FAILED, ApplyErrorCodes.PERSIST_FAILED -> R.string.settings_flush_failed
         ApplyErrorCodes.RESTORE_IN_PROGRESS -> R.string.restore_in_progress
+        ApplyErrorCodes.RESTORE_FAILED -> R.string.service_failed
         else -> null
     }
 }

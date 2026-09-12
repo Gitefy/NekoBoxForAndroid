@@ -62,7 +62,6 @@ fun Project.setupCommon() {
         }
         (android as ExtensionAware).extensions.getByName<KotlinJvmOptions>("kotlinOptions").apply {
             jvmTarget = JavaVersion.VERSION_1_8.toString()
-            suppressWarnings = true
         }
         lint {
             showAll = true

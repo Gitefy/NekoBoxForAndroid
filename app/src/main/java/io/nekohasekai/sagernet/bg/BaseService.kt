@@ -317,12 +317,18 @@ class BaseService {
                 if (permit == null) {
                     return
                 }
-                withContext(Dispatchers.IO) {
+                val recovery = withContext(Dispatchers.IO) {
                     RestoreCoordinator.recoverLocked(
                         dir,
                         { DataStore.configurationStore.restore(it).success },
                         { RestoreCoordinator.installSagerExport(it) },
                     )
+                }
+                val recoveryFailed = ApplyService.recoveryFailure(request, generation, recovery)
+                if (recoveryFailed != null) {
+                    if (ApplyCoordinator.isCurrent(generation)) data.binder.finishApply(request, generation, recoveryFailed)
+                    withContext(Dispatchers.IO) { permit.close() }
+                    return
                 }
                 data.pendingRestorePermit = permit
                 startRunner(request, generation)
@@ -334,12 +340,17 @@ class BaseService {
                 return
             }
             try {
-                withContext(Dispatchers.IO) {
+                val recovery = withContext(Dispatchers.IO) {
                     RestoreCoordinator.recoverLocked(
                         dir,
                         { DataStore.configurationStore.restore(it).success },
                         { RestoreCoordinator.installSagerExport(it) },
                     )
+                }
+                val recoveryFailed = ApplyService.recoveryFailure(request, generation, recovery)
+                if (recoveryFailed != null) {
+                    if (ApplyCoordinator.isCurrent(generation)) data.binder.finishApply(request, generation, recoveryFailed)
+                    return
                 }
                 val failed = ApplyService.validateCommitted(request, generation)
                 if (failed != null) {
@@ -721,12 +732,20 @@ class BaseService {
                         return@launch
                     }
                     try {
-                    withContext(Dispatchers.IO) {
+                    val recovery = withContext(Dispatchers.IO) {
                         RestoreCoordinator.recoverLocked(
                             dir,
                             { DataStore.configurationStore.restore(it).success },
                             { RestoreCoordinator.installSagerExport(it) },
                         )
+                    }
+                    val recoveryFailed = ApplyService.recoveryFailure(request, generation, recovery)
+                    if (recoveryFailed != null) {
+                        if (ApplyCoordinator.isCurrent(generation)) {
+                            data.binder.finishApply(request, generation, recoveryFailed)
+                        }
+                        stopRunner(false, applyErrorMessage(recoveryFailed.errorCode))
+                        return@launch
                     }
                     val failed = ApplyService.validateCommitted(request, generation)
                     if (failed != null) {

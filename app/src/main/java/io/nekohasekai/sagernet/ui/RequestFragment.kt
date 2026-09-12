@@ -9,6 +9,9 @@ import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.RadioGroup
 import android.widget.TextView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
@@ -27,6 +30,9 @@ import io.nekohasekai.sagernet.ktx.onMainDispatcher
 import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
 import io.nekohasekai.sagernet.ktx.runOnLifecycleDispatcher
 import io.nekohasekai.sagernet.utils.PackageCache
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 class RequestFragment : ToolbarFragment(R.layout.layout_request) {
@@ -223,8 +229,12 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
     }
 
     private fun showOutboundPicker(flow: RequestFlowData, match: RequestRuleFactory.MatchKind) {
-        runOnDefaultDispatcher {
-            val routers = SagerDatabase.routerGroupDao.all().filter { it.enabled }
+        val owner = viewLifecycleOwner
+        owner.lifecycleScope.launch {
+            val routers = withContext(Dispatchers.IO) {
+                SagerDatabase.routerGroupDao.all().filter { it.enabled }
+            }
+            if (!RequestOutboundPickerGate.canShow(owner.lifecycle.currentState)) return@launch
             val labels = mutableListOf(
                 getString(R.string.route_bypass),
                 getString(R.string.route_block),
@@ -241,15 +251,21 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
                 kinds.add(RequestRuleFactory.OutboundKind.ROUTER)
                 tags.add(router.stableTag)
             }
-            onMainDispatcher {
-                MaterialAlertDialogBuilder(requireContext())
-                    .setTitle(R.string.request_outbound)
-                    .setItems(labels.toTypedArray()) { _, which ->
-                        confirmSave(flow, match, kinds[which], tags[which], routers.associate { it.stableTag to it.id })
-                    }
-                    .setNegativeButton(android.R.string.cancel, null)
-                    .show()
+            val routersByStableTag = routers.associate { it.stableTag to it.id }
+            val dialog = MaterialAlertDialogBuilder(requireContext())
+                .setTitle(R.string.request_outbound)
+                .setItems(labels.toTypedArray()) { _, which ->
+                    if (!RequestOutboundPickerGate.canShow(owner.lifecycle.currentState)) return@setItems
+                    confirmSave(flow, match, kinds[which], tags[which], routersByStableTag)
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .create()
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_DESTROY) dialog.dismiss()
             }
+            owner.lifecycle.addObserver(observer)
+            dialog.setOnDismissListener { owner.lifecycle.removeObserver(observer) }
+            dialog.show()
         }
     }
 

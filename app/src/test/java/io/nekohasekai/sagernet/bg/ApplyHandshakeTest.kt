@@ -3,6 +3,7 @@ package io.nekohasekai.sagernet.bg
 import io.nekohasekai.sagernet.Key
 import io.nekohasekai.sagernet.database.preference.KeyValuePair
 import io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore
+import io.nekohasekai.sagernet.database.RestoreCoordinator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -195,6 +196,27 @@ class ApplyHandshakeTest {
             listOf(KeyValuePair(Key.PROFILE_ID).put(12L)),
         )
         assertEquals(12L, ok)
+    }
+
+    @Test
+    fun startAndReloadFailWhenRecoveryFails() {
+        for (kind in listOf(CommandKind.START, CommandKind.RELOAD)) {
+            val request = ApplyRequest(kind = kind, targetProfileId = 1L, routerStableTag = null, routerMemberId = null)
+            val failed = ApplyService.recoveryFailure(
+                request,
+                generation = 7L,
+                recovery = RestoreCoordinator.Outcome(
+                    success = false,
+                    phase = RestoreCoordinator.Phase.PREPARED,
+                    error = ApplyErrorCodes.RESTORE_FAILED,
+                ),
+            )
+
+            assertNotNull(failed)
+            assertEquals(CommandOutcome.FAILED, failed!!.outcome)
+            assertEquals(ApplyErrorCodes.RESTORE_FAILED, failed.errorCode)
+            assertFalse(failed.persisted)
+        }
     }
 
     @Test

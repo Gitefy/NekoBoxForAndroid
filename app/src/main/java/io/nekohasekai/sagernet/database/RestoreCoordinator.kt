@@ -286,14 +286,23 @@ object RestoreCoordinator {
             writePhase(dir, Phase.PREPARED)
             if (incomingConfig != null) {
                 if (!restoreConfig(incomingConfig)) {
-                    rollbackBoth(dir, restoreConfig, restoreSagerPrevious)
-                    return Outcome(false, Phase.PREPARED, "CONFIG_RESTORE_FAILED")
+                    val rolledBack = rollbackBoth(dir, restoreConfig, restoreSagerPrevious)
+                    return Outcome(
+                        false,
+                        Phase.PREPARED,
+                        if (rolledBack) "CONFIG_RESTORE_FAILED" else ApplyErrorCodes.RESTORE_FAILED,
+                    )
                 }
                 writePhase(dir, Phase.CONFIG_COMMITTED)
             }
             if (!restoreSagerIncoming()) {
-                rollbackBoth(dir, restoreConfig, restoreSagerPrevious)
-                return Outcome(false, Phase.CONFIG_COMMITTED, "SAGER_RESTORE_FAILED")
+                val failedPhase = readPhase(dir)
+                val rolledBack = rollbackBoth(dir, restoreConfig, restoreSagerPrevious)
+                return Outcome(
+                    false,
+                    failedPhase,
+                    if (rolledBack) "SAGER_RESTORE_FAILED" else ApplyErrorCodes.RESTORE_FAILED,
+                )
             }
             writePhase(dir, Phase.SAGER_COMMITTED)
             writePhase(dir, Phase.COMPLETE)
@@ -352,8 +361,11 @@ object RestoreCoordinator {
                 Outcome(true, Phase.IDLE, null)
             }
             Phase.PREPARED, Phase.CONFIG_COMMITTED -> {
-                rollbackBoth(dir, restoreConfig, restoreSagerPrevious)
-                Outcome(true, Phase.IDLE, "rolled back incomplete $phase")
+                if (rollbackBoth(dir, restoreConfig, restoreSagerPrevious)) {
+                    Outcome(true, Phase.IDLE, "rolled back incomplete $phase")
+                } else {
+                    Outcome(false, phase, ApplyErrorCodes.RESTORE_FAILED)
+                }
             }
             Phase.SAGER_COMMITTED -> {
                 cleanup(dir)
@@ -370,14 +382,22 @@ object RestoreCoordinator {
         dir: File,
         restoreConfig: (List<KeyValuePair>) -> Boolean,
         restoreSagerPrevious: (ByteArray) -> Boolean,
-    ) {
+    ): Boolean {
+        var restored = true
         if (snapshotFile(dir).isFile) {
-            restoreConfig(decodeRows(snapshotFile(dir).readBytes()))
+            val configRestored = runCatching {
+                restoreConfig(decodeRows(snapshotFile(dir).readBytes()))
+            }.getOrDefault(false)
+            restored = configRestored && restored
         }
         if (sagerSnapshotFile(dir).isFile) {
-            restoreSagerPrevious(sagerSnapshotFile(dir).readBytes())
+            val sagerRestored = runCatching {
+                restoreSagerPrevious(sagerSnapshotFile(dir).readBytes())
+            }.getOrDefault(false)
+            restored = sagerRestored && restored
         }
-        cleanup(dir)
+        if (restored) cleanup(dir)
+        return restored
     }
 
     private fun cleanup(dir: File) {

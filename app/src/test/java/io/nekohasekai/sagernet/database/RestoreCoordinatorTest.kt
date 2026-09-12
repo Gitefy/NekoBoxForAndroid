@@ -25,7 +25,7 @@ class RestoreCoordinatorTest {
     }
 
     @Test
-    fun configFailureRollsBackBothSnapshots() {
+    fun configAndRollbackFailurePreservesBothSnapshots() {
         val dir = dir()
         val cfg = mutableListOf("old-cfg")
         val sager = mutableListOf("old-sager")
@@ -45,10 +45,13 @@ class RestoreCoordinatorTest {
             },
         )
         assertFalse(out.success)
+        assertEquals(ApplyErrorCodes.RESTORE_FAILED, out.error)
         assertEquals("old", cfg[0])
         assertEquals("OLD_SAGER", sager[0])
-        assertEquals(RestoreCoordinator.Phase.IDLE, RestoreCoordinator.readPhase(dir))
-        assertFalse(RestoreCoordinator.journalFile(dir).exists())
+        assertEquals(RestoreCoordinator.Phase.PREPARED, RestoreCoordinator.readPhase(dir))
+        assertTrue(RestoreCoordinator.journalFile(dir).isFile)
+        assertTrue(RestoreCoordinator.snapshotFile(dir).isFile)
+        assertTrue(RestoreCoordinator.sagerSnapshotFile(dir).isFile)
     }
 
     @Test
@@ -179,6 +182,50 @@ class RestoreCoordinatorTest {
         } finally {
             permit.close()
         }
+    }
+
+    @Test
+    fun failedConfigRollbackPreservesRecoveryMaterials() {
+        val dir = dir()
+        RestoreCoordinator.snapshotFile(dir).writeBytes(
+            RestoreCoordinator.encodeRows(listOf(row("k", "old"))),
+        )
+        RestoreCoordinator.sagerSnapshotFile(dir).writeBytes("OLD_SAGER".toByteArray())
+        RestoreCoordinator.journalFile(dir).writeText(RestoreCoordinator.Phase.PREPARED.name)
+        var sagerAttempted = false
+
+        val recovered = RestoreCoordinator.recoverLocked(
+            dir,
+            { false },
+            { sagerAttempted = true; true },
+        )
+
+        assertFalse(recovered.success)
+        assertEquals(RestoreCoordinator.Phase.PREPARED, recovered.phase)
+        assertEquals(ApplyErrorCodes.RESTORE_FAILED, recovered.error)
+        assertTrue(sagerAttempted)
+        assertTrue(RestoreCoordinator.journalFile(dir).isFile)
+        assertTrue(RestoreCoordinator.snapshotFile(dir).isFile)
+        assertTrue(RestoreCoordinator.sagerSnapshotFile(dir).isFile)
+    }
+
+    @Test
+    fun failedSagerRollbackPreservesRecoveryMaterials() {
+        val dir = dir()
+        RestoreCoordinator.snapshotFile(dir).writeBytes(
+            RestoreCoordinator.encodeRows(listOf(row("k", "old"))),
+        )
+        RestoreCoordinator.sagerSnapshotFile(dir).writeBytes("OLD_SAGER".toByteArray())
+        RestoreCoordinator.journalFile(dir).writeText(RestoreCoordinator.Phase.CONFIG_COMMITTED.name)
+
+        val recovered = RestoreCoordinator.recoverLocked(dir, { true }, { false })
+
+        assertFalse(recovered.success)
+        assertEquals(RestoreCoordinator.Phase.CONFIG_COMMITTED, recovered.phase)
+        assertEquals(ApplyErrorCodes.RESTORE_FAILED, recovered.error)
+        assertTrue(RestoreCoordinator.journalFile(dir).isFile)
+        assertTrue(RestoreCoordinator.snapshotFile(dir).isFile)
+        assertTrue(RestoreCoordinator.sagerSnapshotFile(dir).isFile)
     }
 
     @Test
