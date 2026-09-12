@@ -1,9 +1,15 @@
 package io.nekohasekai.sagernet.database
 
 object RequestRuleApply {
-    enum class Outcome { PERSIST_FAILED, RELOAD_FAILED, APPLIED }
+    enum class Outcome { PERSIST_FAILED, RELOAD_FAILED, APPLIED, SAVED_NOT_APPLIED }
 
     data class Result(val outcome: Outcome, val persisted: Boolean)
+
+    suspend fun saveOnly(persist: suspend () -> Boolean): Result {
+        val ok = persist()
+        if (!ok) return Result(Outcome.PERSIST_FAILED, persisted = false)
+        return Result(Outcome.SAVED_NOT_APPLIED, persisted = true)
+    }
 
     suspend fun saveAndApply(
         persist: suspend () -> Boolean,

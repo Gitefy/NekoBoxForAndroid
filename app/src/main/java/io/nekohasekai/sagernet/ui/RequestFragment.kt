@@ -25,6 +25,7 @@ import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.ktx.FixedLinearLayoutManager
 import io.nekohasekai.sagernet.ktx.onMainDispatcher
 import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
+import io.nekohasekai.sagernet.ktx.runOnLifecycleDispatcher
 import io.nekohasekai.sagernet.utils.PackageCache
 import java.util.Locale
 
@@ -268,36 +269,53 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
             routerStableTag = routerTag,
             routersByStableTag = routers,
         ) ?: return
+        val persist: suspend () -> Boolean = {
+            runCatching {
+                ProfileManager.createRule(draft.toRuleEntity())
+                true
+            }.getOrDefault(false)
+        }
         MaterialAlertDialogBuilder(requireContext())
             .setTitle(R.string.request_save_apply)
             .setMessage(draft.name)
-            .setPositiveButton(R.string.request_save_apply) { _, _ ->
-                runOnDefaultDispatcher {
-                    val result = RequestRuleApply.saveAndApply(
-                        persist = {
-                            runCatching {
-                                ProfileManager.createRule(draft.toRuleEntity())
-                                true
-                            }.getOrDefault(false)
-                        },
-                        reload = {
-                            RequestReloadAck.awaitApplied(
-                                send = { request -> SagerNet.reloadServiceFully(request) },
-                            )
-                        },
-                    )
-                    onMainDispatcher {
-                        val msg = when (result.outcome) {
-                            RequestRuleApply.Outcome.APPLIED -> getString(R.string.request_rule_applied)
-                            RequestRuleApply.Outcome.RELOAD_FAILED -> getString(R.string.request_rule_saved_reload_failed)
-                            RequestRuleApply.Outcome.PERSIST_FAILED -> getString(R.string.request_rule_persist_failed)
-                        }
-                        (activity as? MainActivity)?.snackbar(msg)?.show()
-                    }
-                }
+            .setPositiveButton(R.string.request_save_only) { _, _ ->
+                persistRule(persist, apply = false)
+            }
+            .setNeutralButton(R.string.request_save_apply) { _, _ ->
+                persistRule(persist, apply = true)
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
+    }
+
+    private fun persistRule(persist: suspend () -> Boolean, apply: Boolean) {
+        runOnLifecycleDispatcher {
+            val result = if (apply) {
+                RequestRuleApply.saveAndApply(
+                    persist = persist,
+                    reload = {
+                        RequestReloadAck.awaitApplied(
+                            send = { request -> SagerNet.reloadServiceFully(request) },
+                        )
+                    },
+                )
+            } else {
+                RequestRuleApply.saveOnly(persist)
+            }
+            onMainDispatcher {
+                if (!isAdded || view == null) return@onMainDispatcher
+                val msg = when (result.outcome) {
+                    RequestRuleApply.Outcome.SAVED_NOT_APPLIED ->
+                        getString(R.string.request_rule_saved_not_applied)
+                    RequestRuleApply.Outcome.APPLIED -> getString(R.string.request_rule_applied)
+                    RequestRuleApply.Outcome.RELOAD_FAILED ->
+                        getString(R.string.request_rule_saved_reload_failed)
+                    RequestRuleApply.Outcome.PERSIST_FAILED ->
+                        getString(R.string.request_rule_persist_failed)
+                }
+                (activity as? MainActivity)?.snackbar(msg)?.show()
+            }
+        }
     }
 
     companion object {

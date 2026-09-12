@@ -106,7 +106,9 @@
     <string name="request_match_app">当前应用</string>
     <string name="request_match_ip">目标 IP</string>
     <string name="request_outbound">出口</string>
+    <string name="request_save_only">仅保存</string>
     <string name="request_save_apply">保存并应用</string>
+    <string name="request_rule_saved_not_applied">规则已保存，尚未应用</string>
     <string name="request_rule_applied">规则已保存并应用</string>
     <string name="request_rule_saved_reload_failed">规则已保存，但重新加载失败</string>
     <string name="request_rule_persist_failed">规则保存失败</string>

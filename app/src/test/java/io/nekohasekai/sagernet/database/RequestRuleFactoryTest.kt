@@ -74,6 +74,22 @@ class RequestRuleFactoryTest {
 
 class RequestRuleApplyTest {
     @Test
+    fun saveOnlySuccessPersistsOnceWithoutReload() = runBlocking {
+        var persists = 0
+        val result = RequestRuleApply.saveOnly(persist = { persists++; true })
+        assertEquals(RequestRuleApply.Outcome.SAVED_NOT_APPLIED, result.outcome)
+        assertTrue(result.persisted)
+        assertEquals(1, persists)
+    }
+
+    @Test
+    fun saveOnlyPersistFailureDoesNotReload() = runBlocking {
+        val result = RequestRuleApply.saveOnly(persist = { false })
+        assertEquals(RequestRuleApply.Outcome.PERSIST_FAILED, result.outcome)
+        assertFalse(result.persisted)
+    }
+
+    @Test
     fun persistenceFailureDoesNotReload() = runBlocking {
         var reloads = 0
         val result = RequestRuleApply.saveAndApply(
