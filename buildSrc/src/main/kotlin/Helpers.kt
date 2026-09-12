@@ -168,8 +168,12 @@ fun Project.setupApp() {
     android.apply {
         defaultConfig {
             applicationId = pkgName
+            resValue("string", "shortcut_target_package", pkgName)
             versionCode = verCode
             versionName = verName
+        }
+        buildTypes.getByName("debug") {
+            resValue("string", "shortcut_target_package", "$pkgName.debug")
         }
     }
     setupAppCommon()

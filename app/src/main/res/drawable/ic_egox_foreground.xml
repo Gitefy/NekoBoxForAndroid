@@ -1,57 +1,13 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- EgoX outer ring -->
     <path
-        android:pathData="M 54 22 C 71.67 22 86 36.33 86 54 C 86 71.67 71.67 86 54 86 C 36.33 86 22 71.67 22 54 C 22 36.33 36.33 22 54 22 Z"
-        android:strokeWidth="1.8"
-        android:strokeAlpha="0.42">
-        <aapt:attr name="android:strokeColor">
-            <gradient
-                android:type="linear"
-                android:startX="22"
-                android:startY="22"
-                android:endX="86"
-                android:endY="86">
-                <item android:color="#FF00D6A0" android:offset="0.0" />
-                <item android:color="#FF0EA5E9" android:offset="1.0" />
-            </gradient>
-        </aapt:attr>
-    </path>
-    <!-- EgoX central X — bold geometric mark -->
-    <path
-        android:pathData="M 40 37 L 48.8 37 L 54 46.2 L 59.2 37 L 68 37 L 58.2 54 L 68 71 L 59.2 71 L 54 61.8 L 48.8 71 L 40 71 L 49.8 54 Z">
-        <aapt:attr name="android:fillColor">
-            <gradient
-                android:type="linear"
-                android:startX="40"
-                android:startY="37"
-                android:endX="68"
-                android:endY="71">
-                <item android:color="#FF5EEAD4" android:offset="0.0" />
-                <item android:color="#FF00D6A0" android:offset="0.45" />
-                <item android:color="#FF0EA5E9" android:offset="1.0" />
-            </gradient>
-        </aapt:attr>
-    </path>
-    <!-- Inner diamond highlight -->
-    <path
-        android:pathData="M 54 50.5 L 57.5 54 L 54 57.5 L 50.5 54 Z"
-        android:fillColor="#FFFFFFFF" />
-    <!-- Orbital sparks -->
-    <path
-        android:pathData="M 54 18 L 55.5 21 L 54 24 L 52.5 21 Z"
-        android:fillColor="#FF5EEAD4" />
-    <path
-        android:pathData="M 90 54 L 87 55.5 L 84 54 L 87 52.5 Z"
-        android:fillColor="#FF38BDF8" />
-    <path
-        android:pathData="M 54 90 L 52.5 87 L 54 84 L 55.5 87 Z"
-        android:fillColor="#FF0EA5E9" />
-    <path
-        android:pathData="M 18 54 L 21 52.5 L 24 54 L 21 55.5 Z"
-        android:fillColor="#FF00D6A0" />
+        android:pathData="M 34,52 L 74,52 C 73,40 65,33 54,33 C 41,33 32,42 32,54 C 32,67 41,75 54,75 C 62,75 69,72 73,67"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#F3EEE4"
+        android:strokeWidth="9"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
 </vector>

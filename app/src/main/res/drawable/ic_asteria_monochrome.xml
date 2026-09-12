@@ -10,7 +10,7 @@
         android:strokeWidth="2"
         android:strokeColor="#FFFFFF" />
 
-    <!-- Celestial Core / 8-Point Asteria Star -->
+    <!-- Legacy fallback asset; active launcher uses the Ego mark. -->
     <path
         android:pathData="M 54 27 L 57.5 45.5 L 75 42 L 61 54 L 75 66 L 57.5 62.5 L 54 81 L 50.5 62.5 L 33 66 L 47 54 L 33 42 L 50.5 45.5 Z"
         android:fillColor="#FFFFFF" />

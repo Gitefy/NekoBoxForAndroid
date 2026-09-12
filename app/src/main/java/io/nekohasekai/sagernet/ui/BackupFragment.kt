@@ -73,7 +73,7 @@ class BackupFragment : ToolbarFragment(R.layout.layout_backup) {
     }
 
     private fun backupFileName() =
-        "asteria_backup_${SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.ROOT).format(Date())}.json"
+        "egox_backup_${SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.ROOT).format(Date())}.json"
 
     var content = ""
     private val exportSettings = registerForActivityResult(ActivityResultContracts.CreateDocument()) { data ->

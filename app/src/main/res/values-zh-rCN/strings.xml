@@ -326,7 +326,7 @@
     <string name="connection_test_refused">连接重置</string>
     <string name="connection_test_timeout_error">超时</string>
     <string name="connection_test_unreachable">不可达</string>
-    <string name="tile_title">Asteria</string>
+    <string name="tile_title">EgoX</string>
     <string name="append_http_proxy">追加 HTTP 代理至 VPN</string>
     <string name="append_http_proxy_sum">浏览器 / 一些支持的应用 将直接使用 HTTP 代理, 而不经过虚拟网卡设备 (Android 10+)</string>
     <string name="http_proxy_bypass">HTTP 代理绕过列表</string>
