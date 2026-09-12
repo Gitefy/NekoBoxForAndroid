@@ -1,5 +1,6 @@
 package io.nekohasekai.sagernet.database
 
+import com.google.gson.JsonParser
 import io.nekohasekai.sagernet.bg.ApplyErrorCodes
 import io.nekohasekai.sagernet.database.preference.KeyValuePair
 import io.nekohasekai.sagernet.fmt.BackupSerializer
@@ -53,6 +54,20 @@ object RestoreCoordinator {
     fun restoreInProgressError(): String = ApplyErrorCodes.RESTORE_IN_PROGRESS
 
     data class Outcome(val success: Boolean, val phase: Phase, val error: String? = null)
+
+    internal data class InternalSagerSnapshot(
+        val groups: List<ProxyGroup>,
+        val profiles: List<ProxyEntity>,
+        val routers: List<RouterGroup>,
+        val members: List<RouterMember>,
+        val sources: List<RouterGroupSource>,
+        val rules: List<RuleEntity>,
+    )
+
+    private data class RollbackResult(
+        val restored: Boolean,
+        val cleaned: Boolean,
+    )
 
     class Permit internal constructor(
         private val dir: File,
@@ -237,19 +252,7 @@ object RestoreCoordinator {
         BackupSerializer.exportDatabase(SagerDatabase.instance, true, true).toString().toByteArray(Charsets.UTF_8)
 
     fun installSagerExport(bytes: ByteArray): Boolean {
-        if (bytes.isEmpty()) return true
-        return try {
-            val content = JSONObject(String(bytes, Charsets.UTF_8))
-            val groups = if (content.has("groups")) BackupSerializer.getParcelableArray(content, "groups", ProxyGroup.CREATOR) else emptyList()
-            val profiles = if (content.has("profiles")) BackupSerializer.getParcelableArray(content, "profiles", ProxyEntity.CREATOR) else emptyList()
-            val routers = if (content.has("routerGroups")) BackupSerializer.getParcelableArray(content, "routerGroups", RouterGroup.CREATOR) else emptyList()
-            val members = if (content.has("routerMembers")) BackupSerializer.getParcelableArray(content, "routerMembers", RouterMember.CREATOR) else emptyList()
-            val sources = if (content.has("routerSources")) BackupSerializer.getParcelableArray(content, "routerSources", RouterGroupSource.CREATOR) else emptyList()
-            val rules = if (content.has("rules")) {
-                BackupSerializer.getParcelableArray(content, "rules") { parcel ->
-                    ParcelizeBridge.createRule(parcel)
-                }
-            } else emptyList<RuleEntity>()
+        return installSagerExport(bytes) { snapshot ->
             SagerDatabase.instance.runInTransaction {
                 SagerDatabase.routerGroupSourceDao.reset()
                 SagerDatabase.routerMemberDao.reset()
@@ -257,17 +260,64 @@ object RestoreCoordinator {
                 SagerDatabase.proxyDao.reset()
                 SagerDatabase.groupDao.reset()
                 SagerDatabase.rulesDao.reset()
-                if (groups.isNotEmpty()) SagerDatabase.groupDao.insert(groups)
-                if (profiles.isNotEmpty()) SagerDatabase.proxyDao.insert(profiles)
-                if (routers.isNotEmpty()) SagerDatabase.routerGroupDao.insert(routers)
-                if (members.isNotEmpty()) SagerDatabase.routerMemberDao.insert(members)
-                if (sources.isNotEmpty()) SagerDatabase.routerGroupSourceDao.insert(sources)
-                if (rules.isNotEmpty()) SagerDatabase.rulesDao.insert(rules)
+                if (snapshot.groups.isNotEmpty()) SagerDatabase.groupDao.insert(snapshot.groups)
+                if (snapshot.profiles.isNotEmpty()) SagerDatabase.proxyDao.insert(snapshot.profiles)
+                if (snapshot.routers.isNotEmpty()) SagerDatabase.routerGroupDao.insert(snapshot.routers)
+                if (snapshot.members.isNotEmpty()) SagerDatabase.routerMemberDao.insert(snapshot.members)
+                if (snapshot.sources.isNotEmpty()) SagerDatabase.routerGroupSourceDao.insert(snapshot.sources)
+                if (snapshot.rules.isNotEmpty()) SagerDatabase.rulesDao.insert(snapshot.rules)
             }
             true
-        } catch (_: Throwable) {
-            false
         }
+    }
+
+    internal fun installSagerExport(
+        bytes: ByteArray,
+        install: (InternalSagerSnapshot) -> Boolean,
+    ): Boolean {
+        val snapshot = runCatching { decodeInternalSagerSnapshot(bytes) }.getOrNull() ?: return false
+        return runCatching { install(snapshot) }.getOrDefault(false)
+    }
+
+    private fun decodeInternalSagerSnapshot(bytes: ByteArray): InternalSagerSnapshot {
+        require(bytes.isNotEmpty()) { "empty internal Sager snapshot" }
+        val text = String(bytes, Charsets.UTF_8)
+        val root = JsonParser.parseString(text)
+        require(root.isJsonObject) { "internal Sager snapshot must be a JSON object" }
+        val structure = root.asJsonObject
+        val version = structure.get("version")
+        require(version?.isJsonPrimitive == true && version.asJsonPrimitive.isNumber &&
+            version.asInt == BackupSerializer.BACKUP_VERSION) {
+            "invalid internal Sager snapshot version"
+        }
+        val requiredArrays = listOf(
+            "profiles",
+            "groups",
+            "routerGroups",
+            "routerMembers",
+            "routerSources",
+            "rules",
+            "routerRuleRefs",
+        )
+        requiredArrays.forEach { section ->
+            require(structure.get(section)?.isJsonArray == true) {
+                "missing or invalid internal Sager snapshot section: $section"
+            }
+        }
+        if (requiredArrays.all { structure.getAsJsonArray(it).size() == 0 }) {
+            return InternalSagerSnapshot(emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList())
+        }
+        val content = JSONObject(text)
+        val groups = BackupSerializer.getParcelableArray(content, "groups", ProxyGroup.CREATOR)
+        val profiles = BackupSerializer.getParcelableArray(content, "profiles", ProxyEntity.CREATOR)
+        val routers = BackupSerializer.getParcelableArray(content, "routerGroups", RouterGroup.CREATOR)
+        val members = BackupSerializer.getParcelableArray(content, "routerMembers", RouterMember.CREATOR)
+        val sources = BackupSerializer.getParcelableArray(content, "routerSources", RouterGroupSource.CREATOR)
+        val rules = BackupSerializer.getParcelableArray(content, "rules") { parcel ->
+            ParcelizeBridge.createRule(parcel)
+        }
+        BackupSerializer.getRouterRuleReferenceList(content)
+        return InternalSagerSnapshot(groups, profiles, routers, members, sources, rules)
     }
 
     fun commit(
@@ -278,11 +328,12 @@ object RestoreCoordinator {
         restoreConfig: (List<KeyValuePair>) -> Boolean,
         restoreSagerIncoming: () -> Boolean,
         restoreSagerPrevious: (ByteArray) -> Boolean,
+        deleteFile: (File) -> Boolean = { it.delete() },
     ): Outcome {
         val acquired = acquirePermitBlocking(dir, LockKind.USER_RESTORE)
         val permit = acquired.permit ?: return Outcome(false, readPhase(dir), acquired.error ?: ApplyErrorCodes.RESTORE_IN_PROGRESS)
         permit.use {
-            val recovery = recoverLocked(dir, restoreConfig, restoreSagerPrevious)
+            val recovery = recoverLocked(dir, restoreConfig, restoreSagerPrevious, deleteFile)
             if (!recovery.success) return recovery
             val previousConfig = capturePreviousConfig()
             val previousSager = capturePreviousSager()
@@ -291,28 +342,31 @@ object RestoreCoordinator {
             writePhase(dir, Phase.PREPARED)
             if (incomingConfig != null) {
                 if (!restoreConfig(incomingConfig)) {
-                    val rolledBack = rollbackBoth(dir, restoreConfig, restoreSagerPrevious)
+                    val rollback = rollbackBoth(dir, restoreConfig, restoreSagerPrevious, deleteFile)
                     return Outcome(
                         false,
-                        Phase.PREPARED,
-                        if (rolledBack) "CONFIG_RESTORE_FAILED" else ApplyErrorCodes.RESTORE_FAILED,
+                        if (rollback.cleaned) Phase.PREPARED else readPhase(dir),
+                        if (rollback.restored && rollback.cleaned) "CONFIG_RESTORE_FAILED" else ApplyErrorCodes.RESTORE_FAILED,
                     )
                 }
                 writePhase(dir, Phase.CONFIG_COMMITTED)
             }
             if (!restoreSagerIncoming()) {
                 val failedPhase = readPhase(dir)
-                val rolledBack = rollbackBoth(dir, restoreConfig, restoreSagerPrevious)
+                val rollback = rollbackBoth(dir, restoreConfig, restoreSagerPrevious, deleteFile)
                 return Outcome(
                     false,
-                    failedPhase,
-                    if (rolledBack) "SAGER_RESTORE_FAILED" else ApplyErrorCodes.RESTORE_FAILED,
+                    if (rollback.cleaned) failedPhase else readPhase(dir),
+                    if (rollback.restored && rollback.cleaned) "SAGER_RESTORE_FAILED" else ApplyErrorCodes.RESTORE_FAILED,
                 )
             }
             writePhase(dir, Phase.SAGER_COMMITTED)
             writePhase(dir, Phase.COMPLETE)
-            cleanup(dir)
-            return Outcome(true, Phase.COMPLETE, null)
+            return if (cleanup(dir, deleteFile)) {
+                Outcome(true, Phase.COMPLETE, null)
+            } else {
+                Outcome(false, Phase.COMPLETE, ApplyErrorCodes.RESTORE_FAILED)
+            }
         }
     }
 
@@ -353,6 +407,7 @@ object RestoreCoordinator {
         dir: File,
         restoreConfig: (List<KeyValuePair>) -> Boolean,
         restoreSagerPrevious: (ByteArray) -> Boolean,
+        deleteFile: (File) -> Boolean = { it.delete() },
     ): Outcome {
         val pid = diagnosticPid()
         val process = currentProcessName()
@@ -370,19 +425,27 @@ object RestoreCoordinator {
                 }
             }
             Phase.COMPLETE -> {
-                cleanup(dir)
-                Outcome(true, Phase.IDLE, null)
+                if (cleanup(dir, deleteFile)) {
+                    Outcome(true, Phase.IDLE, null)
+                } else {
+                    Outcome(false, Phase.COMPLETE, ApplyErrorCodes.RESTORE_FAILED)
+                }
             }
             Phase.PREPARED, Phase.CONFIG_COMMITTED -> {
-                if (rollbackBoth(dir, restoreConfig, restoreSagerPrevious)) {
+                val rollback = rollbackBoth(dir, restoreConfig, restoreSagerPrevious, deleteFile)
+                if (rollback.restored && rollback.cleaned) {
                     Outcome(true, Phase.IDLE, "rolled back incomplete $phase")
                 } else {
-                    Outcome(false, phase, ApplyErrorCodes.RESTORE_FAILED)
+                    Outcome(false, if (rollback.restored) readPhase(dir) else phase, ApplyErrorCodes.RESTORE_FAILED)
                 }
             }
             Phase.SAGER_COMMITTED -> {
-                cleanup(dir)
-                Outcome(true, Phase.COMPLETE, null)
+                val markedComplete = runCatching { writePhase(dir, Phase.COMPLETE) }.isSuccess
+                if (markedComplete && cleanup(dir, deleteFile)) {
+                    Outcome(true, Phase.COMPLETE, null)
+                } else {
+                    Outcome(false, readPhase(dir), ApplyErrorCodes.RESTORE_FAILED)
+                }
             }
         }
         trace(
@@ -395,26 +458,33 @@ object RestoreCoordinator {
         dir: File,
         restoreConfig: (List<KeyValuePair>) -> Boolean,
         restoreSagerPrevious: (ByteArray) -> Boolean,
-    ): Boolean {
+        deleteFile: (File) -> Boolean,
+    ): RollbackResult {
         val configSnapshot = snapshotFile(dir)
         val sagerSnapshot = sagerSnapshotFile(dir)
-        if (!configSnapshot.isFile || !sagerSnapshot.isFile) return false
+        if (!configSnapshot.isFile || !sagerSnapshot.isFile) return RollbackResult(false, false)
         val previousConfig = runCatching {
             decodeRows(configSnapshot.readBytes())
-        }.getOrNull() ?: return false
+        }.getOrNull() ?: return RollbackResult(false, false)
         val previousSager = runCatching {
             sagerSnapshot.readBytes()
-        }.getOrNull() ?: return false
+        }.getOrNull() ?: return RollbackResult(false, false)
         val configRestored = runCatching { restoreConfig(previousConfig) }.getOrDefault(false)
         val sagerRestored = runCatching { restoreSagerPrevious(previousSager) }.getOrDefault(false)
         val restored = configRestored && sagerRestored
-        if (restored) cleanup(dir)
-        return restored
+        if (!restored) return RollbackResult(false, false)
+        if (runCatching { writePhase(dir, Phase.COMPLETE) }.isFailure) {
+            return RollbackResult(true, false)
+        }
+        return RollbackResult(true, cleanup(dir, deleteFile))
     }
 
-    private fun cleanup(dir: File) {
-        journalFile(dir).delete()
-        snapshotFile(dir).delete()
-        sagerSnapshotFile(dir).delete()
+    private fun cleanup(dir: File, deleteFile: (File) -> Boolean): Boolean {
+        for (file in listOf(snapshotFile(dir), sagerSnapshotFile(dir), journalFile(dir))) {
+            if (!file.exists()) continue
+            val deleted = runCatching { deleteFile(file) }.getOrDefault(false)
+            if (!deleted || file.exists()) return false
+        }
+        return true
     }
 }
