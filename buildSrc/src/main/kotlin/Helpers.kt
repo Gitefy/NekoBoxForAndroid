@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.gradle.AbstractAppExtension
 import com.android.build.gradle.internal.api.BaseVariantOutputImpl
@@ -60,6 +62,7 @@ fun Project.setupCommon() {
         }
         (android as ExtensionAware).extensions.getByName<KotlinJvmOptions>("kotlinOptions").apply {
             jvmTarget = JavaVersion.VERSION_1_8.toString()
+            suppressWarnings = true
         }
         lint {
             showAll = true

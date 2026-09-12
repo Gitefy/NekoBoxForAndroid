@@ -42,7 +42,10 @@ public class SingBoxOptions {
         }
 
         public Map<String, Object> asMap() {
-            return gsonSingbox.fromJson(gsonSingbox.toJson(this), Map.class);
+            return gsonSingbox.fromJson(
+                    gsonSingbox.toJson(this),
+                    new TypeToken<Map<String, Object>>() { }.getType()
+            );
         }
 
     }
@@ -57,7 +60,10 @@ public class SingBoxOptions {
         }
 
         public Map<String, Object> getBasicMap() {
-            Map<String, Object> map = gsonSingbox.fromJson(config, Map.class);
+            Map<String, Object> map = gsonSingbox.fromJson(
+                    config,
+                    new TypeToken<Map<String, Object>>() { }.getType()
+            );
             if (map == null) {
                 map = new HashMap<>();
             }
@@ -67,6 +73,7 @@ public class SingBoxOptions {
 
     // 自定义序列化器
     public static class SingBoxOptionSerializer implements JsonSerializer<SingBoxOption> {
+        @SuppressWarnings("unchecked")
         @Override
         public JsonElement serialize(SingBoxOption src, Type typeOfSrc, JsonSerializationContext context) {
             // 拿到原始的 delegate（默认序列化器）
@@ -83,7 +90,10 @@ public class SingBoxOptions {
             if (src instanceof CustomSingBoxOption) {
                 map = ((CustomSingBoxOption) src).getBasicMap();
             } else {
-                map = gsonSingbox.fromJson(((TypeAdapter<SingBoxOption>) delegate).toJson(src), Map.class);
+                map = gsonSingbox.fromJson(
+                        ((TypeAdapter<SingBoxOption>) delegate).toJson(src),
+                        new TypeToken<Map<String, Object>>() { }.getType()
+                );
             }
             if (src._hack_config_map != null && !src._hack_config_map.isEmpty()) {
                 Util.INSTANCE.mergeMap(map, src._hack_config_map);
