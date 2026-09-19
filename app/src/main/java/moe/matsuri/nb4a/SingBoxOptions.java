@@ -20,6 +20,10 @@ import moe.matsuri.nb4a.utils.Util;
 
 public class SingBoxOptions {
 
+    private static final Type MAP_TYPE = TypeToken.getParameterized(
+            Map.class, String.class, Object.class
+    ).getType();
+
     // base
 
     private static final Gson gsonSingbox = new GsonBuilder()
@@ -44,7 +48,7 @@ public class SingBoxOptions {
         public Map<String, Object> asMap() {
             return gsonSingbox.fromJson(
                     gsonSingbox.toJson(this),
-                    new TypeToken<Map<String, Object>>() { }.getType()
+                    MAP_TYPE
             );
         }
 
@@ -62,7 +66,7 @@ public class SingBoxOptions {
         public Map<String, Object> getBasicMap() {
             Map<String, Object> map = gsonSingbox.fromJson(
                     config,
-                    new TypeToken<Map<String, Object>>() { }.getType()
+                    MAP_TYPE
             );
             if (map == null) {
                 map = new HashMap<>();
@@ -92,7 +96,7 @@ public class SingBoxOptions {
             } else {
                 map = gsonSingbox.fromJson(
                         ((TypeAdapter<SingBoxOption>) delegate).toJson(src),
-                        new TypeToken<Map<String, Object>>() { }.getType()
+                        MAP_TYPE
                 );
             }
             if (src._hack_config_map != null && !src._hack_config_map.isEmpty()) {

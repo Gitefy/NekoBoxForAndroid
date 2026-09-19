@@ -583,6 +583,7 @@ class BaseService {
                             ApplyResult(req.requestId, CommandOutcome.STOPPED, gen, true, null),
                         )
                     }
+                    BootReceiver.enabled = DataStore.persistAcrossReboot
                     stopSelf()
                 }
             }
@@ -661,7 +662,7 @@ class BaseService {
             val data = data
             if (data.state != State.Stopped) return Service.START_NOT_STICKY
             this as Context
-            BootReceiver.enabled = DataStore.persistAcrossReboot
+            BootReceiver.enabled = true
             if (!data.closeReceiverRegistered) {
                 val filter = IntentFilter().apply {
                     addAction(Action.APPLY)
@@ -838,7 +839,7 @@ class BaseService {
                 }
             }
             data.connectingJob?.start()
-            return Service.START_NOT_STICKY
+            return Service.START_REDELIVER_INTENT
         }
     }
 

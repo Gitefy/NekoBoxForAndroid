@@ -64,8 +64,8 @@ object RouterReconciler {
         val currentById = validNodes.associateBy { it.id }
         val currentByStableKey = validNodes.asSequence()
             .filter { !it.stableId.isNullOrBlank() }
-            .distinctBy { StableNodeKey(it.subscriptionId, it.stableId!!) }
-            .associateBy { StableNodeKey(it.subscriptionId, it.stableId!!) }
+            .distinctBy { StableNodeKey(it.sourceGroupId, it.stableId!!) }
+            .associateBy { StableNodeKey(it.sourceGroupId, it.stableId!!) }
         val matchedByGroup = RouterMatcher.match(
             validNodes,
             groupList.map { RouterMatchRequest(it.routerId, it.sourceGroupIds, it.filter) },
@@ -81,7 +81,7 @@ object RouterReconciler {
                     val previous = indexed.value
                     val current = currentById[previous.proxyId]
                         ?.takeIf {
-                            it.subscriptionId == previous.sourceGroupId && it.id in matchedIdSet &&
+                            it.sourceGroupId == previous.sourceGroupId && it.id in matchedIdSet &&
                                 routerStableIdOrFallback(it.stableId, it.id) == previous.stableId
                         }
                         ?: currentByStableKey[StableNodeKey(previous.sourceGroupId, previous.stableId)]
@@ -90,7 +90,7 @@ object RouterReconciler {
                         previous.copy(
                             proxyId = node.id,
                             stableId = routerStableIdOrFallback(node.stableId, node.id),
-                            sourceGroupId = node.subscriptionId,
+                            sourceGroupId = node.sourceGroupId,
                         )
                     }
                 }
@@ -105,7 +105,7 @@ object RouterReconciler {
                     RouterMemberSnapshot(
                         proxyId = node.id,
                         stableId = routerStableIdOrFallback(node.stableId, node.id),
-                        sourceGroupId = node.subscriptionId,
+                        sourceGroupId = node.sourceGroupId,
                     )
                 }
                 .mapIndexed { index, member -> member.copy(userOrder = nextOrder + index + 1) }

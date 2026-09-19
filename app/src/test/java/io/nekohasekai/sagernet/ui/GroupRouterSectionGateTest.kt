@@ -20,4 +20,11 @@ class GroupRouterSectionGateTest {
         assertFalse(GroupRouterSectionGate.isCurrentGeneration(started = 1, current = generation))
         assertTrue(GroupRouterSectionGate.isCurrentGeneration(started = 2, current = generation))
     }
+
+    @Test
+    fun detachedHolderCannotApplyStatusText() {
+        assertFalse(GroupRouterSectionGate.canApplyHolderUi(fragmentAdded = false, boundGroupId = 1L, currentGroupId = 1L))
+        assertFalse(GroupRouterSectionGate.canApplyHolderUi(fragmentAdded = true, boundGroupId = 2L, currentGroupId = 1L))
+        assertTrue(GroupRouterSectionGate.canApplyHolderUi(fragmentAdded = true, boundGroupId = 1L, currentGroupId = 1L))
+    }
 }

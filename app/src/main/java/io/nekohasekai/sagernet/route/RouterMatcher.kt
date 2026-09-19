@@ -4,7 +4,7 @@ data class RouterNodeSnapshot(
     val id: Long,
     val stableId: String? = null,
     val name: String,
-    val subscriptionId: Long? = null,
+    val sourceGroupId: Long? = null,
     val enabled: Boolean = true,
     val available: Boolean = true,
 )
@@ -20,7 +20,7 @@ object RouterMatcher {
         nodes: Iterable<RouterNodeSnapshot>,
         requests: Iterable<RouterMatchRequest>,
     ): Map<Long, List<Long>> = requests.associate { request ->
-        val nodesBySource = nodes.filter { it.enabled && it.available }.groupBy { it.subscriptionId }
+        val nodesBySource = nodes.filter { it.enabled && it.available }.groupBy { it.sourceGroupId }
         request.routerId to request.sourceGroupIds.asSequence().distinct()
             .flatMap { sourceId -> nodesBySource[sourceId].orEmpty().asSequence() }
             .filter { node -> request.filter.include?.containsMatchIn(node.name) != false }

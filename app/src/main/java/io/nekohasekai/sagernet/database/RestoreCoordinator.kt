@@ -1,5 +1,6 @@
 package io.nekohasekai.sagernet.database
 
+import com.google.gson.JsonParser
 import io.nekohasekai.sagernet.bg.ApplyErrorCodes
 import io.nekohasekai.sagernet.database.preference.KeyValuePair
 import io.nekohasekai.sagernet.fmt.BackupSerializer
@@ -371,13 +372,36 @@ object RestoreCoordinator {
         restoreConfig: (List<KeyValuePair>) -> Boolean,
         restoreSagerPrevious: (ByteArray) -> Boolean,
     ) {
-        if (snapshotFile(dir).isFile) {
-            restoreConfig(decodeRows(snapshotFile(dir).readBytes()))
+        val configFile = snapshotFile(dir)
+        if (configFile.isFile) {
+            val rows = runCatching { decodeRows(configFile.readBytes()) }.getOrNull()
+            if (rows.isNullOrEmpty()) {
+                Logs.w("restore rollback skipped empty or invalid config snapshot")
+            } else {
+                runCatching { restoreConfig(rows) }.onFailure { Logs.w(it) }
+            }
         }
-        if (sagerSnapshotFile(dir).isFile) {
-            restoreSagerPrevious(sagerSnapshotFile(dir).readBytes())
+        val sagerFile = sagerSnapshotFile(dir)
+        if (sagerFile.isFile) {
+            val bytes = runCatching { sagerFile.readBytes() }.getOrNull()
+            if (bytes == null || !hasUsableSagerSnapshot(bytes)) {
+                Logs.w("restore rollback skipped empty or invalid sager snapshot")
+            } else {
+                runCatching { restoreSagerPrevious(bytes) }.onFailure { Logs.w(it) }
+            }
         }
         cleanup(dir)
+    }
+
+    internal fun hasUsableSagerSnapshot(bytes: ByteArray): Boolean {
+        if (bytes.isEmpty()) return false
+        return runCatching {
+            val root = JsonParser.parseString(String(bytes, Charsets.UTF_8))
+            if (!root.isJsonObject) return@runCatching false
+            val obj = root.asJsonObject
+            fun count(name: String) = obj.get(name)?.takeIf { it.isJsonArray }?.asJsonArray?.size() ?: 0
+            count("groups") + count("profiles") + count("routerGroups") + count("rules") > 0
+        }.getOrDefault(false)
     }
 
     private fun cleanup(dir: File) {

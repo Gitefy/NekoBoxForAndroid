@@ -60,12 +60,12 @@
     <string name="router_no_available_nodes">No subscription nodes are available.</string>
     <string name="router_manual_unavailable">Automatic Router groups select nodes by latency.</string>
     <string name="router_group_add">New Strategy Group</string>
-    <string name="router_group_add_summary">Combine nodes from one or more subscriptions</string>
+    <string name="router_group_add_summary">Combine nodes from subscriptions and local groups</string>
     <string name="router_group_settings">Edit Strategy Group</string>
     <string name="router_group_name">Group name</string>
     <string name="router_group_enabled">Enabled</string>
     <string name="router_group_mode">Mode</string>
-    <string name="router_group_sources">Subscription sources</string>
+    <string name="router_group_sources">Node sources</string>
     <string name="router_group_include">Include regex (empty means all)</string>
     <string name="router_group_exclude">Exclude regex</string>
     <string name="router_url_test_settings">URL test</string>
@@ -84,7 +84,9 @@
     <string name="router_groups_card_summary">Manage URL-Test automatic latency &amp; manual node groups</string>
     <string name="router_groups_card_summary_with_count">%d strategy groups configured • URL-Test &amp; Manual</string>
     <string name="router_groups_nav_title">Strategy Groups</string>
-    <string name="router_no_sources_selected">No subscriptions selected</string>
+    <string name="router_no_sources_selected">No sources selected</string>
+    <string name="router_source_prefix_subscription">[Sub]</string>
+    <string name="router_source_prefix_group">[Group]</string>
     <string name="router_switch_node">Switch node</string>
     <string name="router_edit_group">Edit Strategy Group</string>
     <string name="router_empty_title">No strategy groups</string>

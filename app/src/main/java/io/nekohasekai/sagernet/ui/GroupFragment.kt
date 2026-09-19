@@ -375,6 +375,7 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group),
                         val profiles = SagerDatabase.proxyDao.getByGroup(selectedGroup.id)
                         val links = profiles.joinToString("\n") { it.toStdLink(compact = true) }
                         onMainDispatcher {
+                            if (!isAdded) return@onMainDispatcher
                             SagerNet.trySetPrimaryClip(links)
                             snackbar(getString(R.string.copy_toast_msg)).show()
                         }
@@ -407,7 +408,7 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group),
 
             itemView.setOnClickListener { }
 
-            editButton.isGone = proxyGroup.ungrouped
+            editButton.isGone = false
             updateButton.isInvisible = proxyGroup.type != GroupType.SUBSCRIPTION
             groupName.text = proxyGroup.displayName()
 
@@ -460,7 +461,7 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group),
 
                 subscriptionUpdateProgress.isVisible = false
                 updateButton.isInvisible = proxyGroup.type != GroupType.SUBSCRIPTION
-                editButton.isGone = proxyGroup.ungrouped
+                editButton.isGone = false
             }
 
             val subscription = proxyGroup.subscription
@@ -538,6 +539,7 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group),
             runOnDefaultDispatcher {
                 val size = SagerDatabase.proxyDao.countByGroup(group.id)
                 onMainDispatcher {
+                    if (!GroupRouterSectionGate.canApplyHolderUi(isAdded, proxyGroup.id, group.id)) return@onMainDispatcher
                     @Suppress("DEPRECATION") when (group.type) {
                         GroupType.BASIC -> {
                             if (size == 0L) {

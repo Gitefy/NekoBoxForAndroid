@@ -16,6 +16,15 @@ import java.io.FileOutputStream
 import java.io.IOException
 
 object SendLog {
+    internal const val CRASH_NEKO_LOG_MAX_BYTES = 256L * 1024
+    internal const val CRASH_LOGCAT_TAIL_LINES = 300
+
+    internal fun isCrashReport(title: String): Boolean =
+        title.contains("Crash", ignoreCase = true)
+
+    internal fun nekoLogBudgetBytes(title: String): Long =
+        if (isCrashReport(title)) CRASH_NEKO_LOG_MAX_BYTES else 0L
+
     // Create full log and send
     fun sendLog(context: Context, title: String) {
         val logFile = File.createTempFile(
@@ -30,7 +39,12 @@ object SendLog {
         logFile.writeText(report)
 
         try {
-            Runtime.getRuntime().exec(arrayOf("logcat", "-d")).inputStream.use(
+            val logcatCmd = if (isCrashReport(title)) {
+                arrayOf("logcat", "-d", "-t", CRASH_LOGCAT_TAIL_LINES.toString())
+            } else {
+                arrayOf("logcat", "-d")
+            }
+            Runtime.getRuntime().exec(logcatCmd).inputStream.use(
                 FileOutputStream(
                     logFile, true
                 )
@@ -42,7 +56,7 @@ object SendLog {
         }
 
         logFile.appendText("\n")
-        logFile.appendBytes(getNekoLog(0))
+        logFile.appendBytes(getNekoLog(nekoLogBudgetBytes(title)))
 
         context.startActivity(
             Intent.createChooser(

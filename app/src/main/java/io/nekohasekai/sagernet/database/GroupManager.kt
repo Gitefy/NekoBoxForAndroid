@@ -136,9 +136,7 @@ object GroupManager {
                     RouterMemberSnapshot(
                         proxyId = proxy.id,
                         stableId = proxy.routerStableId(),
-                        sourceGroupId = sourceGroups[proxy.groupId]
-                            ?.takeIf { it.type == GroupType.SUBSCRIPTION }
-                            ?.id,
+                        sourceGroupId = sourceGroups[proxy.groupId]?.id,
                         userOrder = member.userOrder
                     )
                 }
@@ -200,9 +198,7 @@ object GroupManager {
                     id = proxy.id,
                     stableId = proxy.routerStableId(),
                     name = proxy.displayNameOrFallback(),
-                    subscriptionId = sourceGroups[proxy.groupId]
-                        ?.takeIf { it.type == GroupType.SUBSCRIPTION }
-                        ?.id,
+                    sourceGroupId = sourceGroups[proxy.groupId]?.id,
                     enabled = true,
                     available = true,
                 )

@@ -8,4 +8,8 @@ object GroupRouterSectionGate {
     }
 
     fun isCurrentGeneration(started: Int, current: Int): Boolean = started == current
+
+    fun canApplyHolderUi(fragmentAdded: Boolean, boundGroupId: Long, currentGroupId: Long): Boolean {
+        return fragmentAdded && boundGroupId == currentGroupId
+    }
 }

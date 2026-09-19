@@ -12,8 +12,8 @@ class RouterReconcilerTest {
     fun reusedProfileIdDoesNotStealStableMemberOrderOrSelection() {
         val result = RouterReconciler.reconcile(
             currentNodes = listOf(
-                RouterNodeSnapshot(100, "replacement", "US A", subscriptionId = 10),
-                RouterNodeSnapshot(200, "original", "US renamed", subscriptionId = 10),
+                RouterNodeSnapshot(100, "replacement", "US A", sourceGroupId = 10),
+                RouterNodeSnapshot(200, "original", "US renamed", sourceGroupId = 10),
             ),
             groups = listOf(group(1, setOf(10), "US", selectedProxyId = 100)),
             previousMembers = mapOf(1L to listOf(RouterMemberSnapshot(100, "original", 10, 7))),
@@ -28,8 +28,8 @@ class RouterReconcilerTest {
     fun selectionFollowsStableIdentityWhenExistingIdsSwapNodes() {
         val result = RouterReconciler.reconcile(
             currentNodes = listOf(
-                RouterNodeSnapshot(100, "b", "US A", subscriptionId = 10),
-                RouterNodeSnapshot(200, "a", "US B", subscriptionId = 10),
+                RouterNodeSnapshot(100, "b", "US A", sourceGroupId = 10),
+                RouterNodeSnapshot(200, "a", "US B", sourceGroupId = 10),
             ),
             groups = listOf(group(1, setOf(10), "US", selectedProxyId = 100)),
             previousMembers = mapOf(1L to listOf(
@@ -45,7 +45,7 @@ class RouterReconcilerTest {
     @Test
     fun remapsMemberAndSelectionBySourceScopedStableIdentity() {
         val result = RouterReconciler.reconcile(
-            currentNodes = listOf(RouterNodeSnapshot(200, "node-a", "US renamed", subscriptionId = 10)),
+            currentNodes = listOf(RouterNodeSnapshot(200, "node-a", "US renamed", sourceGroupId = 10)),
             groups = listOf(group(1, setOf(10), "US", selectedProxyId = 100)),
             previousMembers = mapOf(
                 1L to listOf(RouterMemberSnapshot(100, "node-a", sourceGroupId = 10, userOrder = 7))
@@ -61,7 +61,7 @@ class RouterReconcilerTest {
     @Test
     fun identicalStableIdentityFromAnotherSourceIsNotUsed() {
         val result = RouterReconciler.reconcile(
-            currentNodes = listOf(RouterNodeSnapshot(200, "shared", "US B", subscriptionId = 20)),
+            currentNodes = listOf(RouterNodeSnapshot(200, "shared", "US B", sourceGroupId = 20)),
             groups = listOf(group(1, setOf(10), "US")),
             previousMembers = mapOf(
                 1L to listOf(RouterMemberSnapshot(100, "shared", sourceGroupId = 10, userOrder = 3))
@@ -73,7 +73,7 @@ class RouterReconcilerTest {
 
     @Test
     fun theSameCurrentNodeIsRetainedIndependentlyByTwoGroups() {
-        val current = listOf(RouterNodeSnapshot(200, "node-a", "US A", subscriptionId = 10))
+        val current = listOf(RouterNodeSnapshot(200, "node-a", "US A", sourceGroupId = 10))
         val previous = listOf(RouterMemberSnapshot(100, "node-a", sourceGroupId = 10))
         val result = RouterReconciler.reconcile(
             current,
@@ -89,8 +89,8 @@ class RouterReconcilerTest {
     fun excludeAndSourceChangesRemoveOldMembersOnSuccessfulRefresh() {
         val result = RouterReconciler.reconcile(
             currentNodes = listOf(
-                RouterNodeSnapshot(200, "a", "US Expired", subscriptionId = 10),
-                RouterNodeSnapshot(300, "b", "US Other", subscriptionId = 20),
+                RouterNodeSnapshot(200, "a", "US Expired", sourceGroupId = 10),
+                RouterNodeSnapshot(300, "b", "US Other", sourceGroupId = 20),
             ),
             groups = listOf(group(1, setOf(10), "US", exclude = "Expired")),
             previousMembers = mapOf(1L to listOf(RouterMemberSnapshot(100, "a", 10))),
@@ -105,7 +105,7 @@ class RouterReconcilerTest {
         val previous = mapOf(1L to listOf(RouterMemberSnapshot(100, "a", 10)))
         val empty = RouterReconciler.reconcile(emptyList(), listOf(group(1, setOf(10), "")), previous)
         val invalid = RouterReconciler.reconcile(
-            listOf(RouterNodeSnapshot(200, "b", "US", subscriptionId = 10, available = false)),
+            listOf(RouterNodeSnapshot(200, "b", "US", sourceGroupId = 10, available = false)),
             listOf(group(1, setOf(10), "")),
             previous,
         )
@@ -122,9 +122,9 @@ class RouterReconcilerTest {
     fun newMembersAppendInMatcherOrderAfterSurvivingUserOrder() {
         val result = RouterReconciler.reconcile(
             currentNodes = listOf(
-                RouterNodeSnapshot(300, "c", "US C", subscriptionId = 10),
-                RouterNodeSnapshot(200, "a", "US A", subscriptionId = 10),
-                RouterNodeSnapshot(201, "b", "US B", subscriptionId = 10),
+                RouterNodeSnapshot(300, "c", "US C", sourceGroupId = 10),
+                RouterNodeSnapshot(200, "a", "US A", sourceGroupId = 10),
+                RouterNodeSnapshot(201, "b", "US B", sourceGroupId = 10),
             ),
             groups = listOf(group(1, setOf(10), "US")),
             previousMembers = mapOf(

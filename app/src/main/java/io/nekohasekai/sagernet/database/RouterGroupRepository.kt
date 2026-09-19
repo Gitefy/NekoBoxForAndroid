@@ -1,6 +1,5 @@
 package io.nekohasekai.sagernet.database
 
-import io.nekohasekai.sagernet.GroupType
 import io.nekohasekai.sagernet.route.RouterFilterConfig
 import io.nekohasekai.sagernet.route.RouterFilterException
 import io.nekohasekai.sagernet.route.RouterMatchRequest
@@ -50,7 +49,7 @@ class RouterGroupValidationException(
 
 fun RouterGroupDraft.validate(
     existingGroups: Iterable<RouterGroup>,
-    validSubscriptionIds: Set<Long>,
+    validSourceGroupIds: Set<Long>,
 ) {
     val normalizedName = name.trim()
     if (normalizedName.isEmpty() || existingGroups.any {
@@ -61,8 +60,8 @@ fun RouterGroupDraft.validate(
     if (mode != RouterGroup.MODE_SELECTOR && mode != RouterGroup.MODE_URL_TEST) {
         throw RouterGroupValidationException(RouterGroupValidationException.Field.MODE, "Unsupported group mode")
     }
-    if (enabled && sourceGroupIds.isEmpty() || sourceGroupIds.any { it !in validSubscriptionIds }) {
-        throw RouterGroupValidationException(RouterGroupValidationException.Field.SOURCES, "Select at least one existing subscription")
+    if (enabled && sourceGroupIds.isEmpty() || sourceGroupIds.any { it !in validSourceGroupIds }) {
+        throw RouterGroupValidationException(RouterGroupValidationException.Field.SOURCES, "Select at least one existing group")
     }
     try {
         filter.validate()
@@ -108,7 +107,7 @@ object RouterGroupRepository {
                         id = proxy.id,
                         stableId = proxy.routerStableId(),
                         name = proxy.displayNameOrFallback(),
-                        subscriptionId = sourceId,
+                        sourceGroupId = sourceId,
                         enabled = true,
                         available = true,
                     )
@@ -125,7 +124,7 @@ object RouterGroupRepository {
         val byId = nodes.associateBy { it.id }
         val names = ids.mapNotNull { id ->
             byId[id]?.let { node ->
-                val subName = node.subscriptionId?.let { subNames[it] }
+                val subName = node.sourceGroupId?.let { subNames[it] }
                 if (!subName.isNullOrBlank()) "[${subName}] ${node.name.trim()}" else node.name.trim()
             }
         }
@@ -135,10 +134,9 @@ object RouterGroupRepository {
     internal val routerSyncLock = Any()
 
     suspend fun save(draft: RouterGroupDraft): RouterGroup {
-        val subscriptions = SagerDatabase.groupDao.allGroups()
-            .filter { it.type == GroupType.SUBSCRIPTION }
+        val validGroupIds = SagerDatabase.groupDao.allGroups()
             .mapTo(mutableSetOf()) { it.id }
-        draft.validate(all(), subscriptions)
+        draft.validate(all(), validGroupIds)
         val snapshot = GroupManager.snapshotRouterMembers()
         val savedGroup = synchronized(routerSyncLock) {
             SagerDatabase.instance.runInTransaction<RouterGroup> {

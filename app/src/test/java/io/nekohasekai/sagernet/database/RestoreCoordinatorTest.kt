@@ -17,6 +17,9 @@ class RestoreCoordinatorTest {
 
     private fun row(key: String, value: String) = KeyValuePair(key).put(value)
 
+    private val previousSagerJson =
+        """{"version":1,"groups":[{}],"profiles":[],"routerGroups":[],"rules":[]}"""
+
     @Test
     fun malformedBackupMutatesNothing() {
         val dir = dir()
@@ -33,7 +36,7 @@ class RestoreCoordinatorTest {
             dir = dir,
             incomingConfig = listOf(row("k", "new")),
             capturePreviousConfig = { listOf(row("k", "old")) },
-            capturePreviousSager = { "OLD_SAGER".toByteArray() },
+            capturePreviousSager = { previousSagerJson.toByteArray() },
             restoreConfig = { rows ->
                 cfg[0] = rows.first().string ?: ""
                 false
@@ -46,7 +49,7 @@ class RestoreCoordinatorTest {
         )
         assertFalse(out.success)
         assertEquals("old", cfg[0])
-        assertEquals("OLD_SAGER", sager[0])
+        assertEquals(previousSagerJson, sager[0])
         assertEquals(RestoreCoordinator.Phase.IDLE, RestoreCoordinator.readPhase(dir))
         assertFalse(RestoreCoordinator.journalFile(dir).exists())
     }
@@ -60,7 +63,7 @@ class RestoreCoordinatorTest {
             dir = dir,
             incomingConfig = listOf(row("k", "new")),
             capturePreviousConfig = { listOf(row("k", "old")) },
-            capturePreviousSager = { "OLD_SAGER".toByteArray() },
+            capturePreviousSager = { previousSagerJson.toByteArray() },
             restoreConfig = { rows ->
                 cfg[0] = rows.first().string ?: ""
                 true
@@ -74,7 +77,7 @@ class RestoreCoordinatorTest {
         assertFalse(out.success)
         assertEquals("SAGER_RESTORE_FAILED", out.error)
         assertEquals("old", cfg[0])
-        assertEquals("OLD_SAGER", sager[0])
+        assertEquals(previousSagerJson, sager[0])
         assertFalse(RestoreCoordinator.journalFile(dir).exists())
     }
 
@@ -84,7 +87,7 @@ class RestoreCoordinatorTest {
         RestoreCoordinator.snapshotFile(dir).writeBytes(
             RestoreCoordinator.encodeRows(listOf(row("k", "old"))),
         )
-        RestoreCoordinator.sagerSnapshotFile(dir).writeBytes("OLD_SAGER".toByteArray())
+        RestoreCoordinator.sagerSnapshotFile(dir).writeBytes(previousSagerJson.toByteArray())
         RestoreCoordinator.journalFile(dir).writeText(RestoreCoordinator.Phase.PREPARED.name)
         var cfg = "NEW_CFG"
         var sager = "NEW_SAGER"
@@ -97,7 +100,7 @@ class RestoreCoordinatorTest {
         }
         assertTrue(recovered.success)
         assertEquals("old", cfg)
-        assertEquals("OLD_SAGER", sager)
+        assertEquals(previousSagerJson, sager)
         assertEquals(RestoreCoordinator.Phase.IDLE, RestoreCoordinator.readPhase(dir))
         assertFalse(RestoreCoordinator.journalFile(dir).exists())
     }
@@ -108,7 +111,7 @@ class RestoreCoordinatorTest {
         RestoreCoordinator.snapshotFile(dir).writeBytes(
             RestoreCoordinator.encodeRows(listOf(row("k", "old"))),
         )
-        RestoreCoordinator.sagerSnapshotFile(dir).writeBytes("OLD_SAGER".toByteArray())
+        RestoreCoordinator.sagerSnapshotFile(dir).writeBytes(previousSagerJson.toByteArray())
         RestoreCoordinator.journalFile(dir).writeText(RestoreCoordinator.Phase.CONFIG_COMMITTED.name)
         var cfg = "NEW_CFG"
         var sager = "NEW_SAGER"
@@ -121,7 +124,7 @@ class RestoreCoordinatorTest {
         }
         assertTrue(recovered.success)
         assertEquals("old", cfg)
-        assertEquals("OLD_SAGER", sager)
+        assertEquals(previousSagerJson, sager)
         assertFalse(RestoreCoordinator.journalFile(dir).exists())
     }
 
@@ -131,7 +134,7 @@ class RestoreCoordinatorTest {
         RestoreCoordinator.snapshotFile(dir).writeBytes(
             RestoreCoordinator.encodeRows(listOf(row("k", "old"))),
         )
-        RestoreCoordinator.sagerSnapshotFile(dir).writeBytes("OLD_SAGER".toByteArray())
+        RestoreCoordinator.sagerSnapshotFile(dir).writeBytes(previousSagerJson.toByteArray())
         RestoreCoordinator.journalFile(dir).writeText(RestoreCoordinator.Phase.SAGER_COMMITTED.name)
         var cfg = "NEW_CFG"
         var sager = "NEW_SAGER"
@@ -169,7 +172,7 @@ class RestoreCoordinatorTest {
         RestoreCoordinator.snapshotFile(dir).writeBytes(
             RestoreCoordinator.encodeRows(listOf(row("k", "old"))),
         )
-        RestoreCoordinator.sagerSnapshotFile(dir).writeBytes("OLD_SAGER".toByteArray())
+        RestoreCoordinator.sagerSnapshotFile(dir).writeBytes(previousSagerJson.toByteArray())
         RestoreCoordinator.journalFile(dir).writeText(RestoreCoordinator.Phase.PREPARED.name)
         val permit = RestoreCoordinator.tryExclusivePermit(dir)!!
         try {
@@ -188,7 +191,7 @@ class RestoreCoordinatorTest {
             dir = dir,
             incomingConfig = listOf(row("k", "new")),
             capturePreviousConfig = { listOf(row("k", "old")) },
-            capturePreviousSager = { "OLD_SAGER".toByteArray() },
+            capturePreviousSager = { previousSagerJson.toByteArray() },
             restoreConfig = { true },
             restoreSagerIncoming = { true },
             restoreSagerPrevious = { true },
@@ -198,5 +201,35 @@ class RestoreCoordinatorTest {
         assertFalse(RestoreCoordinator.journalFile(dir).exists())
         assertFalse(RestoreCoordinator.snapshotFile(dir).exists())
         assertFalse(RestoreCoordinator.sagerSnapshotFile(dir).exists())
+    }
+
+    @Test
+    fun emptyConfigSnapshotMustNotWipeLiveSettings() {
+        val dir = dir()
+        RestoreCoordinator.snapshotFile(dir).writeBytes(RestoreCoordinator.encodeRows(emptyList()))
+        RestoreCoordinator.sagerSnapshotFile(dir).writeBytes(ByteArray(0))
+        RestoreCoordinator.journalFile(dir).writeText(RestoreCoordinator.Phase.PREPARED.name)
+        var cfg = "LIVE"
+        var sager = "LIVE_SAGER"
+        val recovered = runBlocking {
+            RestoreCoordinator.recoverOnBoot(
+                dir,
+                { rows -> cfg = rows.joinToString { it.key }; true },
+                { bytes -> sager = String(bytes); true },
+            )
+        }
+        assertTrue(recovered.success)
+        assertEquals("LIVE", cfg)
+        assertEquals("LIVE_SAGER", sager)
+        assertFalse(RestoreCoordinator.journalFile(dir).exists())
+    }
+
+    @Test
+    fun emptySagerJsonMustNotCountAsUsableSnapshot() {
+        val empty = """{"version":1,"groups":[],"profiles":[],"routerGroups":[],"rules":[]}"""
+        assertFalse(RestoreCoordinator.hasUsableSagerSnapshot(empty.toByteArray()))
+        assertFalse(RestoreCoordinator.hasUsableSagerSnapshot(ByteArray(0)))
+        val usable = """{"version":1,"groups":[{}],"profiles":[],"routerGroups":[],"rules":[]}"""
+        assertTrue(RestoreCoordinator.hasUsableSagerSnapshot(usable.toByteArray()))
     }
 }

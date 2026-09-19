@@ -87,10 +87,13 @@ class RouterGroupSettingsActivity : ThemedActivity(R.layout.layout_settings_acti
                 routerId.takeIf { it > 0 }?.let(RouterGroupRepository::get)
             }
             val filter = group?.matchConfig?.let(RouterFilterConfig::fromJson) ?: RouterFilterConfig()
-            val subscriptions = dbOffMain {
-                SagerDatabase.groupDao.allGroups().filter { it.type == GroupType.SUBSCRIPTION }
+            val allGroups = dbOffMain {
+                SagerDatabase.groupDao.allGroups()
             }
-            sourceOrder = subscriptions.map { it.id }
+            val sourceGroups = allGroups.filter {
+                it.type == GroupType.SUBSCRIPTION || it.type == GroupType.BASIC
+            }
+            sourceOrder = sourceGroups.map { it.id }
             val screen = preferenceManager.createPreferenceScreen(requireContext())
             name = EditTextPreference(requireContext()).nonPersistent().apply {
                 key = "router_group_name"
@@ -111,17 +114,31 @@ class RouterGroupSettingsActivity : ThemedActivity(R.layout.layout_settings_acti
                 value = (group?.mode ?: RouterGroup.MODE_SELECTOR).toString()
                 summaryProvider = ListPreference.SimpleSummaryProvider.getInstance()
             }
-            val subMap = subscriptions.associate { it.id.toString() to it.displayName() }
+            val sourceMap = sourceGroups.associate { g ->
+                val prefix = if (g.type == GroupType.SUBSCRIPTION) {
+                    getString(R.string.router_source_prefix_subscription)
+                } else {
+                    getString(R.string.router_source_prefix_group)
+                }
+                g.id.toString() to "$prefix ${g.displayName()}"
+            }
             sources = MultiSelectListPreference(requireContext()).nonPersistent().apply {
                 key = "router_group_sources"
                 title = getString(R.string.router_group_sources)
-                entries = subscriptions.map { it.displayName() }.toTypedArray()
-                entryValues = subscriptions.map { it.id.toString() }.toTypedArray()
+                entries = sourceGroups.map { g ->
+                    val prefix = if (g.type == GroupType.SUBSCRIPTION) {
+                        getString(R.string.router_source_prefix_subscription)
+                    } else {
+                        getString(R.string.router_source_prefix_group)
+                    }
+                    "$prefix ${g.displayName()}"
+                }.toTypedArray()
+                entryValues = sourceGroups.map { it.id.toString() }.toTypedArray()
                 values = dbOffMain {
                     RouterGroupRepository.sourceIds(routerId)
                 }.map(Long::toString).toSet()
                 summaryProvider = Preference.SummaryProvider<MultiSelectListPreference> { pref ->
-                    val selectedNames = pref.values.mapNotNull { subMap[it] }
+                    val selectedNames = pref.values.mapNotNull { sourceMap[it] }
                     if (selectedNames.isEmpty()) {
                         getString(R.string.router_no_sources_selected)
                     } else {
@@ -146,8 +163,8 @@ class RouterGroupSettingsActivity : ThemedActivity(R.layout.layout_settings_acti
                         .mapNotNull { SagerDatabase.proxyDao.getById(it.proxyId) }
                 }
                 entries = members.map { proxy ->
-                    val subName = subMap[proxy.groupId.toString()]
-                    if (!subName.isNullOrBlank()) "[${subName}] ${proxy.displayNameOrFallback().trim()}"
+                    val sourceName = sourceMap[proxy.groupId.toString()]
+                    if (!sourceName.isNullOrBlank()) "[$sourceName] ${proxy.displayNameOrFallback().trim()}"
                     else proxy.displayNameOrFallback().trim()
                 }.toTypedArray()
                 entryValues = members.map { it.id.toString() }.toTypedArray()

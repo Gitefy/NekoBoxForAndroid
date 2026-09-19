@@ -26,6 +26,7 @@
 -keep class org.yaml.snakeyaml.** { *; }
 
 -dontobfuscate
+-keepattributes Signature
 -keepattributes SourceFile
 
 -dontwarn java.beans.BeanInfo
