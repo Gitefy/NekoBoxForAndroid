@@ -4,6 +4,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.locks.ReentrantLock
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -56,6 +57,7 @@ class RoomPreferenceDataStoreSnapshotOrderingTest {
         }
 
         val store = RoomPreferenceDataStore(fakeDao(), tableSnapshot = tableSnapshot)
+        val snapshotLock = snapshotLockOf(store)
         runBlocking { store.awaitReady() }
         assertEquals("old", store.getString("k"))
         blockNextRead.set(true)
@@ -72,11 +74,33 @@ class RoomPreferenceDataStoreSnapshotOrderingTest {
             runBlocking { store.syncNow() }
         }.apply { isDaemon = true; start() }
 
-        Thread.sleep(80)
+        assertTrue(
+            "B did not queue behind A's in-flight snapshot",
+            awaitQueuedThreads(snapshotLock, 5, TimeUnit.SECONDS),
+        )
         aMayProceed.countDown()
 
         aThread.join(5000)
         bThread.join(5000)
         assertEquals("new", store.getString("k"))
+    }
+
+    private fun snapshotLockOf(store: RoomPreferenceDataStore): ReentrantLock {
+        val field = RoomPreferenceDataStore::class.java.getDeclaredField("snapshotLock")
+        field.isAccessible = true
+        return field.get(store) as ReentrantLock
+    }
+
+    private fun awaitQueuedThreads(
+        lock: ReentrantLock,
+        timeout: Long,
+        unit: TimeUnit,
+    ): Boolean {
+        val deadline = System.nanoTime() + unit.toNanos(timeout)
+        while (System.nanoTime() < deadline) {
+            if (lock.hasQueuedThreads()) return true
+            Thread.yield()
+        }
+        return false
     }
 }
