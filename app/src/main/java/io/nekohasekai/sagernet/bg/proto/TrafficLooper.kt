@@ -21,6 +21,11 @@ class TrafficLooper
 
     companion object {
         private const val TRAFFIC_BATCH_SIZE = 500
+
+        fun shouldQueryUrlTestSelections(
+            mainActivityForeground: Boolean,
+            hasMainUrlTestTag: Boolean,
+        ): Boolean = mainActivityForeground || hasMainUrlTestTag
     }
 
     private var job: Job? = null
@@ -262,7 +267,15 @@ class TrafficLooper
                     proxy.box.setV2rayStats(tags.joinToString("\n"))
                 }
 
-                val urlTestSelections = syncUrlTestWinnerLocked(proxy)
+                val urlTestSelections = if (shouldQueryUrlTestSelections(
+                        mainActivityForeground = mainActivityForeground,
+                        hasMainUrlTestTag = proxy.config.mainUrlTestTag != null,
+                    )
+                ) {
+                    syncUrlTestWinnerLocked(proxy)
+                } else {
+                    lastSentSelections ?: longArrayOf()
+                }
                 trafficUpdater!!.updateAll()
                 currentCoroutineContext().ensureActive()
 
