@@ -313,6 +313,243 @@ class ConnectionObserverTest {
         assertEquals(listOf("a", "a"), published)
         sessionB.stop()
     }
+
+    @Test
+    fun firstSnapshotPublishesEvenWithKnownRevision() = runBlocking {
+        var snapshots = 0
+        val published = ArrayList<String>()
+        val observer = ConnectionObserver(
+            snapshot = {
+                snapshots++
+                """{"flows":[{"id":"flow-1","createdAt":1,"uploadBytes":100,"logicalOutbound":"x","finalOutboundTag":"y"}]}"""
+            },
+            publish = { published.add(it.items.first().id) },
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            scope = this,
+            revision = { 42L },
+        )
+        observer.start()
+        delay(30)
+        assertEquals(1, snapshots)
+        assertEquals(listOf("flow-1"), published)
+        observer.stop()
+    }
+
+    @Test
+    fun identicalRevisionSkipsSnapshotCallEntirely() = runBlocking {
+        var snapshots = 0
+        var currentRevision = 10L
+        val published = ArrayList<Int>()
+        val observer = ConnectionObserver(
+            snapshot = {
+                snapshots++
+                """{"flows":[{"id":"flow-1","createdAt":1,"uploadBytes":100,"logicalOutbound":"x","finalOutboundTag":"y"}]}"""
+            },
+            publish = { published.add(it.items.size) },
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            scope = this,
+            revision = { currentRevision },
+        )
+        observer.start()
+        delay(30)
+        assertEquals(1, snapshots)
+        assertEquals(1, published.size)
+
+        // Poll again with unchanged revision
+        assertTrue(observer.pollOnce())
+        assertTrue(observer.pollOnce())
+        // snapshot() MUST NOT be called!
+        assertEquals(1, snapshots)
+        assertEquals(1, published.size)
+        observer.stop()
+    }
+
+    @Test
+    fun changedRevisionCallsSnapshotAndPublishes() = runBlocking {
+        var snapshots = 0
+        var currentRevision = 1L
+        var raw = """{"flows":[{"id":"f1","createdAt":1,"uploadBytes":100,"logicalOutbound":"x","finalOutboundTag":"y"}]}"""
+        val published = ArrayList<Long>()
+        val observer = ConnectionObserver(
+            snapshot = {
+                snapshots++
+                raw
+            },
+            publish = { published.add(it.items.first().uploadBytes) },
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            scope = this,
+            revision = { currentRevision },
+        )
+        observer.start()
+        delay(30)
+        assertEquals(1, snapshots)
+        assertEquals(listOf(100L), published)
+
+        // Advance byte counters and revision
+        currentRevision = 2L
+        raw = """{"flows":[{"id":"f1","createdAt":1,"uploadBytes":250,"logicalOutbound":"x","finalOutboundTag":"y"}]}"""
+        assertTrue(observer.pollOnce())
+        delay(30)
+        assertEquals(2, snapshots)
+        assertEquals(listOf(100L, 250L), published)
+        observer.stop()
+    }
+
+    @Test
+    fun stopStartResetsRevisionAndRepublishesFirstFrame() = runBlocking {
+        var snapshots = 0
+        val published = ArrayList<Int>()
+        val observer = ConnectionObserver(
+            snapshot = {
+                snapshots++
+                """{"flows":[{"id":"f1","createdAt":1,"uploadBytes":100,"logicalOutbound":"x","finalOutboundTag":"y"}]}"""
+            },
+            publish = { published.add(it.items.size) },
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            scope = this,
+            revision = { 77L }, // constant revision across sessions
+        )
+        observer.start()
+        delay(30)
+        assertEquals(1, snapshots)
+        assertEquals(1, published.size)
+
+        // Stop observer (page invisible)
+        observer.stop()
+
+        // Start observer again (page visible): must republish first frame even with identical revision 77L
+        observer.start()
+        delay(30)
+        assertEquals(2, snapshots)
+        assertEquals(2, published.size)
+        observer.stop()
+    }
+
+    @Test
+    fun newObserverSessionTokenCollisionPublishesFirstFrame() = runBlocking {
+        val published = ArrayList<String>()
+        val raw = """{"flows":[{"id":"flow-a","createdAt":1,"uploadBytes":10,"logicalOutbound":"x","finalOutboundTag":"y"}]}"""
+
+        fun makeObserver() = ConnectionObserver(
+            snapshot = { raw },
+            publish = { published.add(it.items.first().id) },
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            wait = { Channel<Unit>().receive() },
+            scope = this,
+            revision = { 1L }, // Both sessions happen to have token/revision = 1L
+        )
+
+        val sessionA = makeObserver()
+        sessionA.start()
+        delay(30)
+        assertEquals(listOf("flow-a"), published)
+        sessionA.stop()
+
+        val sessionB = makeObserver()
+        sessionB.start()
+        delay(30)
+        assertEquals(listOf("flow-a", "flow-a"), published)
+        sessionB.stop()
+    }
+
+    @Test
+    fun emptySnapshotWithIdenticalRevisionSkips() = runBlocking {
+        var snapshots = 0
+        val published = ArrayList<Int>()
+        val observer = ConnectionObserver(
+            snapshot = {
+                snapshots++
+                """{"flows":[]}"""
+            },
+            publish = { published.add(it.items.size) },
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            scope = this,
+            revision = { 0L },
+        )
+        observer.start()
+        delay(30)
+        assertEquals(1, snapshots)
+        assertEquals(listOf(0), published)
+
+        // Poll with same 0L revision
+        assertTrue(observer.pollOnce())
+        assertTrue(observer.pollOnce())
+        assertEquals(1, snapshots)
+        assertEquals(1, published.size)
+        observer.stop()
+    }
+
+    @Test
+    fun nullRevisionFallsBackToSnapshotAndDedup() = runBlocking {
+        var snapshots = 0
+        val published = ArrayList<Int>()
+        val observer = ConnectionObserver(
+            snapshot = {
+                snapshots++
+                """{"flows":[{"id":"x","createdAt":1,"uploadBytes":1,"logicalOutbound":"a","finalOutboundTag":"b"}]}"""
+            },
+            publish = { published.add(it.items.size) },
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            scope = this,
+            revision = { null }, // null revision fallback
+        )
+        observer.start()
+        delay(30)
+        assertEquals(1, snapshots)
+        assertEquals(1, published.size)
+
+        // Poll again: calls snapshot, but P2-A dedup skips publication
+        assertTrue(observer.pollOnce())
+        assertEquals(2, snapshots)
+        assertEquals(1, published.size)
+        observer.stop()
+    }
+
+    @Test
+    fun snapshotFailureDoesNotAdvanceRevision() = runBlocking {
+        var currentRevision = 1L
+        var shouldFail = false
+        val published = ArrayList<Int>()
+        val observer = ConnectionObserver(
+            snapshot = {
+                if (shouldFail) error("injected failure")
+                """{"flows":[{"id":"f1","createdAt":1,"uploadBytes":1,"logicalOutbound":"a","finalOutboundTag":"b"}]}"""
+            },
+            publish = { published.add(it.items.size) },
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            scope = this,
+            revision = { currentRevision },
+        )
+        observer.start()
+        delay(30)
+        assertEquals(1, published.size)
+
+        // Advance revision but snapshot fails
+        currentRevision = 2L
+        shouldFail = true
+        assertFalse(observer.pollOnce())
+
+        // Next poll when snapshot succeeds must still attempt to fetch since lastRevision was not updated to 2L
+        shouldFail = false
+        assertTrue(observer.pollOnce())
+        observer.stop()
+    }
 }
 
 class RequestFlowMapperTest {

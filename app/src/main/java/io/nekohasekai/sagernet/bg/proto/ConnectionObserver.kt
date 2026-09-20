@@ -19,6 +19,7 @@ class ConnectionObserver(
     private val intervalMs: Long = 1000L,
     private val wait: suspend (Long) -> Unit = { delay(it) },
     private val scope: CoroutineScope,
+    private val revision: (() -> Long?)? = null,
 ) {
     @Volatile
     var enabled: Boolean = false
@@ -38,6 +39,7 @@ class ConnectionObserver(
     private var mapsCache: RequestDisplayMaps? = null
     private var lastRawSnapshot: String? = null
     private var lastFingerprint: List<RequestSnapshotDedup.Fingerprint>? = null
+    private var lastRevision: Long? = null
     private val kicks = Channel<Unit>(Channel.CONFLATED)
     private val publisher = RequestSnapshotPublisher(
         scope = scope,
@@ -56,6 +58,7 @@ class ConnectionObserver(
                 // frame must publish even when snapshot X equals the previous session.
                 lastRawSnapshot = null
                 lastFingerprint = null
+                lastRevision = null
                 if (job?.isActive == true) {
                     kicks.trySend(Unit)
                 } else {
@@ -76,10 +79,20 @@ class ConnectionObserver(
     fun pollOnce(): Boolean {
         if (!enabled || !isCurrent()) return false
         return try {
+            val rev = revision?.invoke()
+            synchronized(gate) {
+                if (!enabled || !isCurrent()) return false
+                if (rev != null && lastRevision != null && rev == lastRevision) {
+                    return true
+                }
+            }
             val raw = snapshot()
             synchronized(gate) {
                 if (!enabled || !isCurrent()) return false
-                if (RequestSnapshotDedup.shouldSkipUnparsed(lastRawSnapshot, raw)) return true
+                if (RequestSnapshotDedup.shouldSkipUnparsed(lastRawSnapshot, raw)) {
+                    if (rev != null) lastRevision = rev
+                    return true
+                }
             }
             val parsed = RequestFlowParser.parseSnapshot(raw)
             val displayMaps = synchronized(gate) {
@@ -91,6 +104,7 @@ class ConnectionObserver(
             synchronized(gate) {
                 if (!enabled || !isCurrent()) return false
                 lastRawSnapshot = raw
+                if (rev != null) lastRevision = rev
                 if (RequestSnapshotDedup.shouldSkipPublish(lastFingerprint, fingerprint)) return true
                 lastFingerprint = fingerprint
             }
@@ -134,6 +148,7 @@ class ConnectionObserver(
         enabled = false
         lastRawSnapshot = null
         lastFingerprint = null
+        lastRevision = null
         publisher.shutdown()
         job?.cancel()
         job = null

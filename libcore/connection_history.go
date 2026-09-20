@@ -58,11 +58,12 @@ type connectionHistory struct {
 	max    int
 	maxAge time.Duration
 
-	mu      sync.Mutex
-	byID    map[string]*connectionFlow
-	unsub   func()
-	stopCh  chan struct{}
-	stopped bool
+	mu       sync.Mutex
+	byID     map[string]*connectionFlow
+	unsub    func()
+	stopCh   chan struct{}
+	stopped  bool
+	revision int64
 
 	liveScans       atomic.Int64
 	trackerConverts atomic.Int64
@@ -195,11 +196,12 @@ func preferText(keep, incoming string, locked bool) string {
 	return keep
 }
 
-func mergeConnectionFlow(dst *connectionFlow, src connectionFlow) {
+func mergeConnectionFlow(dst *connectionFlow, src connectionFlow) bool {
 	if dst.ID == "" {
 		*dst = src
-		return
+		return true
 	}
+	old := *dst
 	closed := dst.Closed || src.Closed
 	closedAt := dst.ClosedAt
 	if src.Closed && src.ClosedAt > closedAt {
@@ -242,6 +244,8 @@ func mergeConnectionFlow(dst *connectionFlow, src connectionFlow) {
 	dst.DownloadBytes = download
 	dst.Closed = closed
 	dst.ClosedAt = closedAt
+
+	return *dst != old
 }
 
 func (h *connectionHistory) Upsert(flow connectionFlow) {
@@ -268,11 +272,14 @@ func (h *connectionHistory) upsertLocked(flow connectionFlow) bool {
 		return false
 	}
 	if existing, ok := h.byID[flow.ID]; ok {
-		mergeConnectionFlow(existing, flow)
+		if mergeConnectionFlow(existing, flow) {
+			h.revision++
+		}
 		return false
 	}
 	copied := flow
 	h.byID[flow.ID] = &copied
+	h.revision++
 	return true
 }
 
@@ -283,17 +290,22 @@ func flowLess(a, b connectionFlow) bool {
 	return a.CreatedAt > b.CreatedAt
 }
 
-func (h *connectionHistory) evictLocked() {
+func (h *connectionHistory) evictLocked() bool {
 	h.evictPasses.Add(1)
+	changed := false
 	cutoff := h.now().Add(-h.maxAge).UnixMilli()
 	for id, flow := range h.byID {
 		created := flow.CreatedAt
 		if created > 0 && created < cutoff {
 			delete(h.byID, id)
+			changed = true
 		}
 	}
 	if len(h.byID) <= h.max {
-		return
+		if changed {
+			h.revision++
+		}
+		return changed
 	}
 	all := make([]*connectionFlow, 0, len(h.byID))
 	for _, flow := range h.byID {
@@ -304,11 +316,22 @@ func (h *connectionHistory) evictLocked() {
 	})
 	for _, extra := range all[h.max:] {
 		delete(h.byID, extra.ID)
+		changed = true
 	}
+	if changed {
+		h.revision++
+	}
+	return changed
 }
 
 func (h *connectionHistory) mergeTrackers(metas []*trafficcontrol.TrackerMetadata) {
 	if len(metas) == 0 {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if h.stopped {
+			return
+		}
+		h.evictLocked()
 		return
 	}
 	flows := make([]connectionFlow, 0, len(metas))
@@ -399,12 +422,26 @@ func (h *connectionHistory) listen(
 	}
 }
 
-func (h *connectionHistory) MergeLive(source liveConnectionSource) {
+func (h *connectionHistory) MergeLive(source liveConnectionSource) int64 {
 	if source == nil {
-		return
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if !h.stopped {
+			h.evictLocked()
+		}
+		return h.revision
 	}
 	h.liveScans.Add(1)
 	h.mergeTrackers(source.Connections())
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.revision
+}
+
+func (h *connectionHistory) Revision() int64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.revision
 }
 
 func (h *connectionHistory) mergeClosed(source liveConnectionSource) {

@@ -217,6 +217,20 @@ func (b *BoxInstance) Close() (err error) {
 	return nil
 }
 
+func (b *BoxInstance) ConnectionSnapshotRevision() int64 {
+	if b == nil {
+		return 0
+	}
+	b.access.Lock()
+	history := b.connHistory
+	manager := b.trafficManager
+	b.access.Unlock()
+	if history == nil {
+		return 0
+	}
+	return history.MergeLive(manager)
+}
+
 func (b *BoxInstance) ConnectionSnapshot() *StringBox {
 	if b == nil {
 		return wrapString(`{"flows":[]}`)

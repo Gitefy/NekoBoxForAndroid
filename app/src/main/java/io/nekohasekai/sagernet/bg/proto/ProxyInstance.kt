@@ -50,6 +50,9 @@ class ProxyInstance(profile: ProxyEntity, var service: BaseService.Interface? = 
                 snapshot = {
                     runCatching { box.connectionSnapshot()?.value.orEmpty() }.getOrDefault("")
                 },
+                revision = {
+                    runCatching { box.connectionSnapshotRevision() }.getOrNull()
+                },
                 publish = { batch ->
                     svc.data.binder.publishRequestSnapshot(batch)
                 },
