@@ -48,6 +48,11 @@ abstract class GroupUpdater {
             GroupManager.postReload(groupId)
         }
         val ipv6First = ipv6Mode >= IPv6Mode.PREFER
+        val reloadBatcher = if (groupId != null) {
+            GroupReloadBatcher { System.nanoTime() / 1_000_000L }
+        } else {
+            null
+        }
 
         for (profile in profiles) {
             when (profile) {
@@ -80,13 +85,19 @@ abstract class GroupUpdater {
                 }
                 if (groupId != null) {
                     progress.progress++
-                    GroupManager.postReload(groupId)
+                    if (reloadBatcher?.shouldReloadNow() == true) {
+                        GroupManager.postReload(groupId)
+                    }
                 }
             })
         }
 
         lookupJobs.joinAll()
         lookupPool.close()
+        if (groupId != null) {
+            GroupManager.postReload(groupId)
+            reloadBatcher?.markFlushed()
+        }
     }
 
     protected fun rewriteAddress(

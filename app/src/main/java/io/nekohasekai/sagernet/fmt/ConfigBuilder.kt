@@ -50,6 +50,7 @@ import moe.matsuri.nb4a.proxy.config.ConfigBean
 import moe.matsuri.nb4a.proxy.shadowtls.ShadowTLSBean
 import moe.matsuri.nb4a.proxy.shadowtls.buildSingBoxOutboundShadowTLSBean
 import moe.matsuri.nb4a.utils.JavaUtil.gson
+import moe.matsuri.nb4a.utils.JavaUtil.gsonCompact
 import moe.matsuri.nb4a.utils.Util
 import moe.matsuri.nb4a.utils.listByLineOrComma
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -1353,7 +1354,7 @@ fun compileConfig(captured: CapturedConfig): ConfigBuildResult {
             routerMembers[router.id].orEmpty().map { member -> member.proxyId }
         }
         ConfigBuildResult(
-            gson.toJson(configMap),
+            encodeRuntimeConfig(configMap, pretty = forExport),
             externalIndexMap,
             proxy.id,
             trafficMap,
@@ -1369,6 +1370,9 @@ fun compileConfig(captured: CapturedConfig): ConfigBuildResult {
     }
 
 }
+
+internal fun encodeRuntimeConfig(configMap: Map<*, *>, pretty: Boolean): String =
+    if (pretty) gson.toJson(configMap) else gsonCompact.toJson(configMap)
 
 internal fun remoteDnsDetour(forTest: Boolean, activeProxyTag: String): String? =
     if (forTest) null else activeProxyTag

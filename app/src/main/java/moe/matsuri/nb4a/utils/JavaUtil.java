@@ -163,4 +163,12 @@ public class JavaUtil {
             .disableHtmlEscaping()
             .create();
 
+    /** Compact JSON for sing-box / JNI runtime configs. User-facing export keeps [gson]. */
+    public static final Gson gsonCompact = new GsonBuilder()
+            .setNumberToNumberStrategy(ToNumberPolicy.LONG_OR_DOUBLE)
+            .setObjectToNumberStrategy(ToNumberPolicy.LONG_OR_DOUBLE)
+            .setLenient()
+            .disableHtmlEscaping()
+            .create();
+
 }
