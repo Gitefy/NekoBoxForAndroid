@@ -51,13 +51,13 @@ import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.aidl.TrafficData
 import io.nekohasekai.sagernet.bg.BaseService
-import io.nekohasekai.sagernet.bg.UserStartTarget
 import io.nekohasekai.sagernet.bg.proto.UrlTest
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.GroupManager
 import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.ProxyGroup
+import io.nekohasekai.sagernet.database.RecordPresence
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.database.preference.OnPreferenceDataStoreChangeListener
 import io.nekohasekai.sagernet.databinding.LayoutProfileListBinding
@@ -144,6 +144,8 @@ import io.nekohasekai.sagernet.database.SubscriptionBean
 import io.nekohasekai.sagernet.database.RouterGroup
 import io.nekohasekai.sagernet.database.RouterGroupRepository
 import io.nekohasekai.sagernet.route.RouterRuntimeSelection
+import io.nekohasekai.sagernet.route.RouterStartInputs
+import io.nekohasekai.sagernet.route.RouterUrlTestRefresh
 import io.nekohasekai.sagernet.route.UrlTestTargetResolver
 import kotlin.math.abs
 
@@ -296,16 +298,15 @@ class ConfigurationFragment @JvmOverloads constructor(
 
     fun inRouterGroupMode(): Boolean = ::adapter.isInitialized && adapter.inRouterGroupMode
 
-    fun currentRouterPage(): UserStartTarget.RouterPage? {
+    fun currentRouterStartInputs(): RouterStartInputs? {
         if (!inRouterGroupMode()) return null
         val rg = adapter.routerGroupList.getOrNull(groupPager.currentItem) ?: return null
-        val fromUi = selectedProfileInRouterGroup(rg)
-        val selected = when {
-            fromUi != null && fromUi > 0L -> fromUi
-            rg.selectedProxyId > 0L -> rg.selectedProxyId
-            else -> 0L
-        }
-        return UserStartTarget.RouterPage(mode = rg.mode, selectedMemberId = selected)
+        return RouterStartInputs(
+            mode = rg.mode,
+            uiSelectedId = selectedProfileInRouterGroup(rg),
+            persistedSelectedId = rg.selectedProxyId,
+            routerId = rg.id,
+        )
     }
 
     fun updateRuntimeUrlTestSelections(pairs: LongArray) {
@@ -322,8 +323,10 @@ class ConfigurationFragment @JvmOverloads constructor(
     }
 
     /** Called from [selectProfileInRouterGroup] to refresh the snapshot after a selection change. */
-    private fun updateRouterGroupSelectionSnapshot(routerGroupId: Long, proxyId: Long) {
+    private fun updateRouterGroupSelectionSnapshot(routerGroupId: Long, proxyId: Long): Long {
+        val previousId = routerGroupSelectionSnapshot[routerGroupId] ?: RouterGroup.NO_SELECTION
         routerGroupSelectionSnapshot = routerGroupSelectionSnapshot + (routerGroupId to proxyId)
+        return previousId
     }
 
     /** Refreshes the router-group selection snapshot from the DB on the background. */
@@ -1181,6 +1184,32 @@ class ConfigurationFragment @JvmOverloads constructor(
 
     }
 
+    private fun currentConnectionTestGroup(): Pair<RouterGroup?, ProxyGroup?> {
+        val routerGroup = if (adapter.inRouterGroupMode) {
+            adapter.routerGroupList.getOrNull(groupPager.currentItem)
+        } else {
+            null
+        }
+        val group = if (routerGroup == null) DataStore.currentGroup() else null
+        return routerGroup to group
+    }
+
+    private fun loadConnectionTestProfiles(
+        routerGroup: RouterGroup?,
+        group: ProxyGroup?,
+    ): List<ProxyEntity> = UrlTestTargetResolver.resolve(
+        routerGroupId = routerGroup?.id,
+        loadRouterTargets = { routerId ->
+            val memberIds = SagerDatabase.routerMemberDao.getByRouter(routerId)
+                .map { it.proxyId }
+            val entities = SagerDatabase.proxyDao.getEntities(memberIds).associateBy { it.id }
+            memberIds.mapNotNull { entities[it] }
+        },
+        loadNormalGroupTargets = {
+            SagerDatabase.proxyDao.getByGroup(group!!.id)
+        },
+    )
+
     @OptIn(DelicateCoroutinesApi::class)
     @Suppress("EXPERIMENTAL_API_USAGE")
     fun pingTest(icmpPing: Boolean) {
@@ -1188,20 +1217,22 @@ class ConfigurationFragment @JvmOverloads constructor(
         val test = TestDialog()
         val dialog = test.builder.show()
         val testJobs = mutableListOf<Job>()
-        val group = DataStore.currentGroup()
+        val (routerGroup, group) = currentConnectionTestGroup()
+        val groupName = routerGroup?.name ?: group!!.displayName()
 
         val mainJob = runOnDefaultDispatcher {
-            val profilesList = SagerDatabase.proxyDao.getByGroup(group.id).filter {
-                if (icmpPing) {
-                    if (it.requireBean().canICMPing()) {
-                        return@filter true
-                    }
-                } else {
-                    if (it.requireBean().canTCPing()) {
-                        return@filter true
-                    }
+            val resolved = loadConnectionTestProfiles(routerGroup, group)
+            if (routerGroup != null && resolved.isEmpty()) {
+                runOnMainDispatcher {
+                    snackbar(getString(R.string.profile_empty)).show()
                 }
-                return@filter false
+            }
+            val profilesList = resolved.filter { profile ->
+                if (icmpPing) {
+                    profile.requireBean().canICMPing()
+                } else {
+                    profile.requireBean().canTCPing()
+                }
             }
             test.proxyN = profilesList.size
             val profiles = ConcurrentLinkedQueue(profilesList)
@@ -1317,7 +1348,7 @@ class ConfigurationFragment @JvmOverloads constructor(
             test.dialogStatus.set(1)
             test.notification = ConnectionTestNotification(
                 dialog.context,
-                "[${group.displayName()}] ${getString(R.string.connection_test)}"
+                "[$groupName] ${getString(R.string.connection_test)}"
             )
             dialog.hide()
         }
@@ -1329,27 +1360,11 @@ class ConfigurationFragment @JvmOverloads constructor(
         val test = TestDialog()
         val dialog = test.builder.show()
         val testJobs = mutableListOf<Job>()
-        val routerGroup = if (adapter.inRouterGroupMode) {
-            adapter.routerGroupList.getOrNull(groupPager.currentItem)
-        } else {
-            null
-        }
-        val group = if (routerGroup == null) DataStore.currentGroup() else null
+        val (routerGroup, group) = currentConnectionTestGroup()
         val groupName = routerGroup?.name ?: group!!.displayName()
 
         val mainJob = runOnDefaultDispatcher {
-            val profilesList = UrlTestTargetResolver.resolve(
-                routerGroupId = routerGroup?.id,
-                loadRouterTargets = { routerId ->
-                    val memberIds = SagerDatabase.routerMemberDao.getByRouter(routerId)
-                        .map { it.proxyId }
-                    val entities = SagerDatabase.proxyDao.getEntities(memberIds).associateBy { it.id }
-                    memberIds.mapNotNull { entities[it] }
-                },
-                loadNormalGroupTargets = {
-                    SagerDatabase.proxyDao.getByGroup(group!!.id)
-                },
-            )
+            val profilesList = loadConnectionTestProfiles(routerGroup, group)
             test.proxyN = profilesList.size
             if (routerGroup != null && profilesList.isEmpty()) {
                 runOnMainDispatcher {
@@ -1401,6 +1416,7 @@ class ConfigurationFragment @JvmOverloads constructor(
                     }
                 }
                 GroupManager.postReload(DataStore.currentGroupId())
+                refreshRunningRouterUrlTest(routerGroup)
                 DataStore.runningTest = false
             }
         }
@@ -1412,6 +1428,12 @@ class ConfigurationFragment @JvmOverloads constructor(
             )
             dialog.hide()
         }
+    }
+
+    private fun refreshRunningRouterUrlTest(routerGroup: RouterGroup?) {
+        val tag = RouterUrlTestRefresh.tagFor(routerGroup, DataStore.serviceState.connected) ?: return
+        val service = (activity as? MainActivity)?.connection?.service ?: return
+        runCatching { service.refreshUrlTest(tag) }.onFailure { Logs.w(it) }
     }
 
     inner class GroupPagerAdapter : FragmentStateAdapter(this),
@@ -1444,7 +1466,11 @@ class ConfigurationFragment @JvmOverloads constructor(
 
                 if (wantRouterMode) {
                     // ----- Router-group mode -----
-                    if (SagerDatabase.routerMemberDao.all().isEmpty() && SagerDatabase.proxyDao.getAll().isNotEmpty()) {
+                    if (RecordPresence.needsEmptyMemberReconcile(
+                            SagerDatabase.routerMemberDao.count(),
+                            SagerDatabase.proxyDao.count(),
+                        )
+                    ) {
                         runCatching {
                             GroupManager.reconcileRouterMembers(GroupManager.snapshotRouterMembers())
                         }
@@ -2028,6 +2054,7 @@ class ConfigurationFragment @JvmOverloads constructor(
             val configurationList = HashMap<Long, ProxyEntity>()
             private val pendingTrafficUpdates = HashSet<Long>()
             private val profileStatePayload = Any()
+            private var lastFilterQuery: String? = null
 
             private fun getItem(profileId: Long): ProxyEntity {
                 var profile = configurationList[profileId]
@@ -2236,23 +2263,27 @@ class ConfigurationFragment @JvmOverloads constructor(
 
             fun filter(name: String) {
                 if (name.isEmpty()) {
+                    if (!ConfigurationListFilter.shouldReloadUnfiltered(lastFilterQuery, name)) return
+                    lastFilterQuery = ""
                     reloadProfiles()
                     return
                 }
-                val lower = name.lowercase()
-                configurationIdList.clear()
-                // Runs on every keystroke: Map.filter() would allocate an intermediate
-                // map plus a key collection, and lowercase() one copy per field per
-                // profile. Iterating in place and comparing case-insensitively keeps it
-                // allocation free.
+                val nextIds = ArrayList<Long>(configurationList.size)
                 configurationList.forEach { (id, entity) ->
-                    if (entity.displayName().contains(lower, ignoreCase = true) ||
-                        entity.displayType().contains(lower, ignoreCase = true) ||
-                        entity.displayAddress().contains(lower, ignoreCase = true)
+                    if (ConfigurationListFilter.matches(
+                            name,
+                            entity.displayName(),
+                            entity.displayType(),
+                            entity.displayAddress(),
+                        )
                     ) {
-                        configurationIdList.add(id)
+                        nextIds.add(id)
                     }
                 }
+                lastFilterQuery = name
+                if (!ConfigurationListFilter.shouldNotify(configurationIdList, nextIds)) return
+                configurationIdList.clear()
+                configurationIdList.addAll(nextIds)
                 notifyDataSetChanged()
             }
 
@@ -2563,6 +2594,7 @@ class ConfigurationFragment @JvmOverloads constructor(
                     configurationIdList.clear()
                     configurationIdList.addAll(newProfileIds)
                     rowAddressCache.clear()
+                    lastFilterQuery = ""
                     notifyDataSetChanged()
 
                     if (selectedProfileIndex != -1) {
@@ -2680,8 +2712,26 @@ class ConfigurationFragment @JvmOverloads constructor(
                             // Update in-memory routerGroup reference
                             routerGroup = updated
                             onMainDispatcher {
-                                pf.updateRouterGroupSelectionSnapshot(rg.id, proxyEntity.id)
-                                adapter?.notifyDataSetChanged()
+                                val previousId = pf.updateRouterGroupSelectionSnapshot(
+                                    rg.id,
+                                    proxyEntity.id,
+                                )
+                                val currentAdapter = adapter
+                                if (currentAdapter == null ||
+                                    RouterSelectionUiRefresh.needsFullRefresh(
+                                        currentAdapter.configurationIdList,
+                                        proxyEntity.id,
+                                    )
+                                ) {
+                                    currentAdapter?.notifyDataSetChanged()
+                                } else {
+                                    currentAdapter.refreshProfileState(
+                                        RouterSelectionUiRefresh.changedIds(
+                                            previousId,
+                                            proxyEntity.id,
+                                        )
+                                    )
+                                }
                             }
                             if (DataStore.serviceState.canStop) {
                                 SagerNet.reloadService(routerTag = updated.stableTag, routerProxyId = proxyEntity.id)

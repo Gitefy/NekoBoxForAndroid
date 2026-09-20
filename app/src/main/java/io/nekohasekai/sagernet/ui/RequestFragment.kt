@@ -89,7 +89,9 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
 
     private fun refresh() {
         val next = RequestStore.filtered()
-        adapter.submitList(next)
+        if (next !== adapter.currentList) {
+            adapter.submitList(next)
+        }
         runOnDefaultDispatcher {
             val misses = labels.resolveMissing(next.map { it.packageName })
             if (misses > 0) {

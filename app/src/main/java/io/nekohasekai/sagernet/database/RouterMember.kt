@@ -48,6 +48,9 @@ data class RouterMember(
         @Query("SELECT * FROM router_members ORDER BY routerId, userOrder, proxyId")
         fun all(): List<RouterMember>
 
+        @Query("SELECT COUNT(*) FROM router_members")
+        fun count(): Long
+
         @Query("SELECT * FROM router_members WHERE routerId = :routerId ORDER BY userOrder, proxyId")
         fun getByRouter(routerId: Long): List<RouterMember>
 

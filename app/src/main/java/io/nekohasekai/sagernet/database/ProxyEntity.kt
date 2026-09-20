@@ -580,6 +580,9 @@ data class ProxyEntity(
         @Query("select * from proxy_entities")
         fun getAll(): List<ProxyEntity>
 
+        @Query("SELECT COUNT(*) FROM proxy_entities")
+        fun count(): Long
+
         @Query("SELECT id FROM proxy_entities WHERE groupId = :groupId ORDER BY userOrder")
         fun getIdsByGroup(groupId: Long): List<Long>
 

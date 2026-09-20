@@ -91,6 +91,7 @@ class TrafficLooper
 
     var selectorNowId = -114514L
     var selectorNowFakeTag = ""
+    private var lastSentSelections: LongArray? = null
 
     suspend fun selectMain(id: Long) = withStateLock {
         selectMainLocked(id)
@@ -207,14 +208,9 @@ class TrafficLooper
             if (!TrafficLoopPolicy.shouldCollectTraffic(delayMs, profileTrafficStatistics)) {
                 // Nobody is listening -> skip the selection query and the IPC round-trip.
                 if (mainActivityForeground && data.state == BaseService.State.Connected) {
-                    val selections = proxy.currentUrlTestSelections()
-                    data.binder.broadcast { callback ->
-                        if (data.binder.callbackIdMap[callback] ==
-                            SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
-                        ) {
-                            callback.cbSpeedUpdate(SpeedDisplayData(urlTestSelections = selections))
-                        }
-                    }
+                    broadcastSpeedIfSelectionChanged(
+                        SpeedDisplayData(urlTestSelections = proxy.currentUrlTestSelections())
+                    )
                 }
                 awaitUpdate(TrafficLoopPolicy.delayMillis(
                     delayMs,
@@ -310,15 +306,18 @@ class TrafficLooper
                     trafficUpdates = trafficUpdates,
                 )
                 if (mainActivityForeground && data.state == BaseService.State.Connected) {
-                    data.binder.broadcast { callback ->
-                        if (data.binder.callbackIdMap[callback] ==
-                            SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
-                        ) {
-                            if (delayMs > 0L) callback.cbSpeedUpdate(snapshot.speed)
-                            if (snapshot.trafficUpdates.isNotEmpty()) {
-                                snapshot.trafficUpdates.chunked(TRAFFIC_BATCH_SIZE).forEach {
-                                    callback.cbTrafficUpdate(TrafficDataBatch(ArrayList(it)))
-                                }
+                    if (delayMs > 0L) {
+                        broadcastSpeedIfSelectionChanged(snapshot.speed)
+                    }
+                    if (snapshot.trafficUpdates.isNotEmpty()) {
+                        val batches = snapshot.trafficUpdates.chunked(TRAFFIC_BATCH_SIZE).map {
+                            TrafficDataBatch(ArrayList(it))
+                        }
+                        data.binder.broadcast { callback ->
+                            if (data.binder.callbackIdMap[callback] ==
+                                SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
+                            ) {
+                                batches.forEach { callback.cbTrafficUpdate(it) }
                             }
                         }
                     }
@@ -340,6 +339,19 @@ class TrafficLooper
                     trackedTagCount = tagMap.size,
                 )
             )
+        }
+    }
+
+    private suspend fun broadcastSpeedIfSelectionChanged(speed: SpeedDisplayData) {
+        val selections = speed.urlTestSelections
+        if (!TrafficSelectionBroadcast.shouldSend(lastSentSelections, selections)) return
+        lastSentSelections = TrafficSelectionBroadcast.snapshot(selections)
+        data.binder.broadcast { callback ->
+            if (data.binder.callbackIdMap[callback] ==
+                SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
+            ) {
+                callback.cbSpeedUpdate(speed)
+            }
         }
     }
 }

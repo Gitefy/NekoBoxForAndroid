@@ -25,6 +25,7 @@ import androidx.fragment.app.DialogFragment
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentManager
 import androidx.preference.Preference
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.LinearSmoothScroller
 import androidx.recyclerview.widget.RecyclerView
 import com.jakewharton.processphoenix.ProcessPhoenix
@@ -162,6 +163,10 @@ fun String.unUrlSafe(): String {
 }
 
 fun RecyclerView.scrollTo(index: Int, force: Boolean = false) {
+    val firstVisible = (layoutManager as? LinearLayoutManager)
+        ?.findFirstCompletelyVisibleItemPosition()
+        ?: RecyclerView.NO_POSITION
+    if (ProfileListScroll.shouldSkip(firstVisible, index)) return
     if (force) post {
         scrollToPosition(index)
     }

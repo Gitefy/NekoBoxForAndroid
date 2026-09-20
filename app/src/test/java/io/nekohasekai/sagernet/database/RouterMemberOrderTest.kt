@@ -26,6 +26,7 @@ class RouterMemberOrderTest {
 
     private class MemoryMembers(private val rows: MutableList<RouterMember>) : RouterMember.Dao {
         override fun all() = rows.toList()
+        override fun count() = rows.size.toLong()
         override fun getByRouter(routerId: Long) = rows.filter { it.routerId == routerId }
             .sortedWith(compareBy<RouterMember> { it.userOrder }.thenBy { it.proxyId })
         override fun deleteByRouter(routerId: Long): Int = error("unused")
