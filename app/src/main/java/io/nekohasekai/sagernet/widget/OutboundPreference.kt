@@ -10,7 +10,9 @@ import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.SagerDatabase
-import io.nekohasekai.sagernet.ktx.dbOffMain
+import io.nekohasekai.sagernet.ktx.runOnIoDispatcher
+import io.nekohasekai.sagernet.ktx.runOnMainDispatcher
+import kotlinx.coroutines.Job
 import moe.matsuri.nb4a.ui.SimpleMenuPreference
 
 class OutboundPreference
@@ -38,6 +40,10 @@ class OutboundPreference
     }
 
     private var dropdownOpened = false
+    private var summaryJob: Job? = null
+    private var attached = false
+    @Volatile private var summaryCacheKey: String? = null
+    @Volatile private var summaryCacheText: CharSequence? = null
 
     override fun onClick() {
         dropdownOpened = true
@@ -76,23 +82,62 @@ class OutboundPreference
     }
 
     override fun getSummary(): CharSequence? {
-        if (value == VALUE_SELECT_PROFILE) {
-            val routeOutbound = DataStore.profileCacheStore.getLong(key + "Long") ?: 0
-            if (routeOutbound > 0) {
-                ProfileManager.getProfile(routeOutbound)?.displayName()?.let {
-                    return it
-                }
+        val current = value
+        val profileId = if (current == VALUE_SELECT_PROFILE) {
+            DataStore.profileCacheStore.getLong(key + "Long") ?: 0
+        } else 0L
+        val routerId = if (current == VALUE_SELECT_ROUTER) DataStore.routeOutboundRouter else 0L
+        val cacheKey = OutboundPreferenceSummary.cacheKey(current, profileId, routerId)
+        if (summaryCacheKey == cacheKey) {
+            return summaryCacheText ?: super.getSummary()
+        }
+        requestSummary(current, profileId, routerId, cacheKey)
+        return OutboundPreferenceSummary.resolve(
+            value = current,
+            profileName = null,
+            routerName = null,
+            routerMissing = false,
+            invalidRouterLabel = context.getString(R.string.router_reference_invalid),
+            fallback = super.getSummary(),
+        )
+    }
+
+    override fun onAttached() {
+        super.onAttached()
+        attached = true
+    }
+
+    override fun onDetached() {
+        attached = false
+        summaryJob?.cancel()
+        summaryJob = null
+        super.onDetached()
+    }
+
+    private fun requestSummary(current: String?, profileId: Long, routerId: Long, cacheKey: String) {
+        summaryJob?.cancel()
+        summaryJob = runOnIoDispatcher {
+            val profileName = if (current == VALUE_SELECT_PROFILE && profileId > 0) {
+                ProfileManager.getProfile(profileId)?.displayName()
+            } else null
+            val routerName = if (current == VALUE_SELECT_ROUTER && routerId > 0) {
+                SagerDatabase.routerGroupDao.getById(routerId)?.name
+            } else null
+            val text = OutboundPreferenceSummary.resolve(
+                value = current,
+                profileName = profileName,
+                routerName = routerName,
+                routerMissing = current == VALUE_SELECT_ROUTER && routerId > 0 && routerName == null,
+                invalidRouterLabel = context.getString(R.string.router_reference_invalid),
+                fallback = null,
+            )
+            runOnMainDispatcher {
+                if (!attached) return@runOnMainDispatcher
+                summaryCacheKey = cacheKey
+                summaryCacheText = text
+                notifyChanged()
             }
         }
-        if (value == VALUE_SELECT_ROUTER) {
-            val routerId = DataStore.routeOutboundRouter
-            if (routerId > 0) {
-                return dbOffMain {
-                    SagerDatabase.routerGroupDao.getById(routerId)?.name
-                } ?: context.getString(R.string.router_reference_invalid)
-            }
-        }
-        return super.getSummary()
     }
 
 }
