@@ -1,7 +1,6 @@
 package io.nekohasekai.sagernet.bg.proto
 
 import io.nekohasekai.sagernet.aidl.RequestFlowBatch
-import io.nekohasekai.sagernet.aidl.RequestFlowData
 import io.nekohasekai.sagernet.ktx.Logs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -37,7 +36,8 @@ class ConnectionObserver(
     private var job: Job? = null
     private var loggedFailure = false
     private var mapsCache: RequestDisplayMaps? = null
-    private var lastFingerprint: String? = null
+    private var lastRawSnapshot: String? = null
+    private var lastFingerprint: List<RequestSnapshotDedup.Fingerprint>? = null
     private val kicks = Channel<Unit>(Channel.CONFLATED)
     private val publisher = RequestSnapshotPublisher(
         scope = scope,
@@ -52,6 +52,7 @@ class ConnectionObserver(
         synchronized(gate) {
             if (value) {
                 enabled = true
+                lastRawSnapshot = null
                 lastFingerprint = null
                 if (job?.isActive == true) {
                     kicks.trySend(Unit)
@@ -73,16 +74,22 @@ class ConnectionObserver(
     fun pollOnce(): Boolean {
         if (!enabled || !isCurrent()) return false
         return try {
-            val parsed = RequestFlowParser.parseSnapshot(snapshot())
+            val raw = snapshot()
+            synchronized(gate) {
+                if (!enabled || !isCurrent()) return false
+                if (RequestSnapshotDedup.shouldSkipUnparsed(lastRawSnapshot, raw)) return true
+            }
+            val parsed = RequestFlowParser.parseSnapshot(raw)
             val displayMaps = synchronized(gate) {
                 mapsCache ?: maps().also { mapsCache = it }
             }
             val mapped = parsed.map { RequestFlowMapper.map(it, displayMaps) }
             if (!enabled || !isCurrent()) return false
-            val fingerprint = fingerprintOf(mapped)
+            val fingerprint = RequestSnapshotDedup.Fingerprint.listOf(mapped)
             synchronized(gate) {
                 if (!enabled || !isCurrent()) return false
-                if (fingerprint == lastFingerprint) return true
+                lastRawSnapshot = raw
+                if (RequestSnapshotDedup.shouldSkipPublish(lastFingerprint, fingerprint)) return true
                 lastFingerprint = fingerprint
             }
             publisher.submit(RequestFlowBatch(ArrayList(mapped), runtimeGeneration))
@@ -123,18 +130,11 @@ class ConnectionObserver(
 
     private fun stopLocked() {
         enabled = false
+        lastRawSnapshot = null
         lastFingerprint = null
         publisher.shutdown()
         job?.cancel()
         job = null
         pollActive = false
-    }
-
-    companion object {
-        fun fingerprintOf(mapped: List<RequestFlowData>): String {
-            return mapped.joinToString(separator = "|") { flow ->
-                "${flow.id}:${flow.createdAt}:${flow.uploadBytes}:${flow.downloadBytes}:${flow.closed}:${flow.logicalOutbound}:${flow.finalOutboundTag}"
-            }
-        }
     }
 }

@@ -167,6 +167,32 @@ class ConnectionObserverTest {
     }
 
     @Test
+    fun unchangedRawSnapshotStillPollsButDoesNotRepublish() = runBlocking {
+        var snapshots = 0
+        val published = ArrayList<Int>()
+        val observer = ConnectionObserver(
+            snapshot = {
+                snapshots++
+                """{"flows":[{"id":"a","createdAt":1,"uploadBytes":1,"logicalOutbound":"x","finalOutboundTag":"y"}]}"""
+            },
+            publish = { published.add(it.items.size) },
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            scope = this,
+        )
+        observer.start()
+        delay(30)
+        val afterStart = snapshots
+        assertTrue(afterStart >= 1)
+        assertTrue(observer.pollOnce())
+        assertTrue(observer.pollOnce())
+        assertEquals(afterStart + 2, snapshots)
+        assertEquals(1, published.size)
+        observer.stop()
+    }
+
+    @Test
     fun duplicateEnableStaysOnSerialSamplerAndResendsFirstFrame() = runBlocking {
         val ticks = Channel<Unit>(Channel.UNLIMITED)
         val inFlight = java.util.concurrent.atomic.AtomicInteger(0)
