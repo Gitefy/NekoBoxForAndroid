@@ -128,20 +128,18 @@ object GroupManager {
     }
 
     fun snapshotRouterMembers(): RouterRefreshSnapshot {
-        val proxies = SagerDatabase.proxyDao.getAll().associateBy { it.id }
+        val memberRows = SagerDatabase.routerMemberDao.all()
+        val memberIds = memberRows.map { it.proxyId }
+        val proxies = QueryIdChunks.load(memberIds) { chunk ->
+            SagerDatabase.proxyDao.getEntities(chunk)
+        }.associateBy { it.id }
         val sourceGroups = SagerDatabase.groupDao.allGroups().associateBy { it.id }
-        val members = SagerDatabase.routerGroupDao.all().associate { router ->
-            router.id to SagerDatabase.routerMemberDao.getByRouter(router.id).mapNotNull { member ->
-                proxies[member.proxyId]?.let { proxy ->
-                    RouterMemberSnapshot(
-                        proxyId = proxy.id,
-                        stableId = proxy.routerStableId(),
-                        sourceGroupId = sourceGroups[proxy.groupId]?.id,
-                        userOrder = member.userOrder
-                    )
-                }
-            }
-        }
+        val members = RouterMemberSnapshotBuilder.build(
+            routers = SagerDatabase.routerGroupDao.all(),
+            members = memberRows,
+            proxiesById = proxies,
+            groupsById = sourceGroups,
+        )
         return RouterRefreshSnapshot(members)
     }
 
@@ -306,9 +304,7 @@ object GroupManager {
                 .filter { runCatching { it.requireBean() }.isSuccess }
                 .map { it.id }
                 .toSet()
-            val members = SagerDatabase.routerGroupDao.all().flatMap { router ->
-                SagerDatabase.routerMemberDao.getByRouter(router.id)
-            }
+            val members = SagerDatabase.routerMemberDao.all()
             danglingRouterMemberProxyIds(members.map { member ->
                 RouterMemberSnapshot(member.proxyId, "proxy:${member.proxyId}")
             }, currentProxyIds).forEach { proxyId ->

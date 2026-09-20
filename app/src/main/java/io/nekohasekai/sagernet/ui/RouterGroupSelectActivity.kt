@@ -11,6 +11,7 @@ import io.nekohasekai.sagernet.database.RouterGroup
 import io.nekohasekai.sagernet.database.RouterGroupRepository
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.ktx.dbOffMain
+import io.nekohasekai.sagernet.route.RouterMemberIndex
 
 class RouterGroupSelectActivity : ThemedActivity(R.layout.layout_settings_activity) {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -32,15 +33,16 @@ class RouterGroupSelectActivity : ThemedActivity(R.layout.layout_settings_activi
             // Preference inflation already happens on the UI thread; run the
             // eligibility queries through dbOffMain so removing
             // allowMainThreadQueries cannot crash the route editor.
-            val groups = dbOffMain {
-                RouterGroupRepository.all().filter { group ->
-                    group.enabled && SagerDatabase.routerMemberDao.getByRouter(group.id).isNotEmpty()
+            val (groups, counts) = dbOffMain {
+                val allGroups = RouterGroupRepository.all()
+                val sizes = RouterMemberIndex.sizesByRouterId(
+                    allGroups.map { it.id },
+                    SagerDatabase.routerMemberDao.all(),
+                )
+                val eligible = allGroups.filter { group ->
+                    group.enabled && (sizes[group.id] ?: 0) > 0
                 }
-            }
-            val counts = dbOffMain {
-                groups.associate { group ->
-                    group.id to SagerDatabase.routerMemberDao.getByRouter(group.id).size
-                }
+                eligible to eligible.associate { group -> group.id to (sizes[group.id] ?: 0) }
             }
             val selected = requireActivity().intent.getLongExtra(EXTRA_SELECTED, 0L)
             val screen = preferenceManager.createPreferenceScreen(requireContext())

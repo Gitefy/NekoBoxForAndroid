@@ -28,12 +28,20 @@ public class SingBoxOptions {
 
     private static final Gson gsonSingbox = new GsonBuilder()
             .registerTypeHierarchyAdapter(SingBoxOption.class, new SingBoxOptionSerializer())
-            .setPrettyPrinting()
             .setNumberToNumberStrategy(ToNumberPolicy.LONG_OR_DOUBLE)
             .setObjectToNumberStrategy(ToNumberPolicy.LONG_OR_DOUBLE)
             .setLenient()
             .disableHtmlEscaping()
             .create();
+
+    @SuppressWarnings("unchecked")
+    static Map<String, Object> mapFromTree(JsonElement tree) {
+        if (tree == null || tree.isJsonNull()) {
+            return new HashMap<>();
+        }
+        Map<String, Object> map = gsonSingbox.fromJson(tree, MAP_TYPE);
+        return map != null ? map : new HashMap<>();
+    }
 
     public static class SingBoxOption {
 
@@ -46,10 +54,12 @@ public class SingBoxOptions {
         }
 
         public Map<String, Object> asMap() {
-            return gsonSingbox.fromJson(
-                    gsonSingbox.toJson(this),
-                    MAP_TYPE
-            );
+            return mapFromTree(gsonSingbox.toJsonTree(this));
+        }
+
+        /** Previous toJson-string round-trip; tests must match [asMap]. */
+        public Map<String, Object> asMapViaJsonString() {
+            return mapFromTree(com.google.gson.JsonParser.parseString(gsonSingbox.toJson(this)));
         }
 
     }
@@ -94,10 +104,11 @@ public class SingBoxOptions {
             if (src instanceof CustomSingBoxOption) {
                 map = ((CustomSingBoxOption) src).getBasicMap();
             } else {
-                map = gsonSingbox.fromJson(
-                        ((TypeAdapter<SingBoxOption>) delegate).toJson(src),
-                        MAP_TYPE
-                );
+                JsonElement tree = ((TypeAdapter<SingBoxOption>) delegate).toJsonTree(src);
+                map = mapFromTree(tree);
+            }
+            if (map == null) {
+                map = new HashMap<>();
             }
             if (src._hack_config_map != null && !src._hack_config_map.isEmpty()) {
                 Util.INSTANCE.mergeMap(map, src._hack_config_map);
