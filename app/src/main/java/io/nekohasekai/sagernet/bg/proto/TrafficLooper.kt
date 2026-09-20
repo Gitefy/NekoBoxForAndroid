@@ -63,6 +63,7 @@ class TrafficLooper
         // finally traffic post
         if (!DataStore.profileTrafficStatistics) return
         withStateLock {
+            lastRatesWereZero = false
             trafficUpdater?.updateAll()
             val traffic = mutableMapOf<Long, TrafficData>()
             data.proxy?.config?.trafficMap?.forEach { (_, ents) ->
@@ -97,12 +98,14 @@ class TrafficLooper
     var selectorNowId = -114514L
     var selectorNowFakeTag = ""
     private var lastSentSelections: LongArray? = null
+    private var lastRatesWereZero = false
 
     suspend fun selectMain(id: Long) = withStateLock {
         selectMainLocked(id)
     }
 
     private suspend fun selectMainLocked(id: Long, statsTag: String = TAG_PROXY) {
+        lastRatesWereZero = false
         Logs.d({ "select traffic count $TAG_PROXY to $id, old id is $selectorNowId" })
         val oldData = idMap[selectorNowId]
         val newData = idMap[id] ?: return
@@ -142,6 +145,7 @@ class TrafficLooper
         if (targetIds.isEmpty()) return
 
         withStateLock {
+            lastRatesWereZero = false
             trafficUpdater?.updateAll()
             val changed = linkedMapOf<Long, TrafficData>()
             idMap.forEach { (id, item) ->
@@ -279,69 +283,84 @@ class TrafficLooper
                 trafficUpdater!!.updateAll()
                 currentCoroutineContext().ensureActive()
 
-                // add all non-bypass to "main"
-                var mainTxRate = 0L
-                var mainRxRate = 0L
-                var mainTx = 0L
-                var mainRx = 0L
-                tagMap.forEach { (_, it) ->
-                    if (!it.ignore) {
-                        mainTxRate += it.txRate
-                        mainRxRate += it.rxRate
-                    }
-                    mainTx += it.tx - it.txBase
-                    mainRx += it.rx - it.rxBase
-                }
+                val anyTrafficDelta = trafficUpdater!!.items.any { it.hasTrafficDelta }
+                val selectionChanged = TrafficSelectionBroadcast.shouldSend(lastSentSelections, urlTestSelections)
 
-                // The list is only ever consumed by the foreground broadcast below, so
-                // building it while nobody is watching is pure garbage per tick.
-                val trafficUpdates = if (profileTrafficStatistics && mainActivityForeground) {
-                    val updates = arrayListOf<TrafficData>()
-                    idMap.forEach { (id, item) ->
-                        if (id > 0L && item.hasTrafficDelta) {
-                            updates.add(TrafficData(id = id, rx = item.rx, tx = item.tx))
-                        }
-                    }
-                    updates
+                if (TrafficSteadyStateGate.shouldShortCircuit(
+                        anyTrafficDelta = anyTrafficDelta,
+                        lastRatesWereZero = lastRatesWereZero,
+                        selectionChanged = selectionChanged,
+                    )
+                ) {
+                    null
                 } else {
-                    emptyList()
-                }
-                val snapshot = LoopSnapshot(
-                    speed = SpeedDisplayData(
-                        mainTxRate,
-                        mainRxRate,
-                        if (showDirectSpeed) itemBypass.txRate else 0L,
-                        if (showDirectSpeed) itemBypass.rxRate else 0L,
-                        mainTx,
-                        mainRx,
-                        urlTestSelections,
-                    ),
-                    trafficUpdates = trafficUpdates,
-                )
-                if (mainActivityForeground && data.state == BaseService.State.Connected) {
-                    if (delayMs > 0L) {
-                        broadcastSpeedIfSelectionChanged(snapshot.speed)
-                    }
-                    if (snapshot.trafficUpdates.isNotEmpty()) {
-                        val batches = snapshot.trafficUpdates.chunked(TRAFFIC_BATCH_SIZE).map {
-                            TrafficDataBatch(ArrayList(it))
+                    // add all non-bypass to "main"
+                    var mainTxRate = 0L
+                    var mainRxRate = 0L
+                    var mainTx = 0L
+                    var mainRx = 0L
+                    tagMap.forEach { (_, it) ->
+                        if (!it.ignore) {
+                            mainTxRate += it.txRate
+                            mainRxRate += it.rxRate
                         }
-                        data.binder.broadcast { callback ->
-                            if (data.binder.callbackIdMap[callback] ==
-                                SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
-                            ) {
-                                batches.forEach { callback.cbTrafficUpdate(it) }
+                        mainTx += it.tx - it.txBase
+                        mainRx += it.rx - it.rxBase
+                    }
+                    val currentRatesAreZero = mainTxRate == 0L && mainRxRate == 0L &&
+                        (!showDirectSpeed || (itemBypass.txRate == 0L && itemBypass.rxRate == 0L))
+                    lastRatesWereZero = currentRatesAreZero
+
+                    // The list is only ever consumed by the foreground broadcast below, so
+                    // building it while nobody is watching is pure garbage per tick.
+                    val trafficUpdates = if (profileTrafficStatistics && mainActivityForeground) {
+                        val updates = arrayListOf<TrafficData>()
+                        idMap.forEach { (id, item) ->
+                            if (id > 0L && item.hasTrafficDelta) {
+                                updates.add(TrafficData(id = id, rx = item.rx, tx = item.tx))
+                            }
+                        }
+                        updates
+                    } else {
+                        emptyList()
+                    }
+                    val snapshot = LoopSnapshot(
+                        speed = SpeedDisplayData(
+                            mainTxRate,
+                            mainRxRate,
+                            if (showDirectSpeed) itemBypass.txRate else 0L,
+                            if (showDirectSpeed) itemBypass.rxRate else 0L,
+                            mainTx,
+                            mainRx,
+                            urlTestSelections,
+                        ),
+                        trafficUpdates = trafficUpdates,
+                    )
+                    if (mainActivityForeground && data.state == BaseService.State.Connected) {
+                        if (delayMs > 0L) {
+                            broadcastSpeedIfSelectionChanged(snapshot.speed)
+                        }
+                        if (snapshot.trafficUpdates.isNotEmpty()) {
+                            val batches = snapshot.trafficUpdates.chunked(TRAFFIC_BATCH_SIZE).map {
+                                TrafficDataBatch(ArrayList(it))
+                            }
+                            data.binder.broadcast { callback ->
+                                if (data.binder.callbackIdMap[callback] ==
+                                    SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
+                                ) {
+                                    batches.forEach { callback.cbTrafficUpdate(it) }
+                                }
                             }
                         }
                     }
+                    snapshot
                 }
-                snapshot
             }
             currentCoroutineContext().ensureActive()
 
             // ServiceNotification
             data.notification?.apply {
-                if (listenPostSpeed) postNotificationSpeedUpdate(snapshot.speed)
+                if (snapshot != null && listenPostSpeed) postNotificationSpeedUpdate(snapshot.speed)
             }
 
             awaitUpdate(
