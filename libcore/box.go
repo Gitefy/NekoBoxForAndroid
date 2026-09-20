@@ -16,7 +16,6 @@ import (
 	"github.com/matsuridayo/libneko/protect_server"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/trafficcontrol"
-	"github.com/sagernet/sing-box/common/urltest"
 	"github.com/sagernet/sing-box/experimental/v2rayapi"
 	"github.com/sagernet/sing-box/protocol/group"
 
@@ -394,14 +393,11 @@ func urlTest(i *BoxInstance, link string, timeout int32, targetTag string) (late
 		return 0, err
 	}
 
-	// urltest.URLTest is the upstream replacement for the removed
-	// boxapi.CreateProxyHttpClient: the request is dialed through detour, so
-	// the probe really leaves through the outbound under test.
-	latencyValue, err := urltest.URLTest(ctx, link, detour)
-	if err != nil {
-		return 0, err
-	}
-	return int32(latencyValue), nil
+	// urlTestRTT restores the legacy fast RTT connectivity probe semantics:
+	// a warm-up request establishes connection/handshake/multiplexing, followed
+	// by a measured request over the reused connection capturing WroteHeaders to
+	// GotFirstResponseByte round-trip time.
+	return urlTestRTT(ctx, link, detour)
 }
 
 // urlTestDetour resolves the dialer a URL test has to go through:
