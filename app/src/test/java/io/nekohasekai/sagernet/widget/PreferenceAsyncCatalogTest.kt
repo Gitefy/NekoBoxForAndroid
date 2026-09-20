@@ -121,3 +121,91 @@ class OutboundPreferenceSummaryTest {
         assertEquals("0", OutboundPreferenceSummary.cacheKey("0", 0, 0))
     }
 }
+
+class PreferenceAsyncGuardTest {
+    @Test
+    fun attachLoadSuccessApplies() {
+        assertTrue(PreferenceAsyncGuard.shouldApply(attached = true, startedGeneration = 1, currentGeneration = 1))
+    }
+
+    @Test
+    fun detachBeforeLoadCompletesDropsResult() {
+        assertFalse(PreferenceAsyncGuard.shouldApply(attached = false, startedGeneration = 1, currentGeneration = 1))
+        assertFalse(PreferenceAsyncGuard.shouldApply(attached = false, startedGeneration = 1, currentGeneration = 2))
+    }
+
+    @Test
+    fun attachAThenDetachThenAttachBKeepsBRegardlessOfArrivalOrder() {
+        var generation = 0
+        val attachA = ++generation
+        generation++ // detach A
+        val attachB = ++generation
+        assertFalse(PreferenceAsyncGuard.shouldApply(true, attachA, generation))
+        assertTrue(PreferenceAsyncGuard.shouldApply(true, attachB, generation))
+        assertFalse(PreferenceAsyncGuard.shouldApply(true, attachA, generation))
+    }
+
+    @Test
+    fun valueChangeDuringLoadDoesNotWriteOldSummary() {
+        assertFalse(
+            PreferenceAsyncGuard.shouldApplySummary(
+                attached = true,
+                startedGeneration = 3,
+                currentGeneration = 3,
+                requestedCacheKey = "p:1",
+                liveCacheKey = "p:2",
+            ),
+        )
+        assertTrue(
+            PreferenceAsyncGuard.shouldApplySummary(
+                attached = true,
+                startedGeneration = 3,
+                currentGeneration = 3,
+                requestedCacheKey = "p:2",
+                liveCacheKey = "p:2",
+            ),
+        )
+    }
+
+    @Test
+    fun fragmentRecreationIsANewGeneration() {
+        var generation = 1
+        generation++
+        val recreated = ++generation
+        assertTrue(PreferenceAsyncGuard.shouldApply(true, recreated, generation))
+        assertFalse(PreferenceAsyncGuard.shouldApply(true, 1, generation))
+    }
+
+    @Test
+    fun emptyThenLaterReadyUsesLatestGeneration() {
+        val emptyLoad = 1
+        val readyLoad = 2
+        assertFalse(PreferenceAsyncGuard.shouldApply(true, emptyLoad, readyLoad))
+        assertTrue(PreferenceAsyncGuard.shouldApply(true, readyLoad, readyLoad))
+    }
+
+    @Test
+    fun rapidAttachDetachNeverAppliesStaleToken() {
+        var generation = 0
+        val tokens = mutableListOf<Int>()
+        repeat(8) {
+            tokens += ++generation
+            generation++
+        }
+        val current = ++generation
+        tokens.forEach { token ->
+            assertFalse(PreferenceAsyncGuard.shouldApply(true, token, current))
+        }
+        assertTrue(PreferenceAsyncGuard.shouldApply(true, current, current))
+    }
+
+    @Test
+    fun persistedValueMissingStillUsesFallbackNotInventedId() {
+        val loading = GroupPreferenceCatalog.loading("99")
+        assertEquals(listOf("99"), loading.entryValues.map { it.toString() })
+        val ready = GroupPreferenceCatalog.ready(listOf(GroupPreferenceItem(1, "US")))
+        assertEquals("fallback", GroupPreferenceCatalog.summary("99", ready, "fallback"))
+        assertFalse(ready.entryValues.map { it.toString() }.contains("99"))
+    }
+}
+

@@ -86,6 +86,24 @@ class RequestSnapshotDedupTest {
         assertEquals(RequestSnapshotDedup.legacyString(listOf(a)), RequestSnapshotDedup.legacyString(listOf(b)))
     }
 
+    @Test
+    fun nullPreviousStateIsANewSessionAndNeverSkips() {
+        val raw = """{"flows":[]}"""
+        val fingerprint = RequestSnapshotDedup.Fingerprint.listOf(listOf(flow("a")))
+        assertFalse(RequestSnapshotDedup.shouldSkipUnparsed(null, raw))
+        assertFalse(RequestSnapshotDedup.shouldSkipUnparsed(null, raw))
+        assertFalse(RequestSnapshotDedup.shouldSkipPublish(null, fingerprint))
+        assertFalse(RequestSnapshotDedup.shouldSkipPublish(null, emptyList()))
+    }
+
+    @Test
+    fun emptyFingerprintAfterResetPublishesThenSkips() {
+        val empty = emptyList<RequestSnapshotDedup.Fingerprint>()
+        assertFalse(RequestSnapshotDedup.shouldSkipPublish(null, empty))
+        assertTrue(RequestSnapshotDedup.shouldSkipPublish(empty, empty))
+        assertFalse(RequestSnapshotDedup.shouldSkipPublish(null, empty))
+    }
+
     private fun flow(
         id: String,
         createdAt: Long = 0L,

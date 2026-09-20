@@ -42,6 +42,7 @@ class OutboundPreference
     private var dropdownOpened = false
     private var summaryJob: Job? = null
     private var attached = false
+    private var summaryGeneration = 0
     @Volatile private var summaryCacheKey: String? = null
     @Volatile private var summaryCacheText: CharSequence? = null
 
@@ -105,16 +106,21 @@ class OutboundPreference
     override fun onAttached() {
         super.onAttached()
         attached = true
+        summaryGeneration++
     }
 
     override fun onDetached() {
         attached = false
+        summaryGeneration++
         summaryJob?.cancel()
         summaryJob = null
+        summaryCacheKey = null
+        summaryCacheText = null
         super.onDetached()
     }
 
     private fun requestSummary(current: String?, profileId: Long, routerId: Long, cacheKey: String) {
+        val generation = ++summaryGeneration
         summaryJob?.cancel()
         summaryJob = runOnIoDispatcher {
             val profileName = if (current == VALUE_SELECT_PROFILE && profileId > 0) {
@@ -132,7 +138,21 @@ class OutboundPreference
                 fallback = null,
             )
             runOnMainDispatcher {
-                if (!attached) return@runOnMainDispatcher
+                val liveKey = OutboundPreferenceSummary.cacheKey(
+                    value,
+                    if (value == VALUE_SELECT_PROFILE) {
+                        DataStore.profileCacheStore.getLong(key + "Long") ?: 0L
+                    } else 0L,
+                    if (value == VALUE_SELECT_ROUTER) DataStore.routeOutboundRouter else 0L,
+                )
+                if (!PreferenceAsyncGuard.shouldApplySummary(
+                        attached,
+                        generation,
+                        summaryGeneration,
+                        cacheKey,
+                        liveKey,
+                    )
+                ) return@runOnMainDispatcher
                 summaryCacheKey = cacheKey
                 summaryCacheText = text
                 notifyChanged()

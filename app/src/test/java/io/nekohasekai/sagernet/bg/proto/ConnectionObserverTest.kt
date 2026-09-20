@@ -229,6 +229,90 @@ class ConnectionObserverTest {
         assertTrue(published.size >= 2)
         observer.stop()
     }
+
+    @Test
+    fun stopStartWithIdenticalSnapshotRepublishesFirstFrame() = runBlocking {
+        val ticks = Channel<Unit>(Channel.UNLIMITED)
+        val published = ArrayList<Int>()
+        val raw =
+            """{"flows":[{"id":"a","createdAt":1,"uploadBytes":1,"logicalOutbound":"x","finalOutboundTag":"y"}]}"""
+        val observer = ConnectionObserver(
+            snapshot = { raw },
+            publish = { published.add(it.items.size) },
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            wait = { ticks.receive() },
+            scope = this,
+        )
+        observer.start()
+        delay(30)
+        assertEquals(1, published.size)
+        assertTrue(observer.pollOnce())
+        delay(30)
+        assertEquals(1, published.size)
+        observer.stop()
+        observer.start()
+        delay(30)
+        assertEquals(2, published.size)
+        observer.stop()
+    }
+
+    @Test
+    fun emptySnapshotSessionResetStillPublishesFirstFrame() = runBlocking {
+        val ticks = Channel<Unit>(Channel.UNLIMITED)
+        val published = ArrayList<Int>()
+        val observer = ConnectionObserver(
+            snapshot = { """{"flows":[]}""" },
+            publish = { published.add(it.items.size) },
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            wait = { ticks.receive() },
+            scope = this,
+        )
+        observer.start()
+        delay(30)
+        assertEquals(1, published.size)
+        assertEquals(0, published.single())
+        assertTrue(observer.pollOnce())
+        delay(30)
+        assertEquals(1, published.size)
+        observer.stop()
+        observer.start()
+        delay(30)
+        assertEquals(2, published.size)
+        observer.stop()
+    }
+
+    @Test
+    fun newObserverReconnectsWithSameSnapshotStillPublishes() = runBlocking {
+        val published = ArrayList<String>()
+        val raw =
+            """{"flows":[{"id":"a","createdAt":1,"uploadBytes":1,"logicalOutbound":"x","finalOutboundTag":"y"}]}"""
+        fun observer() = ConnectionObserver(
+            snapshot = { raw },
+            publish = { published.add(it.items.first().id) },
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            wait = { kotlinx.coroutines.channels.Channel<Unit>().receive() },
+            scope = this,
+        )
+        val sessionA = observer()
+        sessionA.start()
+        delay(30)
+        assertEquals(listOf("a"), published)
+        assertTrue(sessionA.pollOnce())
+        delay(30)
+        assertEquals(listOf("a"), published)
+        sessionA.stop()
+        val sessionB = observer()
+        sessionB.start()
+        delay(30)
+        assertEquals(listOf("a", "a"), published)
+        sessionB.stop()
+    }
 }
 
 class RequestFlowMapperTest {

@@ -3,8 +3,10 @@ package io.nekohasekai.sagernet.route
 import io.nekohasekai.sagernet.database.RouterMember
 
 /**
- * Groups router_members rows the same way as N times `getByRouter`,
- * assuming [members] is already ordered by routerId, userOrder, proxyId.
+ * Groups router_members rows the same way as N times `getByRouter`.
+ * Order within each router is always `userOrder, proxyId` — never the order of
+ * a SQL `IN` / `getEntities` result, and not raw encounter order if rows are
+ * interleaved.
  */
 object RouterMemberIndex {
     fun groupByRouter(members: List<RouterMember>): Map<Long, List<RouterMember>> {
@@ -12,6 +14,8 @@ object RouterMemberIndex {
         for (member in members) {
             grouped.getOrPut(member.routerId) { mutableListOf() }.add(member)
         }
+        val byUserOrder = compareBy<RouterMember> { it.userOrder }.thenBy { it.proxyId }
+        grouped.values.forEach { list -> list.sortWith(byUserOrder) }
         return grouped
     }
 

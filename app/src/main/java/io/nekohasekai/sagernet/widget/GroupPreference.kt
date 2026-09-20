@@ -23,10 +23,12 @@ class GroupPreference
     private var model = GroupPreferenceCatalog.loading(null)
     private var loadJob: Job? = null
     private var attached = false
+    private var loadGeneration = 0
 
     override fun onAttached() {
         super.onAttached()
         attached = true
+        val generation = ++loadGeneration
         applyModel(GroupPreferenceCatalog.loading(value))
         loadJob?.cancel()
         loadJob = runOnIoDispatcher {
@@ -35,7 +37,7 @@ class GroupPreference
             }
             val next = GroupPreferenceCatalog.ready(items)
             runOnMainDispatcher {
-                if (!attached) return@runOnMainDispatcher
+                if (!PreferenceAsyncGuard.shouldApply(attached, generation, loadGeneration)) return@runOnMainDispatcher
                 applyModel(next)
             }
         }
@@ -43,6 +45,7 @@ class GroupPreference
 
     override fun onDetached() {
         attached = false
+        loadGeneration++
         loadJob?.cancel()
         loadJob = null
         super.onDetached()
@@ -56,6 +59,7 @@ class GroupPreference
         model = next
         entries = next.entries
         entryValues = next.entryValues
+        // Never assign [value]: a stale/empty catalog must not snap the persisted id.
         notifyChanged()
     }
 }

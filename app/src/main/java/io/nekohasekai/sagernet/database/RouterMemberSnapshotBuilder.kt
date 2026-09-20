@@ -5,6 +5,9 @@ import io.nekohasekai.sagernet.route.RouterMemberSnapshot
 
 /**
  * Builds the Router membership snapshot join without extra per-router queries.
+ * [proxiesById] is a lookup only; member order comes from [members] /
+ * [RouterMemberIndex] (`userOrder`, `proxyId`), matching
+ * `ORDER BY routerId, userOrder, proxyId`.
  */
 object RouterMemberSnapshotBuilder {
     fun build(

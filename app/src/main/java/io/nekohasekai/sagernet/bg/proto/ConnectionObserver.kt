@@ -52,6 +52,8 @@ class ConnectionObserver(
         synchronized(gate) {
             if (value) {
                 enabled = true
+                // New observer session (start, resubscribe, reconnect): first
+                // frame must publish even when snapshot X equals the previous session.
                 lastRawSnapshot = null
                 lastFingerprint = null
                 if (job?.isActive == true) {
