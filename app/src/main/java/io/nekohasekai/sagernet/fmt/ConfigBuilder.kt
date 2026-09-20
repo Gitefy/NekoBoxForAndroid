@@ -36,6 +36,7 @@ import io.nekohasekai.sagernet.fmt.wireguard.buildSingBoxWireGuardEndpointBean
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.isIpAddress
 import io.nekohasekai.sagernet.ktx.mkPort
+import io.nekohasekai.sagernet.route.RouterMemberIndex
 import io.nekohasekai.sagernet.route.RouterRuntime
 import io.nekohasekai.sagernet.route.RouterFilterConfig
 import io.nekohasekai.sagernet.route.RouterRuntimeGroup
@@ -304,9 +305,10 @@ fun captureConfigSnapshot(
         val routerMembers = if (!includeRouterGroups) {
             emptyMap()
         } else {
-            enabledRouters.associate { router ->
-                router.id to SagerDatabase.routerMemberDao.getByRouter(router.id)
-            }
+            val allMembers = SagerDatabase.routerMemberDao.all()
+            val grouped = RouterMemberIndex.groupByRouter(allMembers)
+            val enabledRouterIds = enabledRouters.mapTo(HashSet()) { it.id }
+            grouped.filterKeys { it in enabledRouterIds }
         }
         val extraProxyIds = extraRules.mapNotNull { rule ->
             rule.outbound.takeIf { it > 0 && it != root.id }
