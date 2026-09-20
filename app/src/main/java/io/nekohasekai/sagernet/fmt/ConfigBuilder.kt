@@ -519,12 +519,7 @@ fun compileConfig(captured: CapturedConfig): ConfigBuildResult {
                 type = "tun"
                 tag = "tun-in"
                 interface_name = "tun0"
-                stack = when (snap.tunImplementation) {
-                    TunImplementation.GVISOR -> "gvisor"
-                    TunImplementation.SYSTEM -> "system"
-                    TunImplementation.MIXED -> "mixed"
-                    else -> "go"
-                }
+                stack = tunStackOption(snap.tunImplementation)
                 mtu = snap.mtu
                 // sing-box 1.15 removed legacy inbound fields. Sniffing and the
                 // inbound domain strategy are emitted as route rule actions below.
@@ -1377,6 +1372,15 @@ internal fun encodeRuntimeConfig(configMap: Map<*, *>, pretty: Boolean): String 
 
 internal fun remoteDnsDetour(forTest: Boolean, activeProxyTag: String): String? =
     if (forTest) null else activeProxyTag
+
+// sing-box 1.15.0-alpha.3+ uses the new TCP/IP stack when `stack` is omitted.
+// gVisor / system / mixed remain explicit until the field is removed in 1.17.
+internal fun tunStackOption(implementation: Int): String? = when (implementation) {
+    TunImplementation.GVISOR -> "gvisor"
+    TunImplementation.SYSTEM -> "system"
+    TunImplementation.MIXED -> "mixed"
+    else -> null
+}
 
 // buildDnsServerOptions converts the legacy sing-box DNS server address string
 // (used by NekoBox settings) into the sing-box 1.15+ typed DNS server format.
