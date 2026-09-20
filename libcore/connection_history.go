@@ -250,8 +250,9 @@ func (h *connectionHistory) Upsert(flow connectionFlow) {
 	if h.stopped {
 		return
 	}
-	h.upsertLocked(flow)
-	h.evictLocked()
+	if h.upsertLocked(flow) {
+		h.evictLocked()
+	}
 }
 
 func (h *connectionHistory) ApplyEvent(meta *trafficcontrol.TrackerMetadata) {
@@ -262,16 +263,17 @@ func (h *connectionHistory) ApplyEvent(meta *trafficcontrol.TrackerMetadata) {
 	h.Upsert(flowFromTracker(meta))
 }
 
-func (h *connectionHistory) upsertLocked(flow connectionFlow) {
+func (h *connectionHistory) upsertLocked(flow connectionFlow) bool {
 	if flow.ID == "" {
-		return
+		return false
 	}
 	if existing, ok := h.byID[flow.ID]; ok {
 		mergeConnectionFlow(existing, flow)
-		return
+		return false
 	}
 	copied := flow
 	h.byID[flow.ID] = &copied
+	return true
 }
 
 func flowLess(a, b connectionFlow) bool {
