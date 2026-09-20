@@ -8,11 +8,15 @@ import (
 	"github.com/sagernet/sing-tun"
 )
 
-// makeTUNConfig returns a minimal sing-box config with the given tun stack and
-// address list. Mirrors the JSON produced by ConfigBuilder on the Android side.
+// makeTUNConfig returns a minimal sing-box config. Empty stack omits the field
+// (ConfigBuilder GO / default). Non-empty values match gVisor / system / mixed.
 func makeTUNConfig(stack string, addresses []string) string {
 	addrs, _ := json.Marshal(addresses)
-	cfg := fmt.Sprintf(`{
+	stackField := ""
+	if stack != "" {
+		stackField = fmt.Sprintf("\n      \"stack\": %q,", stack)
+	}
+	return fmt.Sprintf(`{
   "log": {"level": "info"},
   "outbounds": [
     {"type": "direct", "tag": "direct"},
@@ -21,26 +25,31 @@ func makeTUNConfig(stack string, addresses []string) string {
   "inbounds": [
     {
       "type": "tun",
-      "tag": "tun-in",
-      "stack": %q,
+      "tag": "tun-in",%s
       "address": %s,
       "interface_name": "tun0",
       "mtu": 9000,
       "auto_route": true,
-      "strict_route": false,
-      "endpoint_independent_nat": false
+      "strict_route": false
     }
   ],
   "route": {
     "auto_detect_interface": true,
     "final": "direct"
   }
-}`, stack, string(addrs))
-	return cfg
+}`, stackField, string(addrs))
 }
 
 func TestTUNSchemaVariants(t *testing.T) {
-	stacks := []string{"go", "gvisor", "system", "mixed"}
+	stacks := []struct {
+		name  string
+		stack string
+	}{
+		{"default", ""},
+		{"gvisor", "gvisor"},
+		{"system", "system"},
+		{"mixed", "mixed"},
+	}
 	cases := []struct {
 		name    string
 		address []string
@@ -52,23 +61,27 @@ func TestTUNSchemaVariants(t *testing.T) {
 
 	for _, stack := range stacks {
 		for _, c := range cases {
-			t.Run(fmt.Sprintf("%s/%s", stack, c.name), func(t *testing.T) {
-				cfg := makeTUNConfig(stack, c.address)
+			t.Run(fmt.Sprintf("%s/%s", stack.name, c.name), func(t *testing.T) {
+				cfg := makeTUNConfig(stack.stack, c.address)
 				b, err := NewSingBoxInstance(cfg, nil)
 				if err != nil {
 					t.Fatalf("NewSingBoxInstance failed: %v", err)
 				}
 				defer b.Close()
 
-				// Verify the tun inbound JSON shape is what the Android side emits.
 				var raw map[string]any
 				if err := json.Unmarshal([]byte(cfg), &raw); err != nil {
 					t.Fatalf("unmarshal failed: %v", err)
 				}
 				inbounds := raw["inbounds"].([]any)
 				tunRaw := inbounds[0].(map[string]any)
-				if got := tunRaw["stack"].(string); got != stack {
-					t.Errorf("stack = %q, want %q", got, stack)
+				got, hasStack := tunRaw["stack"]
+				if stack.stack == "" {
+					if hasStack {
+						t.Errorf("stack = %v, want omitted", got)
+					}
+				} else if !hasStack || got.(string) != stack.stack {
+					t.Errorf("stack = %v, want %q", got, stack.stack)
 				}
 				addrList := tunRaw["address"].([]any)
 				if len(addrList) != len(c.address) {
@@ -77,6 +90,15 @@ func TestTUNSchemaVariants(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestExplicitGoStackStillParses(t *testing.T) {
+	cfg := makeTUNConfig("go", []string{"172.19.0.1/30"})
+	b, err := NewSingBoxInstance(cfg, nil)
+	if err != nil {
+		t.Fatalf("deprecated stack=go should still parse until 1.17: %v", err)
+	}
+	b.Close()
 }
 
 // protocolSmokeConfig mirrors a NekoBox-generated config containing all
@@ -90,7 +112,6 @@ func protocolSmokeConfig() string {
     {
       "type": "tun",
       "tag": "tun-in",
-      "stack": "go",
       "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"],
       "interface_name": "tun0",
       "mtu": 9000,
@@ -388,7 +409,6 @@ func TestDNSBlockAndStrategySchema(t *testing.T) {
     {
       "type": "tun",
       "tag": "tun-in",
-      "stack": "go",
       "address": ["172.19.0.1/30"],
       "interface_name": "tun0",
       "mtu": 9000,

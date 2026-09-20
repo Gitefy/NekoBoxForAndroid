@@ -7,7 +7,20 @@
 
 本次升级**不删除**原有 gVisor / System / Mixed 回退能力；Go stack 仅作为新安装默认项。
 
-## 固定依赖
+## 当前 pin（v1.15.0-alpha.6）
+
+| 组件 | 版本 / Commit |
+|---|---|
+| sing-box | `8330820fa62505f9574e4c35cd969d9af6eb7769`（官方 tag `v1.15.0-alpha.6`） |
+| sing | `v0.9.5-0.20260917164122-8fc5da509c10` |
+| sing-tun | `v0.9.4-0.20260917142847-fbc0c3dff312` |
+| gvisor | `v0.0.0-20260727.0-sing-box-mod.1`（显式固定，见下方说明） |
+| Go | `1.25.5` |
+| Android NDK | `25.0.8775105` |
+
+相对上一 pin 的产品选择：`TunImplementation.GO` **省略** `stack`，让核心使用 1.15 新默认 TCP/IP 栈；gVisor / System / Mixed 仍写出旧值。`stack` 将在 sing-box 1.17 删除。不跟踪浮动 `testing` HEAD。
+
+## 先前 pin（05f7bc1）
 
 | 组件 | 版本 / Commit |
 |---|---|
@@ -18,15 +31,14 @@
 | Go | `1.25.5` |
 | Android NDK | `25.0.8775105` |
 
-> 正式 `1.15.0-alpha.3` / beta / stable 发布后，再单独评估是否从 commit pin 切换到 release tag。
-> 当前不跟踪浮动 `testing` HEAD。
+> 该 commit pin 用于接入 Go TUN。之后改为官方 `v1.15.0-alpha.6` tag，见上一节。
 
 ## 核心变更
 
-1. **TUN stack 默认 `go`**
+1. **TUN stack 默认省略（1.15 新 TCP/IP 栈）**
    - `Constants.kt` 增加 `TunImplementation.GO = 3`。
    - `DataStore.kt` 默认 `tunImplementation → GO`。
-   - `ConfigBuilder` 将 `GO` 映射为 `stack = "go"`。
+   - `ConfigBuilder` 对 `GO` **不写** `stack`；对 gVisor / System / Mixed 仍写 `"gvisor"` / `"system"` / `"mixed"`。
    - `arrays.xml` 增加 `tun_implementation_go` 文案与 `int_array_4` 枚举。
 
 2. **TUN schema 迁移到 sing-box 1.15**
@@ -87,3 +99,4 @@
 
 保留 `with_gvisor` build tag；`libcore/build.sh` 仍然编译 gVisor 栈。
 用户可在设置中将 `TUN implementation` 从 `Go` 切换为 `gVisor` / `System` / `Mixed`。
+这三项依赖已废弃的 `stack` 字段，将在 sing-box 1.17 失效。

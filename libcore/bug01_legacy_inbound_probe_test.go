@@ -51,7 +51,6 @@ func TestBug01MigratedInboundShapeAccepted(t *testing.T) {
     {
       "type": "tun",
       "tag": "tun-in",
-      "stack": "go",
       "address": ["172.19.0.1/30"],
       "interface_name": "tun0",
       "mtu": 9000,

@@ -108,6 +108,14 @@ val verifyLibcore by tasks.registering {
             if (missingEntries.isNotEmpty()) {
                 throw GradleException("Invalid app/libs/libcore.aar; missing: ${missingEntries.joinToString()}")
             }
+            val jniAbis = archive.entries().asSequence()
+                .map { it.name }
+                .filter { it.startsWith("jni/") && it.endsWith("/libgojni.so") }
+                .sorted()
+                .toList()
+            if (jniAbis != listOf("jni/arm64-v8a/libgojni.so")) {
+                throw GradleException("libcore.aar must contain only arm64-v8a: $jniAbis")
+            }
             val classesJar = archive.getInputStream(archive.getEntry("classes.jar")).readBytes()
             var libcoreClass: ByteArray? = null
             val classNames = linkedSetOf<String>()
