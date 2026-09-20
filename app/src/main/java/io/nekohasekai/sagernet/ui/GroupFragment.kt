@@ -485,22 +485,10 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group),
                 groupStatus.setPadding(0)
             } else if (subscription != null && !subscription.subscriptionUserinfo.isNullOrBlank()) { // Raw
                 var text = ""
-
-                fun get(regex: String): String? {
-                    return regex.toRegex().findAll(subscription.subscriptionUserinfo).mapNotNull {
-                        if (it.groupValues.size > 1) it.groupValues[1] else null
-                    }.firstOrNull()
-                }
-
                 try {
-                    var used: Long = 0
-                    get("upload=([0-9]+)")?.apply {
-                        used += toLong()
-                    }
-                    get("download=([0-9]+)")?.apply {
-                        used += toLong()
-                    }
-                    val total = get("total=([0-9]+)")?.toLong() ?: 0
+                    val stats = SubscriptionUserinfoParser.parse(subscription.subscriptionUserinfo)
+                    val used = stats.used
+                    val total = stats.total
                     val remain = total - used
                     if (used > 0 || total > 0) {
                         text += if (remain > 0) {
@@ -513,11 +501,11 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group),
                             getString(R.string.subscription_used, used.toBytesString())
                         }
                     }
-                    get("expire=([0-9]+)")?.apply {
+                    stats.expireEpochSec?.let { expire ->
                         text += "\n"
                         text += getString(
                             R.string.subscription_expire,
-                            Util.timeStamp2Text(this.toLong() * 1000)
+                            Util.timeStamp2Text(expire * 1000)
                         )
                     }
                 } catch (_: NumberFormatException) {

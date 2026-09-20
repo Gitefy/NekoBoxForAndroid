@@ -153,6 +153,7 @@ class ConfigBuildResult(
      *  TrafficLooper to avoid suppressing independent Router node traffic statistics. */
     val routerAllMemberIds: Set<Long> = emptySet(),
     val connectionTestTargetTag: String? = null,
+    val profileIdByTag: Map<String, Long> = ProfileTagIndex.byTag(profileTagMap),
 ) {
     data class IndexEntity(var chain: LinkedHashMap<Int, ProxyEntity>)
 }

@@ -10,9 +10,12 @@ import io.nekohasekai.sagernet.fmt.internal.ChainBean
 import io.nekohasekai.sagernet.fmt.socks.SOCKSBean
 import io.nekohasekai.sagernet.fmt.v2ray.VMessBean
 import io.nekohasekai.sagernet.ktx.applyDefaultValues
+import com.google.gson.JsonParser
 import moe.matsuri.nb4a.proxy.anytls.AnyTLSBean
+import moe.matsuri.nb4a.utils.JavaUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -169,5 +172,62 @@ class ConfigCaptureCompileTest {
         val socks = socks(3, 10, "plain.example")
         val json = compileConfig(captured(socks, mapOf(3L to socks), mapOf(10L to group))).config
         assertTrue(json.contains("plain.example"))
+    }
+
+    @Test
+    fun runtimeCompileIsCompactAndStructurallyEqualToPretty() {
+        val group = ProxyGroup(id = 10L, name = "g")
+        val proxy = socks(1, 10, "runtime.example")
+        val compact = compileConfig(
+            captured(
+                proxy,
+                mapOf(1L to proxy),
+                mapOf(10L to group),
+                forTest = false,
+                forExport = false,
+            )
+        ).config
+        assertTrue(compact.contains("runtime.example"))
+        assertFalse(compact.contains("\n"))
+        val tree = JsonParser.parseString(compact)
+        val pretty = JavaUtil.gson.toJson(tree)
+        val recompressed = JavaUtil.gsonCompact.toJson(tree)
+        assertTrue(pretty.contains("\n"))
+        assertFalse(recompressed.contains("\n"))
+        assertEquals(tree, JsonParser.parseString(pretty))
+        assertEquals(tree, JsonParser.parseString(recompressed))
+        val exported = compileConfig(
+            captured(
+                proxy,
+                mapOf(1L to proxy),
+                mapOf(10L to group),
+                forTest = false,
+                forExport = true,
+            )
+        ).config
+        assertTrue(exported.contains("\n"))
+    }
+
+    @Test
+    fun profileIdByTagMatchesFirstWinsScan() {
+        val group = ProxyGroup(id = 10L, name = "g")
+        val us = socks(1, 10, "us.example", "US")
+        val sg = socks(2, 10, "sg.example", "SG")
+        val result = compileConfig(
+            captured(
+                proxy = us,
+                proxies = mapOf(1L to us, 2L to sg),
+                groups = mapOf(10L to group),
+                forTest = false,
+            )
+        )
+        for ((id, tag) in result.profileTagMap) {
+            assertEquals(
+                result.profileTagMap.filterValues { it == tag }.keys.firstOrNull(),
+                result.profileIdByTag[tag],
+            )
+            assertEquals(id, result.profileIdByTag[tag] ?: id)
+        }
+        assertNull(result.profileIdByTag["missing-tag"])
     }
 }

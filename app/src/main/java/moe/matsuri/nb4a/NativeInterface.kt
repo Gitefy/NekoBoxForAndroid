@@ -84,8 +84,7 @@ class NativeInterface : BoxPlatformInterface, NB4AInterface {
         val routerTag = proxy?.config?.routerSelectorTags?.entries
             ?.firstOrNull { it.value == selectorTag }?.key
         if (routerTag != null && service != null && proxy != null) {
-            val id = proxy.config.profileTagMap
-                .filterValues { it == tag }.keys.firstOrNull() ?: return
+            val id = proxy.config.profileIdByTag[tag] ?: return
             runOnDefaultDispatcher {
                 if (DataStore.baseService !== service || service.data.proxy !== proxy) return@runOnDefaultDispatcher
                 val selected = SagerDatabase.proxyDao.getById(id) ?: return@runOnDefaultDispatcher
@@ -110,8 +109,7 @@ class NativeInterface : BoxPlatformInterface, NB4AInterface {
         if (service == null || proxy == null) return
         runOnDefaultDispatcher {
             if (DataStore.baseService !== service || service.data.proxy !== proxy) return@runOnDefaultDispatcher
-            val id = proxy.config.profileTagMap
-                .filterValues { it == tag }.keys.firstOrNull() ?: -1
+            val id = proxy.config.profileIdByTag[tag] ?: -1
             val ent = SagerDatabase.proxyDao.getById(id) ?: return@runOnDefaultDispatcher
             // traffic & title
             val title = ServiceNotification.genTitle(ent)

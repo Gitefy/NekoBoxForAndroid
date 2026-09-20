@@ -49,23 +49,32 @@ object RequestStore {
     }
 
     fun filtered(): List<RequestFlowData> {
-        val q = query.trim().lowercase()
+        val kind = kindFilter
+        val rawQuery = query.trim()
+        if (kind == FILTER_ALL && rawQuery.isEmpty()) return items
+        val needle = if (rawQuery.isEmpty()) "" else rawQuery.lowercase()
         return items.filter { flow ->
-            val kindOk = kindFilter == FILTER_ALL || flow.kind == kindFilter
-            if (!kindOk) return@filter false
-            if (q.isEmpty()) return@filter true
-            listOf(
-                flow.domain,
-                flow.destinationAddress,
-                flow.packageName,
-                flow.routerName,
-                flow.routerStableTag,
-                flow.finalProfileName,
-                flow.finalOutboundTag,
-                flow.logicalOutbound,
-                flow.matchedRuleText,
-            ).any { it.lowercase().contains(q) }
+            if (kind != FILTER_ALL && flow.kind != kind) return@filter false
+            if (needle.isEmpty()) return@filter true
+            matchesQuery(flow, needle)
         }
+    }
+
+    internal fun matchesQuery(flow: RequestFlowData, needleLower: String): Boolean {
+        return containsLower(flow.domain, needleLower) ||
+            containsLower(flow.destinationAddress, needleLower) ||
+            containsLower(flow.packageName, needleLower) ||
+            containsLower(flow.routerName, needleLower) ||
+            containsLower(flow.routerStableTag, needleLower) ||
+            containsLower(flow.finalProfileName, needleLower) ||
+            containsLower(flow.finalOutboundTag, needleLower) ||
+            containsLower(flow.logicalOutbound, needleLower) ||
+            containsLower(flow.matchedRuleText, needleLower)
+    }
+
+    private fun containsLower(value: String, needleLower: String): Boolean {
+        if (value.isEmpty()) return false
+        return value.lowercase().contains(needleLower)
     }
 
     fun addListener(listener: () -> Unit) {
