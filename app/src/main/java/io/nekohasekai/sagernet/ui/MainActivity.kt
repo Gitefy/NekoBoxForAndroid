@@ -37,6 +37,7 @@ import io.nekohasekai.sagernet.bg.CommandOutcome
 import io.nekohasekai.sagernet.bg.SagerConnection
 import io.nekohasekai.sagernet.bg.UserStartTarget
 import io.nekohasekai.sagernet.database.DataStore
+import io.nekohasekai.sagernet.route.RouterStartSeed
 import io.nekohasekai.sagernet.database.GroupManager
 import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.ProxyGroup
@@ -113,10 +114,20 @@ class MainActivity : ThemedActivity(),
             val fragment = currentMainFragment as? ConfigurationFragment
                 ?: supportFragmentManager.findFragmentById(R.id.fragment_holder) as? ConfigurationFragment
             val inRouter = fragment?.inRouterGroupMode() == true
-            val routerPage = fragment?.currentRouterPage()
+            val routerInputs = fragment?.currentRouterStartInputs()
             runOnDefaultDispatcher {
                 val globalValid = capturedGlobal > 0L &&
                     runCatching { SagerDatabase.proxyDao.getById(capturedGlobal) }.getOrNull() != null
+                val routerPage = if (inRouter && routerInputs != null) {
+                    val memberIds = SagerDatabase.routerMemberDao.getByRouter(routerInputs.routerId)
+                        .map { it.proxyId }
+                    UserStartTarget.RouterPage(
+                        mode = routerInputs.mode,
+                        selectedMemberId = RouterStartSeed.resolve(routerInputs, memberIds),
+                    )
+                } else {
+                    null
+                }
                 val memberId = routerPage?.selectedMemberId ?: 0L
                 val memberValid = memberId > 0L &&
                     runCatching { SagerDatabase.proxyDao.getById(memberId) }.getOrNull() != null

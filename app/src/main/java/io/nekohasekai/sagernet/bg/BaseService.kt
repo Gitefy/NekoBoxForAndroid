@@ -26,6 +26,7 @@ import io.nekohasekai.sagernet.route.RouterRuntimeMode
 import io.nekohasekai.sagernet.route.RouterSelection
 import io.nekohasekai.sagernet.route.RouterSelectionPlan
 import io.nekohasekai.sagernet.route.RouterSelectionRequest
+import io.nekohasekai.sagernet.route.RouterUrlTestRefresh
 import io.nekohasekai.sagernet.route.routerNodeKey
 import io.nekohasekai.sagernet.utils.ConnectionResetDebouncer
 import io.nekohasekai.sagernet.utils.DefaultNetworkListener
@@ -207,6 +208,16 @@ class BaseService {
             } catch (e: Exception) {
                 error(Protocols.genFriendlyMsg(e.readableMessage))
             }
+        }
+
+        override fun refreshUrlTest(groupTag: String?): Boolean {
+            val proxy = data?.takeIf { it.state == State.Connected }?.proxy ?: return false
+            if (!proxy.isInitialized()) return false
+            val tag = groupTag?.takeIf { it.isNotBlank() } ?: return false
+            if (!RouterUrlTestRefresh.canRefreshRunningGroup(tag, proxy.config.routerUrlTestTags.values)) {
+                return false
+            }
+            return proxy.box.refreshURLTestFor(tag)
         }
 
         fun stateChanged(s: State, msg: String?) = launch {

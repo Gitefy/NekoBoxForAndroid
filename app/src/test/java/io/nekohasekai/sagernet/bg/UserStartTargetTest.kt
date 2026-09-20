@@ -104,4 +104,23 @@ class UserStartTargetTest {
         assertEquals(R.string.settings_not_ready, ApplyErrorMessages.stringRes(ApplyErrorCodes.NOT_READY))
         assertEquals(R.string.restore_in_progress, ApplyErrorMessages.stringRes(ApplyErrorCodes.RESTORE_IN_PROGRESS))
     }
+
+    @Test
+    fun urlTestSeededMemberStartsAndPersists() {
+        val persisted = LinkedHashMap<String, Long>()
+        val seededPage = UserStartTarget.RouterPage(RouterGroup.MODE_URL_TEST, 15L)
+        val capture = UserStartTarget.capture(
+            globalSelectedId = 0L,
+            globalProfileValid = false,
+            inRouterGroupMode = true,
+            routerPage = seededPage,
+            routerMemberValid = true,
+        )
+        UserStartTarget.persistIfNeeded(capture) { persisted[Key.PROFILE_ID] = it }
+        assertEquals(15L, capture.targetProfileId)
+        assertTrue(capture.persistGlobalProfileId)
+        assertEquals(15L, persisted[Key.PROFILE_ID])
+        assertFalse(UserStartTarget.isUrlTestWithoutMember(seededPage))
+        assertNull(capture.errorCode)
+    }
 }

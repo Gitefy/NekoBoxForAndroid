@@ -14,4 +14,5 @@ interface ISagerNetService {
   oneway void setRequestObserverEnabled(in ISagerNetServiceCallback cb, boolean enabled);
 
   int urlTest();
+  boolean refreshUrlTest(String groupTag);
 }
