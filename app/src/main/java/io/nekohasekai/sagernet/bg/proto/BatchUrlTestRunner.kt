@@ -5,13 +5,46 @@ import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.ProxyGroup
 import io.nekohasekai.sagernet.fmt.BatchConfigBuilder
 import io.nekohasekai.sagernet.ktx.Logs
-import io.nekohasekai.sagernet.ktx.readableMessage
-import io.nekohasekai.sagernet.plugin.PluginManager
 import kotlinx.coroutines.*
 import libcore.BoxInstance
 import libcore.Libcore
 import moe.matsuri.nb4a.net.LocalResolverImpl
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+
+/**
+ * BoxBridge encapsulates the lifecycle and probing operations for a sing-box instance.
+ */
+interface BoxBridge {
+    fun start()
+    fun close()
+    fun urlTestWithTarget(link: String, timeout: Int, targetTag: String): Int
+}
+
+class SingBoxBridge(private val box: BoxInstance) : BoxBridge {
+    override fun start() {
+        box.start()
+    }
+
+    override fun close() {
+        box.close()
+    }
+
+    override fun urlTestWithTarget(link: String, timeout: Int, targetTag: String): Int {
+        return Libcore.urlTestWithTarget(box, link, timeout, targetTag)
+    }
+}
+
+data class BatchMetrics(
+    var boxCreateCount: Int = 0,
+    var boxStartCount: Int = 0,
+    var boxCloseCount: Int = 0,
+    var batchProbeCount: Int = 0,
+    var fallbackProbeCount: Int = 0,
+    var totalElapsedMs: Long = 0,
+    var firstResultElapsedMs: Long = 0,
+)
 
 /**
  * BatchUrlTestRunner coordinates batch connectivity testing using a single shared
@@ -22,11 +55,12 @@ import java.util.concurrent.ConcurrentLinkedQueue
  * failure automatically fall back to isolated F1 testing.
  */
 class BatchUrlTestRunner(
-    val link: String = DataStore.connectionTestURL,
-    val timeout: Int = DataStore.connectionTestTimeout,
-    val configuredConcurrency: Int = DataStore.connectionTestConcurrent,
-    private val boxFactory: (String) -> BoxInstance? = { configJson ->
-        Libcore.newSingBoxInstance(configJson, LocalResolverImpl)
+    val link: String = runCatching { DataStore.connectionTestURL }.getOrDefault("https://www.gstatic.com/generate_204"),
+    val timeout: Int = runCatching { DataStore.connectionTestTimeout }.getOrDefault(3000),
+    val configuredConcurrency: Int = runCatching { DataStore.connectionTestConcurrent }.getOrDefault(5),
+    private val boxFactory: (String) -> BoxBridge? = { configJson ->
+        val box = Libcore.newSingBoxInstance(configJson, LocalResolverImpl)
+        if (box != null) SingBoxBridge(box) else null
     },
     private val singleTester: suspend (ProxyEntity) -> Int = { profile ->
         TestInstance(profile, link, timeout).doTest()
@@ -36,6 +70,9 @@ class BatchUrlTestRunner(
     companion object {
         const val MAX_BATCH_URL_TEST_CONCURRENCY = 10
     }
+
+    var lastMetrics = BatchMetrics()
+        private set
 
     val effectiveConcurrency: Int
         get() = minOf(maxOf(configuredConcurrency, 1), MAX_BATCH_URL_TEST_CONCURRENCY)
@@ -47,7 +84,24 @@ class BatchUrlTestRunner(
         directDns: String = "223.5.5.5",
         onResult: (ProxyEntity) -> Unit,
     ) = coroutineScope {
-        if (profilesList.isEmpty()) return@coroutineScope
+        val startTime = System.currentTimeMillis()
+        val metrics = BatchMetrics()
+        val firstResultRecorded = AtomicBoolean(false)
+        val batchProbeCounter = AtomicInteger(0)
+        val fallbackProbeCounter = AtomicInteger(0)
+
+        fun recordResult(profile: ProxyEntity) {
+            if (firstResultRecorded.compareAndSet(false, true)) {
+                metrics.firstResultElapsedMs = System.currentTimeMillis() - startTime
+            }
+            onResult(profile)
+        }
+
+        if (profilesList.isEmpty()) {
+            metrics.totalElapsedMs = System.currentTimeMillis() - startTime
+            lastMetrics = metrics
+            return@coroutineScope
+        }
 
         val batchResult = BatchConfigBuilder.build(
             profiles = profilesList,
@@ -60,19 +114,24 @@ class BatchUrlTestRunner(
         val fallbackQueue = ConcurrentLinkedQueue(batchResult.fallbackProfiles)
         val batchQueue = ConcurrentLinkedQueue<ProxyEntity>()
 
-        var batchBox: BoxInstance? = null
+        var batchBridge: BoxBridge? = null
         if (batchEligible.isNotEmpty()) {
             try {
-                val box = boxFactory(batchResult.config)
+                metrics.boxCreateCount++
+                val bridge = boxFactory(batchResult.config)
                     ?: throw IllegalStateException("boxFactory returned null")
-                box.start()
-                batchBox = box
+                bridge.start()
+                metrics.boxStartCount++
+                batchBridge = bridge
                 batchQueue.addAll(batchEligible)
                 Logs.d("BatchUrlTest: started shared BoxInstance for ${batchEligible.size} nodes")
             } catch (e: Exception) {
-                Logs.w("BatchUrlTest: shared Box start failed: ${e.readableMessage}; falling back to isolated tests", e)
-                runCatching { batchBox?.close() }
-                batchBox = null
+                Logs.w("BatchUrlTest: shared Box start failed: ${e.readableMsg}; falling back to isolated tests", e)
+                runCatching {
+                    metrics.boxCloseCount++
+                    batchBridge?.close()
+                }
+                batchBridge = null
                 // Whole-batch start failure: all batch-eligible profiles fall back to isolated F1 path
                 fallbackQueue.addAll(batchEligible)
             }
@@ -82,27 +141,29 @@ class BatchUrlTestRunner(
             val workers = mutableListOf<Job>()
 
             // 1. Process batch-eligible nodes using the shared Box
-            if (batchBox != null) {
+            if (batchBridge != null) {
                 repeat(effectiveConcurrency) {
                     workers.add(launch(Dispatchers.IO) {
                         while (isActive) {
                             val profile = batchQueue.poll() ?: break
                             val targetTag = batchResult.targetTagMap[profile.id]
                             if (targetTag.isNullOrBlank()) {
-                                executeIsolated(profile, onResult)
+                                fallbackProbeCounter.incrementAndGet()
+                                executeIsolated(profile, ::recordResult)
                                 continue
                             }
 
                             profile.status = 0
                             try {
-                                val ping = Libcore.urlTestWithTarget(batchBox, link, timeout, targetTag)
+                                val ping = batchBridge.urlTestWithTarget(link, timeout, targetTag)
                                 profile.status = 1
                                 profile.ping = ping
                             } catch (e: Exception) {
                                 profile.status = 3
-                                profile.error = e.readableMessage
+                                profile.error = e.readableMsg
                             }
-                            onResult(profile)
+                            batchProbeCounter.incrementAndGet()
+                            recordResult(profile)
                         }
                     })
                 }
@@ -116,17 +177,25 @@ class BatchUrlTestRunner(
                     workers.add(launch(Dispatchers.IO) {
                         while (isActive) {
                             val profile = fallbackQueue.poll() ?: break
-                            executeIsolated(profile, onResult)
+                            fallbackProbeCounter.incrementAndGet()
+                            executeIsolated(profile, ::recordResult)
                         }
                     })
                 }
                 workers.joinAll()
             }
         } finally {
-            if (batchBox != null) {
-                runCatching { batchBox.close() }.onFailure { Logs.w(it) }
+            if (batchBridge != null) {
+                runCatching {
+                    metrics.boxCloseCount++
+                    batchBridge.close()
+                }.onFailure { Logs.w(it) }
                 Logs.d("BatchUrlTest: closed shared BoxInstance")
             }
+            metrics.batchProbeCount = batchProbeCounter.get()
+            metrics.fallbackProbeCount = fallbackProbeCounter.get()
+            metrics.totalElapsedMs = System.currentTimeMillis() - startTime
+            lastMetrics = metrics
         }
     }
 
@@ -136,13 +205,18 @@ class BatchUrlTestRunner(
             val ping = singleTester(profile)
             profile.status = 1
             profile.ping = ping
-        } catch (e: PluginManager.PluginNotFoundException) {
-            profile.status = 2
-            profile.error = e.readableMessage
         } catch (e: Exception) {
-            profile.status = 3
-            profile.error = e.readableMessage
+            if (e.javaClass.simpleName == "PluginNotFoundException") {
+                profile.status = 2
+            } else {
+                profile.status = 3
+            }
+            profile.error = e.readableMsg
         }
         onResult(profile)
     }
 }
+
+private val Throwable.readableMsg: String
+    get() = localizedMessage.takeIf { !it.isNullOrBlank() } ?: javaClass.simpleName
+
