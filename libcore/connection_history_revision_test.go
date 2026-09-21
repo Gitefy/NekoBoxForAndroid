@@ -316,3 +316,72 @@ func TestRevisionMergeLiveTrackerByteUpdate(t *testing.T) {
 		t.Fatalf("tracker byte increase must advance revision: rev2=%d, rev3=%d", rev2, rev3)
 	}
 }
+
+func TestMergeAndSnapshotSince(t *testing.T) {
+	now := time.UnixMilli(9_000_000)
+	h := newConnectionHistory(func() time.Time { return now })
+
+	var upload atomic.Int64
+	upload.Store(100)
+	tracker := &trafficcontrol.TrackerMetadata{
+		ID:        uuid.FromStringOrNil("55555555-5555-5555-5555-555555555555"),
+		CreatedAt: now,
+		Metadata: adapter.InboundContext{
+			Destination: M.Socksaddr{Fqdn: "example.org", Port: 443},
+		},
+		Upload: &upload,
+	}
+	src := &revisionFakeSource{conns: []*trafficcontrol.TrackerMetadata{tracker}}
+
+	scansBefore := h.liveScans.Load()
+
+	// Initial poll: lastRevision = -1 (force initial)
+	resp1 := h.MergeAndSnapshotSince(src, -1)
+	if resp1.Unchanged {
+		t.Fatal("expected resp1.Unchanged to be false on initial fetch")
+	}
+	if resp1.Payload == nil || resp1.Payload.Value == "" {
+		t.Fatal("expected non-empty payload on initial fetch")
+	}
+	rev1 := resp1.Revision
+	if rev1 == 0 {
+		t.Fatalf("expected non-zero revision, got %d", rev1)
+	}
+	if h.liveScans.Load()-scansBefore != 1 {
+		t.Fatalf("expected exactly 1 live scan on changed tick, got %d", h.liveScans.Load()-scansBefore)
+	}
+
+	// Unchanged poll: lastRevision = rev1
+	scansBefore = h.liveScans.Load()
+	resp2 := h.MergeAndSnapshotSince(src, rev1)
+	if !resp2.Unchanged {
+		t.Fatal("expected resp2.Unchanged to be true when revision unchanged")
+	}
+	if resp2.Revision != rev1 {
+		t.Fatalf("expected revision %d, got %d", rev1, resp2.Revision)
+	}
+	if h.liveScans.Load()-scansBefore != 1 {
+		t.Fatalf("expected exactly 1 live scan on poll, got %d", h.liveScans.Load()-scansBefore)
+	}
+
+	// Changed poll: tracker updates
+	upload.Store(200)
+	scansBefore = h.liveScans.Load()
+	resp3 := h.MergeAndSnapshotSince(src, rev1)
+	if resp3.Unchanged {
+		t.Fatal("expected resp3.Unchanged to be false after tracker update")
+	}
+	if resp3.Revision <= rev1 {
+		t.Fatalf("expected revision to advance past %d, got %d", rev1, resp3.Revision)
+	}
+	if h.liveScans.Load()-scansBefore != 1 {
+		t.Fatalf("expected exactly 1 live scan on changed tick, got %d", h.liveScans.Load()-scansBefore)
+	}
+
+	// Cache test: calling with lastRevision = -1 for the same revision reuses cached JSON
+	respCached := h.MergeAndSnapshotSince(nil, -1)
+	if respCached.Payload.Value != resp3.Payload.Value {
+		t.Fatalf("expected cached JSON to match: got %s, want %s", respCached.Payload.Value, resp3.Payload.Value)
+	}
+}
+

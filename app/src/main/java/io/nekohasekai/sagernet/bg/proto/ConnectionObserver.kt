@@ -20,7 +20,14 @@ class ConnectionObserver(
     private val wait: suspend (Long) -> Unit = { delay(it) },
     private val scope: CoroutineScope,
     private val revision: (() -> Long?)? = null,
+    private val snapshotSince: ((Long) -> SnapshotResult?)? = null,
 ) {
+    data class SnapshotResult(
+        val revision: Long,
+        val unchanged: Boolean,
+        val payload: String?,
+    )
+
     @Volatile
     var enabled: Boolean = false
         private set
@@ -79,18 +86,46 @@ class ConnectionObserver(
     fun pollOnce(): Boolean {
         if (!enabled || !isCurrent()) return false
         return try {
-            val rev = revision?.invoke()
-            synchronized(gate) {
-                if (!enabled || !isCurrent()) return false
-                if (rev != null && lastRevision != null && rev == lastRevision) {
-                    return true
+            val reqRev = synchronized(gate) { lastRevision } ?: -1L
+            val raw: String
+            val currentRev: Long?
+
+            if (snapshotSince != null) {
+                val resp = snapshotSince.invoke(reqRev)
+                if (resp != null) {
+                    if (resp.unchanged && reqRev >= 0L) {
+                        return true
+                    }
+                    raw = resp.payload.orEmpty()
+                    currentRev = resp.revision
+                } else {
+                    Logs.w("P3_D_CONNECTION_SNAPSHOT_FALLBACK: snapshotSince returned null")
+                    val rev = revision?.invoke()
+                    synchronized(gate) {
+                        if (!enabled || !isCurrent()) return false
+                        if (rev != null && lastRevision != null && rev == lastRevision) {
+                            return true
+                        }
+                    }
+                    raw = snapshot()
+                    currentRev = rev
                 }
+            } else {
+                val rev = revision?.invoke()
+                synchronized(gate) {
+                    if (!enabled || !isCurrent()) return false
+                    if (rev != null && lastRevision != null && rev == lastRevision) {
+                        return true
+                    }
+                }
+                raw = snapshot()
+                currentRev = rev
             }
-            val raw = snapshot()
+
             synchronized(gate) {
                 if (!enabled || !isCurrent()) return false
                 if (RequestSnapshotDedup.shouldSkipUnparsed(lastRawSnapshot, raw)) {
-                    if (rev != null) lastRevision = rev
+                    if (currentRev != null) lastRevision = currentRev
                     return true
                 }
             }
@@ -104,7 +139,7 @@ class ConnectionObserver(
             synchronized(gate) {
                 if (!enabled || !isCurrent()) return false
                 lastRawSnapshot = raw
-                if (rev != null) lastRevision = rev
+                if (currentRev != null) lastRevision = currentRev
                 if (RequestSnapshotDedup.shouldSkipPublish(lastFingerprint, fingerprint)) return true
                 lastFingerprint = fingerprint
             }

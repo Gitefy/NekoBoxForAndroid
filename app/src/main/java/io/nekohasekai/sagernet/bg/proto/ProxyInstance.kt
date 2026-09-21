@@ -53,6 +53,17 @@ class ProxyInstance(profile: ProxyEntity, var service: BaseService.Interface? = 
                 revision = {
                     runCatching { box.connectionSnapshotRevision() }.getOrNull()
                 },
+                snapshotSince = { lastRev ->
+                    runCatching {
+                        box.connectionSnapshotSince(lastRev)?.let { resp ->
+                            ConnectionObserver.SnapshotResult(
+                                revision = resp.revision,
+                                unchanged = resp.unchanged,
+                                payload = resp.payload?.value.orEmpty(),
+                            )
+                        }
+                    }.getOrNull()
+                },
                 publish = { batch ->
                     svc.data.binder.publishRequestSnapshot(batch)
                 },

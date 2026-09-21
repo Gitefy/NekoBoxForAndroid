@@ -550,6 +550,116 @@ class ConnectionObserverTest {
         assertTrue(observer.pollOnce())
         observer.stop()
     }
+
+    @Test
+    fun singleJniSnapshotSinceOnlyInvokedOnceOnChangedAndUnchangedTicks() = runBlocking {
+        var snapshotSinceCalls = 0
+        var legacySnapshotCalls = 0
+        var legacyRevisionCalls = 0
+        val published = ArrayList<String>()
+
+        var currentRev = 100L
+        var isUnchanged = false
+        var resp = ConnectionObserver.SnapshotResult(
+            revision = 100L,
+            unchanged = false,
+            payload = """{"flows":[{"id":"flow-1","logicalOutbound":"p","finalOutboundTag":"f"}]}""",
+        )
+
+        val observer = ConnectionObserver(
+            snapshot = { legacySnapshotCalls++; "" },
+            revision = { legacyRevisionCalls++; 0L },
+            snapshotSince = { lastRev ->
+                snapshotSinceCalls++
+                if (lastRev == currentRev) {
+                    ConnectionObserver.SnapshotResult(
+                        revision = currentRev,
+                        unchanged = true,
+                        payload = "",
+                    )
+                } else {
+                    resp
+                }
+            },
+            publish = { batch -> published.add(batch.items.first().id) },
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            scope = this,
+        )
+
+        observer.start()
+        delay(30)
+
+        // Poll 1: Initial frame
+        assertEquals(1, snapshotSinceCalls)
+        assertEquals(0, legacySnapshotCalls)
+        assertEquals(0, legacyRevisionCalls)
+        assertEquals(1, published.size)
+        assertEquals("flow-1", published[0])
+
+        // Poll 2: Revision unchanged -> single JNI, no publish
+        val res = observer.pollOnce()
+        assertTrue(res)
+        assertEquals(2, snapshotSinceCalls)
+        assertEquals(0, legacySnapshotCalls)
+        assertEquals(0, legacyRevisionCalls)
+        assertEquals(1, published.size)
+
+        // Poll 3: Revision advances
+        currentRev = 101L
+        resp = ConnectionObserver.SnapshotResult(
+            revision = 101L,
+            unchanged = false,
+            payload = """{"flows":[{"id":"flow-2","logicalOutbound":"p","finalOutboundTag":"f"}]}""",
+        )
+        val res3 = observer.pollOnce()
+        assertTrue(res3)
+        delay(30)
+        assertEquals(3, snapshotSinceCalls)
+        assertEquals(2, published.size)
+        assertEquals("flow-2", published[1])
+
+        observer.stop()
+    }
+
+    @Test
+    fun snapshotSinceSessionRestartForcesFullFrame() = runBlocking {
+        var reqRevReceived: Long? = null
+        val resp = ConnectionObserver.SnapshotResult(
+            revision = 42L,
+            unchanged = false,
+            payload = """{"flows":[{"id":"f","logicalOutbound":"p","finalOutboundTag":"f"}]}""",
+        )
+
+        val observer = ConnectionObserver(
+            snapshot = { "" },
+            snapshotSince = { lastRev ->
+                reqRevReceived = lastRev
+                resp
+            },
+            publish = {},
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            scope = this,
+        )
+
+        observer.start()
+        delay(30)
+        assertEquals(-1L, reqRevReceived)
+
+        // Run pollOnce to update lastRevision to 42L
+        observer.pollOnce()
+
+        // Restart session: must reset lastRevision and send -1L again
+        observer.stop()
+        observer.start()
+        delay(30)
+        assertEquals(-1L, reqRevReceived)
+
+        observer.stop()
+    }
 }
 
 class RequestFlowMapperTest {

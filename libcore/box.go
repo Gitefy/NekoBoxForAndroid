@@ -247,6 +247,20 @@ func (b *BoxInstance) ConnectionSnapshot() *StringBox {
 	return wrapString(history.SnapshotJSON())
 }
 
+func (b *BoxInstance) ConnectionSnapshotSince(lastRevision int64) *ConnectionSnapshotResponse {
+	if b == nil {
+		return &ConnectionSnapshotResponse{Revision: 0, Unchanged: true, Payload: wrapString(`{"flows":[]}`)}
+	}
+	b.access.Lock()
+	history := b.connHistory
+	manager := b.trafficManager
+	b.access.Unlock()
+	if history == nil {
+		return &ConnectionSnapshotResponse{Revision: 0, Unchanged: true, Payload: wrapString(`{"flows":[]}`)}
+	}
+	return history.MergeAndSnapshotSince(manager, lastRevision)
+}
+
 func (b *BoxInstance) Sleep() {
 	if b.pauseManager != nil {
 		b.pauseManager.DevicePause()

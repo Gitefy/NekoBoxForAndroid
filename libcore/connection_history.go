@@ -48,6 +48,12 @@ type connectionSnapshotEnvelope struct {
 	Flows []connectionFlow `json:"flows"`
 }
 
+type ConnectionSnapshotResponse struct {
+	Revision  int64
+	Unchanged bool
+	Payload   *StringBox
+}
+
 type liveConnectionSource interface {
 	Connections() []*trafficcontrol.TrackerMetadata
 	ClosedConnections() []*trafficcontrol.TrackerMetadata
@@ -64,6 +70,9 @@ type connectionHistory struct {
 	stopCh   chan struct{}
 	stopped  bool
 	revision int64
+
+	cachedRevision int64
+	cachedJSON     string
 
 	liveScans       atomic.Int64
 	trackerConverts atomic.Int64
@@ -419,6 +428,81 @@ func (h *connectionHistory) listen(
 				h.ApplyEvent(event.Metadata)
 			}
 		}
+	}
+}
+
+func (h *connectionHistory) MergeAndSnapshotSince(source liveConnectionSource, lastRevision int64) *ConnectionSnapshotResponse {
+	if source != nil {
+		h.liveScans.Add(1)
+		metas := source.Connections()
+		var flows []connectionFlow
+		if len(metas) > 0 {
+			flows = make([]connectionFlow, 0, len(metas))
+			for _, meta := range metas {
+				h.trackerConverts.Add(1)
+				flows = append(flows, flowFromTracker(meta))
+			}
+		}
+		h.mu.Lock()
+		if !h.stopped {
+			for _, flow := range flows {
+				h.upsertLocked(flow)
+			}
+			h.evictLocked()
+		}
+	} else {
+		h.mu.Lock()
+		if !h.stopped {
+			h.evictLocked()
+		}
+	}
+
+	rev := h.revision
+	if lastRevision >= 0 && rev == lastRevision {
+		h.mu.Unlock()
+		return &ConnectionSnapshotResponse{
+			Revision:  rev,
+			Unchanged: true,
+			Payload:   wrapString(""),
+		}
+	}
+
+	if h.cachedRevision == rev && h.cachedJSON != "" {
+		cached := h.cachedJSON
+		h.mu.Unlock()
+		return &ConnectionSnapshotResponse{
+			Revision:  rev,
+			Unchanged: false,
+			Payload:   wrapString(cached),
+		}
+	}
+
+	out := make([]connectionFlow, 0, len(h.byID))
+	for _, flow := range h.byID {
+		out = append(out, *flow)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return flowLess(out[i], out[j])
+	})
+	h.mu.Unlock()
+
+	raw, err := json.Marshal(connectionSnapshotEnvelope{Flows: out})
+	jsonStr := string(raw)
+	if err != nil {
+		jsonStr = `{"flows":[]}`
+	}
+
+	h.mu.Lock()
+	if h.revision == rev {
+		h.cachedRevision = rev
+		h.cachedJSON = jsonStr
+	}
+	h.mu.Unlock()
+
+	return &ConnectionSnapshotResponse{
+		Revision:  rev,
+		Unchanged: false,
+		Payload:   wrapString(jsonStr),
 	}
 }
 
