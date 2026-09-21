@@ -105,35 +105,72 @@ object BatchConfigBuilder {
             type = "block"
         })
 
+        val batchEligible = ArrayList<ProxyEntity>()
         for (profile in eligible) {
             val hops = resolveChain(profile, proxies, groups)
-            val primaryTag = "ut-${profile.id}-main"
-            targetTagMap[profile.id] = primaryTag
-
-            hops.forEachIndexed { index, hop ->
-                val hopTag = if (index == 0) primaryTag else "ut-${profile.id}-hop-$index"
-                val outbound = buildNativeOutbound(hop) ?: return@forEachIndexed
-
-                outbound._hack_config_map["tag"] = hopTag
-                outbound._hack_config_map["domain_strategy"] = ""
-
-                // Chain detour linking: hop 0 -> hop 1 -> ... -> last hop
-                if (index < hops.lastIndex) {
-                    val nextHopTag = "ut-${profile.id}-hop-${index + 1}"
-                    outbound._hack_config_map["detour"] = nextHopTag
-                }
-
-                val muxObj = hop.singMux()
-                if (muxObj != null && muxObj.enabled) {
-                    outbound._hack_config_map["multiplex"] = muxObj.asMap()
-                }
-
-                if (outbound is Endpoint) {
-                    endpoints.add(outbound)
-                } else {
-                    outbounds.add(outbound)
-                }
+            if (hops.isEmpty()) {
+                fallback.add(profile)
+                continue
             }
+            val primaryTag = "ut-${profile.id}-main"
+            val profileOutbounds = ArrayList<SingBoxOption>()
+            val profileEndpoints = ArrayList<SingBoxOption>()
+
+            var profileSuccess = true
+            try {
+                hops.forEachIndexed { index, hop ->
+                    val hopTag = if (index == 0) primaryTag else "ut-${profile.id}-hop-$index"
+                    val outbound = buildNativeOutbound(hop)
+                        ?: throw IllegalStateException("Failed to build outbound for hop ${hop.id}")
+
+                    outbound._hack_config_map["tag"] = hopTag
+                    outbound._hack_config_map["domain_strategy"] = ""
+
+                    // Chain detour linking: hop 0 -> hop 1 -> ... -> last hop
+                    if (index < hops.lastIndex) {
+                        val nextHopTag = "ut-${profile.id}-hop-${index + 1}"
+                        outbound._hack_config_map["detour"] = nextHopTag
+                    }
+
+                    val muxObj = hop.singMux()
+                    if (muxObj != null && muxObj.enabled) {
+                        outbound._hack_config_map["multiplex"] = muxObj.asMap()
+                    }
+
+                    // Pre-validate outbound serialization to isolate malformed JSON or invalid options
+                    val map = outbound.asMap()
+                    if (map.isEmpty()) {
+                        throw IllegalStateException("Empty outbound map for hop ${hop.id}")
+                    }
+
+                    if (outbound is Endpoint) {
+                        profileEndpoints.add(outbound)
+                    } else {
+                        profileOutbounds.add(outbound)
+                    }
+                }
+            } catch (e: Exception) {
+                Logs.w("BatchConfigBuilder: profile ${profile.id} build/serialization failed (${e.message}); isolating to fallback", e)
+                profileSuccess = false
+            }
+
+            if (profileSuccess) {
+                targetTagMap[profile.id] = primaryTag
+                outbounds.addAll(profileOutbounds)
+                endpoints.addAll(profileEndpoints)
+                batchEligible.add(profile)
+            } else {
+                fallback.add(profile)
+            }
+        }
+
+        if (batchEligible.isEmpty()) {
+            return Result(
+                config = "",
+                targetTagMap = emptyMap(),
+                batchEligibleProfiles = emptyList(),
+                fallbackProfiles = fallback,
+            )
         }
 
         val dnsOptions = DNSOptions().apply {
@@ -173,7 +210,7 @@ object BatchConfigBuilder {
         return Result(
             config = configJson,
             targetTagMap = targetTagMap,
-            batchEligibleProfiles = eligible,
+            batchEligibleProfiles = batchEligible,
             fallbackProfiles = fallback,
         )
     }
@@ -202,10 +239,18 @@ object BatchConfigBuilder {
                 }
                 is ConfigBean -> {
                     if (bean.config.isBlank()) return false
+                    val elem = runCatching { JsonParser.parseString(bean.config) }.getOrNull() ?: return false
+                    if (!elem.isJsonObject) return false
                 }
                 else -> {
                     if (bean.serverAddress.isBlank() || bean.serverPort <= 0) return false
                 }
+            }
+
+            val customJson = bean.customOutboundJson
+            if (!customJson.isNullOrBlank()) {
+                val elem = runCatching { JsonParser.parseString(customJson) }.getOrNull() ?: return false
+                if (!elem.isJsonObject) return false
             }
         }
         return true
@@ -254,7 +299,20 @@ object BatchConfigBuilder {
     private fun buildNativeOutbound(entity: ProxyEntity): SingBoxOption? {
         val bean = runCatching { entity.requireBean() }.getOrNull() ?: return null
         val outbound: SingBoxOption = when (bean) {
-            is ConfigBean -> CustomSingBoxOption(bean.config)
+            is ConfigBean -> {
+                val sanitizedConfig = runCatching {
+                    val elem = JsonParser.parseString(bean.config)
+                    if (elem.isJsonObject) {
+                        val obj = elem.asJsonObject
+                        obj.remove("tag")
+                        obj.remove("detour")
+                        gsonCompact.toJson(obj)
+                    } else {
+                        bean.config
+                    }
+                }.getOrDefault(bean.config)
+                CustomSingBoxOption(sanitizedConfig)
+            }
             is ShadowTLSBean -> buildSingBoxOutboundShadowTLSBean(bean)
             is StandardV2RayBean -> buildSingBoxOutboundStandardV2RayBean(bean)
             is HysteriaBean -> if (bean.canUseSingBox()) buildSingBoxOutboundHysteriaBean(bean) else return null
@@ -285,6 +343,7 @@ object BatchConfigBuilder {
                 if (element.isJsonObject) {
                     val obj = element.asJsonObject
                     obj.remove("tag")
+                    obj.remove("detour")
                     gsonCompact.toJson(obj)
                 } else {
                     customJson

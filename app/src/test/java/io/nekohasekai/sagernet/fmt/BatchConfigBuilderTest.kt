@@ -248,5 +248,111 @@ class BatchConfigBuilderTest {
         assertNotNull("Outbound B with namespaced tag ut-20-main must exist", outboundB)
         assertEquals("90s", outboundB!!.get("idle_timeout")?.asString)
     }
+
+    @Test
+    fun customOutboundJsonCannotOverrideBatchDetourInChain() {
+        val hop1 = socks(1001L, "10.0.0.1", 1080)
+        val hop2 = socks(1002L, "10.0.0.2", 1080).apply {
+            val bean = requireBean()
+            bean.customOutboundJson = """{"detour":"direct","idle_timeout":"60s"}"""
+            putBean(bean)
+        }
+        val chain = ProxyEntity(id = 10L, groupId = 1L).apply {
+            putBean(ChainBean().apply {
+                proxies = listOf(1001L, 1002L)
+                name = "chain-10"
+                applyDefaultValues()
+            })
+        }
+
+        val proxies = mapOf(10L to chain, 1001L to hop1, 1002L to hop2)
+        val result = BatchConfigBuilder.build(listOf(chain), proxies = proxies)
+
+        assertEquals(1, result.batchEligibleProfiles.size)
+        val json = JsonParser.parseString(result.config).asJsonObject
+        val outbounds = json.getAsJsonArray("outbounds").map { it.asJsonObject }
+
+        val mainOutbound = outbounds.firstOrNull { it.get("tag")?.asString == "ut-10-main" }
+        assertNotNull("ut-10-main must exist", mainOutbound)
+        // BUG-02: detour must point to namespaced next hop, NOT "direct"
+        assertEquals("ut-10-hop-1", mainOutbound!!.get("detour")?.asString)
+        // Non-protected custom field must be preserved
+        assertEquals("60s", mainOutbound.get("idle_timeout")?.asString)
+    }
+
+    @Test
+    fun configBeanCannotOverrideBatchTagOrDetour() {
+        val hop1 = socks(2001L, "10.0.0.1", 1080)
+        val hop2 = ProxyEntity(id = 2002L, groupId = 1L).apply {
+            putBean(moe.matsuri.nb4a.proxy.config.ConfigBean().apply {
+                config = """{"type":"socks","server":"10.0.0.2","server_port":1080,"tag":"custom-tag","detour":"direct","idle_timeout":"45s"}"""
+                name = "config-hop2"
+                applyDefaultValues()
+            })
+        }
+        val chain = ProxyEntity(id = 20L, groupId = 1L).apply {
+            putBean(ChainBean().apply {
+                proxies = listOf(2001L, 2002L)
+                name = "chain-20"
+                applyDefaultValues()
+            })
+        }
+        val proxies = mapOf(20L to chain, 2001L to hop1, 2002L to hop2)
+        val result = BatchConfigBuilder.build(listOf(chain), proxies = proxies)
+
+        assertEquals(1, result.batchEligibleProfiles.size)
+        val json = JsonParser.parseString(result.config).asJsonObject
+        val outbounds = json.getAsJsonArray("outbounds").map { it.asJsonObject }
+
+        val mainOutbound = outbounds.firstOrNull { it.get("tag")?.asString == "ut-20-main" }
+        assertNotNull("ut-20-main must exist", mainOutbound)
+        assertEquals("ut-20-main", mainOutbound!!.get("tag")?.asString)
+        assertEquals("ut-20-hop-1", mainOutbound.get("detour")?.asString)
+        assertEquals("45s", mainOutbound.get("idle_timeout")?.asString)
+    }
+
+    @Test
+    fun perProfileFailureIsolationWithMalformedConfigBean() {
+        val goodA = socks(101L, "10.0.0.1", 1080)
+        val goodB = socks(102L, "10.0.0.2", 1080)
+        val badC = ProxyEntity(id = 103L, groupId = 1L).apply {
+            putBean(moe.matsuri.nb4a.proxy.config.ConfigBean().apply {
+                config = "{ invalid json"
+                name = "bad-config"
+                applyDefaultValues()
+            })
+        }
+
+        val result = BatchConfigBuilder.build(listOf(goodA, badC, goodB))
+
+        // BUG-03: badC must NOT cause entire build to throw or fail
+        // goodA and goodB must succeed in batch; badC must be routed to fallback
+        assertEquals(listOf(goodA, goodB), result.batchEligibleProfiles)
+        assertEquals(listOf(badC), result.fallbackProfiles)
+        assertEquals(mapOf(101L to "ut-101-main", 102L to "ut-102-main"), result.targetTagMap)
+
+        val json = JsonParser.parseString(result.config).asJsonObject
+        val outbounds = json.getAsJsonArray("outbounds").map { it.asJsonObject.get("tag")?.asString }
+        assertTrue(outbounds.contains("ut-101-main"))
+        assertTrue(outbounds.contains("ut-102-main"))
+        assertFalse(outbounds.contains("ut-103-main"))
+    }
+
+    @Test
+    fun perProfileFailureIsolationWithMalformedCustomOutboundJson() {
+        val goodA = socks(201L, "10.0.0.1", 1080)
+        val badB = socks(202L, "10.0.0.2", 1080).apply {
+            val bean = requireBean()
+            bean.customOutboundJson = "{ malformed custom json"
+            putBean(bean)
+        }
+        val goodC = socks(203L, "10.0.0.3", 1080)
+
+        val result = BatchConfigBuilder.build(listOf(goodA, badB, goodC))
+
+        assertEquals(listOf(goodA, goodC), result.batchEligibleProfiles)
+        assertEquals(listOf(badB), result.fallbackProfiles)
+        assertEquals(mapOf(201L to "ut-201-main", 203L to "ut-203-main"), result.targetTagMap)
+    }
 }
 
