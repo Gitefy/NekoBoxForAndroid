@@ -96,6 +96,7 @@ type BoxInstance struct {
 	state  int
 
 	v2api             *v2rayapi.StatsService
+	trafficRegistry   *trafficStatsRegistry
 	connectionManager adapter.ConnectionManager
 	selector          *group.Selector
 	pauseManager      pause.Manager
@@ -281,6 +282,7 @@ func (b *BoxInstance) SetV2rayStats(outbounds string) {
 		return
 	}
 	b.v2api = statsService
+	b.trafficRegistry = newTrafficStatsRegistry(outbounds)
 	b.Box.Router().AppendTracker(statsService)
 }
 
