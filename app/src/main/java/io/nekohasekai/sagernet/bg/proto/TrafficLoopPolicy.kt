@@ -29,12 +29,8 @@ object TrafficLoopPolicy {
         notificationSpeedVisible: Boolean,
         trackedTagCount: Int,
     ): Long {
-        val extraTags = (trackedTagCount - TAGS_PER_EXTRA_TICK).coerceAtLeast(0)
-        val adaptiveForeground = FOREGROUND_TICKS_MILLIS +
-            (extraTags / TAGS_PER_EXTRA_TICK).toLong() * FOREGROUND_TICKS_MILLIS
-        val foregroundFloor = adaptiveForeground.coerceAtMost(MAX_FOREGROUND_MILLIS)
         return when {
-            mainActivityForeground -> maxOf(configuredMillis, foregroundFloor)
+            mainActivityForeground -> maxOf(configuredMillis, FOREGROUND_TICKS_MILLIS)
             notificationSpeedVisible -> maxOf(configuredMillis, MIN_BACKGROUND_NOTIFICATION_MILLIS)
             else -> maxOf(configuredMillis, MIN_BACKGROUND_HIDDEN_MILLIS)
         }

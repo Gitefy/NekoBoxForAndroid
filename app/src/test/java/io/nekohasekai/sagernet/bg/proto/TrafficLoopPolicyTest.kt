@@ -32,6 +32,37 @@ class TrafficLoopPolicyTest {
     }
 
     @Test
+    fun foregroundWithDifferentTagCountsDoesNotSlowDown() {
+        assertEquals(
+            1_000L,
+            TrafficLoopPolicy.delayMillis(
+                configuredMillis = 1_000L,
+                mainActivityForeground = true,
+                notificationSpeedVisible = false,
+                trackedTagCount = 8,
+            ),
+        )
+        assertEquals(
+            1_000L,
+            TrafficLoopPolicy.delayMillis(
+                configuredMillis = 1_000L,
+                mainActivityForeground = true,
+                notificationSpeedVisible = false,
+                trackedTagCount = 32,
+            ),
+        )
+        assertEquals(
+            1_000L,
+            TrafficLoopPolicy.delayMillis(
+                configuredMillis = 1_000L,
+                mainActivityForeground = true,
+                notificationSpeedVisible = false,
+                trackedTagCount = 100,
+            ),
+        )
+    }
+
+    @Test
     fun limitsVisibleBackgroundNotificationRefreshToFiveSeconds() {
         assertEquals(
             5_000L,
