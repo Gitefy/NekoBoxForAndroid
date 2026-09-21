@@ -43,10 +43,18 @@ abstract class BoxInstance(
 
     fun currentUrlTestSelections(): LongArray {
         if (!isInitialized()) return longArrayOf()
-        return RouterRuntimeSelection.resolve(
+        return RouterRuntimeSelection.resolveBatch(
             routerTags = config.routerUrlTestTags,
             profileTags = config.profileTagMap,
-            currentOutbound = box::currentOutboundFor,
+            batchQuery = { tags ->
+                runCatching {
+                    val raw = box.currentGroupSelections(tags.joinToString("\n"))?.value.orEmpty()
+                    RouterRuntimeSelection.parseGroupSelections(raw)
+                }.getOrElse {
+                    Logs.w("P3_D_GROUP_SELECTION_FALLBACK: ${it.message}")
+                    tags.associateWith { tag -> box.currentOutboundFor(tag) }
+                }
+            },
         )
     }
 

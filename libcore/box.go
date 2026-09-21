@@ -17,7 +17,6 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/trafficcontrol"
 	"github.com/sagernet/sing-box/experimental/v2rayapi"
-	"github.com/sagernet/sing-box/protocol/group"
 
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/constant"
@@ -98,7 +97,7 @@ type BoxInstance struct {
 	v2api             *v2rayapi.StatsService
 	trafficRegistry   *trafficStatsRegistry
 	connectionManager adapter.ConnectionManager
-	selector          *group.Selector
+	selector          outboundSelector
 	pauseManager      pause.Manager
 	trafficManager    *trafficcontrol.Manager
 	connHistory       *connectionHistory
@@ -156,9 +155,7 @@ func NewSingBoxInstance(config string, localTransport LocalDNSTransport) (b *Box
 
 	// selector
 	if proxy, ok := b.Outbound().Outbound("proxy"); ok {
-		if selector, ok := proxy.(*group.Selector); ok {
-			b.selector = selector
-		}
+		b.selector = asSelector(proxy)
 	}
 
 	return b, nil
@@ -338,11 +335,7 @@ func (b *BoxInstance) SelectOutboundFor(selectorTag, tag string) bool {
 	if !ok {
 		return false
 	}
-	selector, ok := proxy.(*group.Selector)
-	if !ok {
-		return false
-	}
-	return selector.SelectOutbound(tag)
+	return selectOutboundFor(proxy, tag)
 }
 
 func (b *BoxInstance) CurrentOutboundFor(groupTag string) string {
@@ -355,14 +348,7 @@ func (b *BoxInstance) CurrentOutboundFor(groupTag string) string {
 	if !ok {
 		return ""
 	}
-	switch outbound := proxy.(type) {
-	case *group.Selector:
-		return outbound.Now()
-	case *group.URLTest:
-		return outbound.Now()
-	default:
-		return ""
-	}
+	return queryGroupSelection(proxy)
 }
 
 func (b *BoxInstance) RefreshURLTestFor(groupTag string) bool {
@@ -375,14 +361,7 @@ func (b *BoxInstance) RefreshURLTestFor(groupTag string) bool {
 	if !ok {
 		return false
 	}
-	urlTest, ok := proxy.(*group.URLTest)
-	if !ok {
-		return false
-	}
-	// The group's context is cancelled by Close. Do not hold up Android's
-	// caller or core shutdown while probes wait for unreachable nodes.
-	go urlTest.CheckOutbounds()
-	return true
+	return refreshURLTestFor(proxy)
 }
 
 func UrlTest(i *BoxInstance, link string, timeout int32) (latency int32, err error) {

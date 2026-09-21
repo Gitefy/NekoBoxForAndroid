@@ -79,20 +79,44 @@ object RouterRuntime {
 }
 
 object RouterRuntimeSelection {
+    fun parseGroupSelections(raw: String): Map<String, String> {
+        if (raw.isEmpty()) return emptyMap()
+        val result = HashMap<String, String>()
+        raw.lineSequence().forEach { line ->
+            val tabIdx = line.indexOf('\t')
+            if (tabIdx > 0 && tabIdx + 1 < line.length) {
+                result[line.substring(0, tabIdx)] = line.substring(tabIdx + 1)
+            }
+        }
+        return result
+    }
+
+    fun resolveBatch(
+        routerTags: Map<Long, String>,
+        profileTags: Map<Long, String>,
+        batchQuery: (List<String>) -> Map<String, String>,
+    ): LongArray {
+        if (routerTags.isEmpty() || profileTags.isEmpty()) return longArrayOf()
+        val selections = batchQuery(routerTags.values.toList())
+        val profileIdsByTag = profileTags.entries.associate { (id, tag) -> tag to id }
+        val result = ArrayList<Long>(routerTags.size * 2)
+        routerTags.forEach { (routerId, routerTag) ->
+            val selectedTag = selections[routerTag] ?: return@forEach
+            val profileId = profileIdsByTag[selectedTag] ?: return@forEach
+            result += routerId
+            result += profileId
+        }
+        return result.toLongArray()
+    }
+
     fun resolve(
         routerTags: Map<Long, String>,
         profileTags: Map<Long, String>,
         currentOutbound: (String) -> String,
     ): LongArray {
-        if (routerTags.isEmpty() || profileTags.isEmpty()) return longArrayOf()
-        val profileIdsByTag = profileTags.entries.associate { (id, tag) -> tag to id }
-        val result = ArrayList<Long>(routerTags.size * 2)
-        routerTags.forEach { (routerId, routerTag) ->
-            val profileId = profileIdsByTag[currentOutbound(routerTag)] ?: return@forEach
-            result += routerId
-            result += profileId
+        return resolveBatch(routerTags, profileTags) { tags ->
+            tags.associateWith(currentOutbound)
         }
-        return result.toLongArray()
     }
 
     fun toMap(pairs: LongArray): Map<Long, Long> {
