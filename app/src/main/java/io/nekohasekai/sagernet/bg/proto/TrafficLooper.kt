@@ -222,6 +222,22 @@ class TrafficLooper
             )
 
             val trackedTagCountForPolicy = tagMap.size.coerceAtLeast(idMap.size)
+            val hasUrlTestConsumer = proxy.config.mainUrlTestTag != null
+            val notificationSpeedVisible = data.notification?.listenPostSpeed == true
+
+            if (TrafficLoopPolicy.isDormant(
+                    mainActivityForeground = mainActivityForeground,
+                    notificationSpeedVisible = notificationSpeedVisible,
+                    profileTrafficStatistics = profileTrafficStatistics,
+                    hasUrlTestConsumer = hasUrlTestConsumer,
+                )
+            ) {
+                // Fully dormant: nobody is listening to traffic, speed, or URLTest winner.
+                // Suspend indefinitely until state changes (foreground, notification, config, stop).
+                awaitUpdate(Long.MAX_VALUE)
+                continue
+            }
+
             if (!TrafficLoopPolicy.shouldCollectTraffic(delayMs, profileTrafficStatistics)) {
                 // Nobody is listening -> skip the selection query and the IPC round-trip.
                 if (mainActivityForeground && data.state == BaseService.State.Connected) {
@@ -230,10 +246,12 @@ class TrafficLooper
                     )
                 }
                 awaitUpdate(TrafficLoopPolicy.delayMillis(
-                    delayMs,
-                    mainActivityForeground,
-                    false,
-                    trackedTagCountForPolicy,
+                    configuredMillis = delayMs,
+                    mainActivityForeground = mainActivityForeground,
+                    notificationSpeedVisible = notificationSpeedVisible,
+                    profileTrafficStatistics = profileTrafficStatistics,
+                    hasUrlTestConsumer = hasUrlTestConsumer,
+                    trackedTagCount = trackedTagCountForPolicy,
                 ))
                 continue
             }
@@ -400,6 +418,8 @@ class TrafficLooper
                     configuredMillis = delayMs,
                     mainActivityForeground = mainActivityForeground,
                     notificationSpeedVisible = data.notification?.listenPostSpeed == true,
+                    profileTrafficStatistics = profileTrafficStatistics,
+                    hasUrlTestConsumer = hasUrlTestConsumer,
                     trackedTagCount = tagMap.size,
                 )
             )

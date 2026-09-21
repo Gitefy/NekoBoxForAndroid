@@ -12,7 +12,6 @@ class TrafficLoopPolicyTest {
         assertFalse(TrafficLoopPolicy.shouldCollectTraffic(0L, false))
     }
 
-
     @Test
     fun disablingSpeedStillPollsRouterSelectionWithoutBusySpinning() {
         assertEquals(1_000L, TrafficLoopPolicy.delayMillis(0L, true, false))
@@ -60,5 +59,80 @@ class TrafficLoopPolicyTest {
     fun initializationRetryNeverBusySpins() {
         assertEquals(250L, TrafficLoopPolicy.initializationRetryMillis(0L))
         assertEquals(1_000L, TrafficLoopPolicy.initializationRetryMillis(1_000L))
+    }
+
+    @Test
+    fun dormantWhenNoConsumerIsActive() {
+        assertTrue(
+            TrafficLoopPolicy.isDormant(
+                mainActivityForeground = false,
+                notificationSpeedVisible = false,
+                profileTrafficStatistics = false,
+                hasUrlTestConsumer = false,
+            )
+        )
+
+        assertEquals(
+            Long.MAX_VALUE,
+            TrafficLoopPolicy.delayMillis(
+                configuredMillis = 1_000L,
+                mainActivityForeground = false,
+                notificationSpeedVisible = false,
+                profileTrafficStatistics = false,
+                hasUrlTestConsumer = false,
+            )
+        )
+    }
+
+    @Test
+    fun notDormantWhenAnyConsumerIsActive() {
+        // Foreground active
+        assertFalse(
+            TrafficLoopPolicy.isDormant(
+                mainActivityForeground = true,
+                notificationSpeedVisible = false,
+                profileTrafficStatistics = false,
+                hasUrlTestConsumer = false,
+            )
+        )
+        // Notification speed active
+        assertFalse(
+            TrafficLoopPolicy.isDormant(
+                mainActivityForeground = false,
+                notificationSpeedVisible = true,
+                profileTrafficStatistics = false,
+                hasUrlTestConsumer = false,
+            )
+        )
+        // Profile stats active
+        assertFalse(
+            TrafficLoopPolicy.isDormant(
+                mainActivityForeground = false,
+                notificationSpeedVisible = false,
+                profileTrafficStatistics = true,
+                hasUrlTestConsumer = false,
+            )
+        )
+        // URLTest consumer active
+        assertFalse(
+            TrafficLoopPolicy.isDormant(
+                mainActivityForeground = false,
+                notificationSpeedVisible = false,
+                profileTrafficStatistics = false,
+                hasUrlTestConsumer = true,
+            )
+        )
+
+        // Delay when profile traffic stats active in background is 30s, not dormant
+        assertEquals(
+            30_000L,
+            TrafficLoopPolicy.delayMillis(
+                configuredMillis = 1_000L,
+                mainActivityForeground = false,
+                notificationSpeedVisible = false,
+                profileTrafficStatistics = true,
+                hasUrlTestConsumer = false,
+            )
+        )
     }
 }

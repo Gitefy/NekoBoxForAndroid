@@ -175,10 +175,13 @@ class BaseService {
         }
 
         override fun unregisterCallback(cb: ISagerNetServiceCallback) {
-            callbackIdMap.remove(cb)
+            val prevId = callbackIdMap.remove(cb)
             callbacks.unregister(cb)
             requestObservers.remove(cb.asBinder())
             data?.proxy?.syncRequestObserver()
+            if (prevId == SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND) {
+                data?.proxy?.looper?.requestUpdate()
+            }
         }
 
         override fun resetTraffic(profileIds: LongArray) {

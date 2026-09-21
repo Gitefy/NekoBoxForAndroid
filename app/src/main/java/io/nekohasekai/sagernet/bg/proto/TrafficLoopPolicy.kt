@@ -40,6 +40,30 @@ object TrafficLoopPolicy {
         }
     }
 
+    fun isDormant(
+        mainActivityForeground: Boolean,
+        notificationSpeedVisible: Boolean,
+        profileTrafficStatistics: Boolean,
+        hasUrlTestConsumer: Boolean,
+    ): Boolean = !mainActivityForeground &&
+        !notificationSpeedVisible &&
+        !profileTrafficStatistics &&
+        !hasUrlTestConsumer
+
+    fun delayMillis(
+        configuredMillis: Long,
+        mainActivityForeground: Boolean,
+        notificationSpeedVisible: Boolean,
+        profileTrafficStatistics: Boolean,
+        hasUrlTestConsumer: Boolean,
+        trackedTagCount: Int = 0,
+    ): Long {
+        if (isDormant(mainActivityForeground, notificationSpeedVisible, profileTrafficStatistics, hasUrlTestConsumer)) {
+            return Long.MAX_VALUE
+        }
+        return delayMillis(configuredMillis, mainActivityForeground, notificationSpeedVisible, trackedTagCount)
+    }
+
     fun initializationRetryMillis(configuredMillis: Long): Long =
         maxOf(configuredMillis, MIN_INITIALIZATION_RETRY_MILLIS)
 }
