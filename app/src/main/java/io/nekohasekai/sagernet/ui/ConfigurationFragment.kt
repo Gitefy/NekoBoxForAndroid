@@ -51,6 +51,7 @@ import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.aidl.TrafficData
 import io.nekohasekai.sagernet.bg.BaseService
+import io.nekohasekai.sagernet.bg.proto.BatchUrlTestRunner
 import io.nekohasekai.sagernet.bg.proto.UrlTest
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.GroupManager
@@ -1371,32 +1372,23 @@ class ConfigurationFragment @JvmOverloads constructor(
                     snackbar(getString(R.string.profile_empty)).show()
                 }
             }
-            val profiles = ConcurrentLinkedQueue(profilesList)
-            repeat(DataStore.connectionTestConcurrent) {
-                testJobs.add(launch(Dispatchers.IO) {
-                    val urlTest = UrlTest() // note: this is NOT in bg process
-                    while (isActive) {
-                        val profile = profiles.poll() ?: break
-                        profile.status = 0
+            val allGroups = runCatching { SagerDatabase.groupDao.allGroups().associateBy { it.id } }.getOrDefault(emptyMap())
+            val allProxies = runCatching { SagerDatabase.proxyDao.getAll().associateBy { it.id } }.getOrDefault(emptyMap())
 
-                        try {
-                            val result = urlTest.doTest(profile)
-                            profile.status = 1
-                            profile.ping = result
-                        } catch (e: PluginManager.PluginNotFoundException) {
-                            profile.status = 2
-                            profile.error = e.readableMessage
-                        } catch (e: Exception) {
-                            profile.status = 3
-                            profile.error = e.readableMessage
-                        }
-
+            try {
+                BatchUrlTestRunner().run(
+                    profilesList = profilesList,
+                    groups = allGroups,
+                    proxies = allProxies,
+                    directDns = DataStore.directDns.lineSequence().firstOrNull().orEmpty(),
+                    onResult = { profile ->
                         test.update(profile)
-                    }
-                })
+                    },
+                )
+            } catch (_: CancellationException) {
+            } catch (e: Exception) {
+                Logs.w(e)
             }
-
-            testJobs.joinAll()
 
             runOnMainDispatcher {
                 test.cancel()

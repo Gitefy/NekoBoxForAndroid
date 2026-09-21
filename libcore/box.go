@@ -22,6 +22,7 @@ import (
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
+	"libcore/urltest"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
@@ -393,11 +394,8 @@ func urlTest(i *BoxInstance, link string, timeout int32, targetTag string) (late
 		return 0, err
 	}
 
-	// urlTestRTT restores the legacy fast RTT connectivity probe semantics:
-	// a warm-up request establishes connection/handshake/multiplexing, followed
-	// by a measured request over the reused connection capturing WroteHeaders to
-	// GotFirstResponseByte round-trip time.
-	return urlTestRTT(ctx, link, detour)
+	latency, _, err = urltest.Probe(ctx, detour, link)
+	return latency, err
 }
 
 // urlTestDetour resolves the dialer a URL test has to go through:
@@ -412,26 +410,13 @@ func urlTestDetour(i *BoxInstance) (N.Dialer, error) {
 // urlTestDetourWithTarget resolves a caller-specified outbound or endpoint.
 // sing-box's outbound manager shares this namespace with endpoints.
 func urlTestDetourWithTarget(i *BoxInstance, targetTag string) (N.Dialer, error) {
-	if i == nil {
-		i = mainInstance
+	var boxAccessor urltest.OutboundAccessor
+	if i != nil && i.Box != nil {
+		boxAccessor = i.Box
+	} else if mainInstance != nil && mainInstance.Box != nil {
+		boxAccessor = mainInstance.Box
 	}
-	if i == nil {
-		if targetTag != "" {
-			return nil, fmt.Errorf("URL test target %q requires an active box instance", targetTag)
-		}
-		return N.SystemDialer, nil
-	}
-	if targetTag != "" {
-		outbound, loaded := i.Outbound().Outbound(targetTag)
-		if !loaded {
-			return nil, fmt.Errorf("URL test target %q not found", targetTag)
-		}
-		return outbound, nil
-	}
-	if outbound := i.Outbound().Default(); outbound != nil {
-		return outbound, nil
-	}
-	return nil, errors.New("URL test configuration has no default outbound")
+	return urltest.ResolveTargetDialer(boxAccessor, targetTag)
 }
 
 var protectCloser io.Closer
