@@ -40,6 +40,9 @@ class TrafficLooper
     }
     private val idMap = mutableMapOf<Long, TrafficUpdater.TrafficLooperData>() // id to 1 data
     private val tagMap = mutableMapOf<String, TrafficUpdater.TrafficLooperData>() // tag to 1 data
+    private var indexedItems: Array<TrafficUpdater.TrafficLooperData?>? = null
+    private var tagIndexMap: Map<String, Int> = emptyMap()
+    private var trackedList: List<TrafficUpdater.TrafficLooperData> = emptyList()
     private val stateMutex = Mutex()
     private var trafficUpdater: TrafficUpdater? = null
 
@@ -126,6 +129,11 @@ class TrafficLooper
         newData.apply {
             tag = statsTag
             ignore = false
+        }
+        val proxyIdx = tagIndexMap[TAG_PROXY] ?: 0
+        indexedItems?.set(proxyIdx, newData)
+        if (statsTag != TAG_PROXY) {
+            tagIndexMap[statsTag]?.let { indexedItems?.set(it, newData) }
         }
     }
 
@@ -233,22 +241,19 @@ class TrafficLooper
                 if (trafficUpdater == null) {
                     idMap.clear()
                     idMap[-1] = itemBypass
-                    //
-                    val tags = hashSetOf(TAG_PROXY, TAG_BYPASS)
+                    itemBypass.profileId = -1L
+
                     val dynamicMain = proxy.config.selectorGroupId >= 0L ||
                         proxy.config.mainUrlTestTag != null
                     // Nodes belonging to independent Router groups must never be mass-ignored:
                     // they accumulate traffic independently of the main selector winner.
                     val routerMemberIds = proxy.config.routerAllMemberIds
                     proxy.config.trafficMap.forEach { (tag, ents) ->
-                        tags.add(tag)
                         for (ent in ents) {
-                            // Only ignore nodes that are NOT already accounted for by an
-                            // independent Router. Router member nodes get their own ignore=false
-                            // path and are updated regardless of main selector state.
                             val belongsToRouter = ent.id in routerMemberIds
                             val item = TrafficUpdater.TrafficLooperData(
                                 tag = tag,
+                                profileId = ent.id,
                                 rx = ent.rx,
                                 tx = ent.tx,
                                 rxBase = ent.rx,
@@ -259,16 +264,37 @@ class TrafficLooper
                             tagMap[tag] = item
                         }
                     }
+
+                    val tagList = ArrayList<String>()
+                    tagList.add(TAG_PROXY) // index 0
+                    tagList.add(TAG_BYPASS) // index 1
+                    proxy.config.mainUrlTestTag?.let { if (it !in tagList) tagList.add(it) }
+                    proxy.config.trafficMap.keys.forEach { if (it !in tagList) tagList.add(it) }
+
+                    tagIndexMap = tagList.mapIndexed { idx, tag -> tag to idx }.toMap()
+                    val indexed = arrayOfNulls<TrafficUpdater.TrafficLooperData>(tagList.size)
+                    indexed[1] = itemBypass
+                    tagList.forEachIndexed { idx, tag ->
+                        if (idx >= 2) {
+                            tagMap[tag]?.let { indexed[idx] = it }
+                        }
+                    }
+                    indexedItems = indexed
+
                     if (proxy.config.mainUrlTestTag != null) {
                         syncUrlTestWinnerLocked(proxy)
                     } else if (proxy.config.selectorGroupId >= 0L) {
                         selectMainLocked(proxy.config.mainEntId)
                     }
+
+                    trackedList = idMap.values.toList()
                     trafficUpdater = TrafficUpdater(
-                        box = proxy.box, items = idMap.values.toList()
+                        box = proxy.box,
+                        items = trackedList,
+                        indexedItems = indexed,
+                        tagToItem = tagMap,
                     )
-                    proxy.config.mainUrlTestTag?.let(tags::add)
-                    proxy.box.setV2rayStats(tags.joinToString("\n"))
+                    proxy.box.setV2rayStats(tagList.joinToString("\n"))
                 }
 
                 val urlTestSelections = if (shouldQueryUrlTestSelections(
@@ -299,7 +325,8 @@ class TrafficLooper
                     var mainRxRate = 0L
                     var mainTx = 0L
                     var mainRx = 0L
-                    tagMap.forEach { (_, it) ->
+                    for (i in trackedList.indices) {
+                        val it = trackedList[i]
                         if (!it.ignore) {
                             mainTxRate += it.txRate
                             mainRxRate += it.rxRate
@@ -315,9 +342,10 @@ class TrafficLooper
                     // building it while nobody is watching is pure garbage per tick.
                     val trafficUpdates = if (profileTrafficStatistics && mainActivityForeground) {
                         val updates = arrayListOf<TrafficData>()
-                        idMap.forEach { (id, item) ->
-                            if (id > 0L && item.hasTrafficDelta) {
-                                updates.add(TrafficData(id = id, rx = item.rx, tx = item.tx))
+                        for (i in trackedList.indices) {
+                            val item = trackedList[i]
+                            if (item.profileId > 0L && item.hasTrafficDelta) {
+                                updates.add(TrafficData(id = item.profileId, rx = item.rx, tx = item.tx))
                             }
                         }
                         updates
@@ -341,8 +369,12 @@ class TrafficLooper
                             broadcastSpeedIfSelectionChanged(snapshot.speed)
                         }
                         if (snapshot.trafficUpdates.isNotEmpty()) {
-                            val batches = snapshot.trafficUpdates.chunked(TRAFFIC_BATCH_SIZE).map {
-                                TrafficDataBatch(ArrayList(it))
+                            val batches = if (snapshot.trafficUpdates.size <= TRAFFIC_BATCH_SIZE) {
+                                listOf(TrafficDataBatch(ArrayList(snapshot.trafficUpdates)))
+                            } else {
+                                snapshot.trafficUpdates.chunked(TRAFFIC_BATCH_SIZE).map {
+                                    TrafficDataBatch(ArrayList(it))
+                                }
                             }
                             data.binder.broadcast { callback ->
                                 if (data.binder.callbackIdMap[callback] ==
