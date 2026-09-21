@@ -100,3 +100,38 @@
 保留 `with_gvisor` build tag；`libcore/build.sh` 仍然编译 gVisor 栈。
 用户可在设置中将 `TUN implementation` 从 `Go` 切换为 `gVisor` / `System` / `Mixed`。
 这三项依赖已废弃的 `stack` 字段，将在 sing-box 1.17 失效。
+
+## URLT-F1 + URLT-F2 FREEZE
+
+```text
+Status:
+COMPLETE — FROZEN
+
+F1:
+Fast RTT manual connectivity test
+
+F2:
+Shared temporary sing-box Batch Box for multi-profile URL Test
+
+Review:
+URLT-F1 REVIEW PASS
+URLT-F2 REVIEW PASS
+
+Compatibility:
+GOOD
+
+Hardening:
+COMPLETE
+```
+
+### 永久不变量 (Invariants)
+- **INV-URLT-01 Target correctness**: 每个 profile 必须测试自己的 outbound/endpoint；禁止静默回退到 direct / 默认 outbound / 第一个 outbound / 其他 profile 目标。
+- **INV-URLT-02 Batch isolation**: 正常可批处理节点统一走 `N profiles → 1 Batch Box`；禁止无证据回退为 `N profiles → N BoxInstances`。
+- **INV-URLT-03 Fast RTT**: 默认手动 Connectivity Test 保留 F1 Fast RTT（warm-up + same-node connection reuse），不得无理由恢复为完整冷启动延迟语义。
+- **INV-URLT-04 HTTP transport isolation**: 不同 profile 严禁共享 Fast RTT HTTP transport / connection pool，仅允许同一 profile 的 warm-up 与 measured request 复用连接。
+- **INV-URLT-05 Namespace isolation**: Batch 内所有节点私有 tag 必须 namespaced，`customOutboundJson` 严禁覆盖 Batch identity tag。
+- **INV-URLT-06 Main VPN isolation**: Batch Test Box 不得修改/关闭 main Box、改动 selected outbound、重置主连接或污染主状态/历史。
+- **INV-URLT-07 Failure isolation**: 单个节点失败不得导致整个 Batch 失败；Whole Batch 无法启动时保留安全降级 fallback。
+- **INV-URLT-08 Cancellation**: 用户取消时立即 cancel active probes、stop queued probes、close Batch Box 并终止 fallback，不得等待全部超时。
+- **INV-URLT-09 sing-box compatibility boundary**: 未来 sing-box 升级时优先修改 compatibility/adapter 层，禁止在 Android/UI 各处散落新增对 sing-box Go concrete internals 的直接依赖。
+
