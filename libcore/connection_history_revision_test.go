@@ -385,3 +385,56 @@ func TestMergeAndSnapshotSince(t *testing.T) {
 	}
 }
 
+type panickingSource struct{}
+
+func (s *panickingSource) Connections() []*trafficcontrol.TrackerMetadata {
+	panic("simulated concurrent closed panic")
+}
+
+func (s *panickingSource) ClosedConnections() []*trafficcontrol.TrackerMetadata {
+	return nil
+}
+
+func TestMergeAndSnapshotSincePanicRecoveryAndDisposeTeardown(t *testing.T) {
+	now := time.UnixMilli(9_000_000)
+	h := newConnectionHistory(func() time.Time { return now })
+
+	// Panic recovery test: panicking live connection source does not crash MergeAndSnapshotSince
+	panicker := &panickingSource{}
+	resp := h.MergeAndSnapshotSince(panicker, -1)
+	if resp == nil {
+		t.Fatal("expected non-nil response even when live source panics")
+	}
+
+	// Teardown test: Dispose clears cache and ID map
+	h.Upsert(connectionFlow{ID: "f1", CreatedAt: now.UnixMilli()})
+	_ = h.SnapshotJSON()
+	if len(h.byID) == 0 {
+		t.Fatal("expected non-empty byID before dispose")
+	}
+	h.Dispose()
+	if h.byID != nil {
+		t.Errorf("expected byID to be nil after Dispose, got len %d", len(h.byID))
+	}
+	if h.cachedJSON != "" || h.cachedRevision != 0 {
+		t.Errorf("expected cache to be cleared after Dispose")
+	}
+}
+
+func TestBoxInstanceClosedSnapshotBehavior(t *testing.T) {
+	b := &BoxInstance{
+		state: 2, // Closed
+	}
+	resp := b.ConnectionSnapshotSince(10)
+	if resp == nil || !resp.Unchanged {
+		t.Fatalf("expected unchanged response from closed box instance, got %+v", resp)
+	}
+	if rev := b.ConnectionSnapshotRevision(); rev != 0 {
+		t.Fatalf("expected 0 revision from closed box instance, got %d", rev)
+	}
+	if snap := b.ConnectionSnapshot(); snap == nil || snap.Value != `{"flows":[]}` {
+		t.Fatalf("expected empty flows snapshot from closed box instance, got %+v", snap)
+	}
+}
+
+

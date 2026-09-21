@@ -14,9 +14,10 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 
-class TrafficLooper
-    (
-    val data: BaseService.Data, private val sc: CoroutineScope
+class TrafficLooper(
+    val data: BaseService.Data,
+    private val sc: CoroutineScope,
+    val boundProxy: ProxyInstance? = null,
 ) {
 
     companion object {
@@ -28,6 +29,7 @@ class TrafficLooper
         ): Boolean = mainActivityForeground || hasMainUrlTestTag
     }
 
+    private val runtimeGeneration: Long = boundProxy?.let { data.applyGeneration } ?: 0L
     private var job: Job? = null
     private val updateRequests = Channel<Unit>(Channel.CONFLATED)
 
@@ -49,6 +51,7 @@ class TrafficLooper
     private data class LoopSnapshot(
         val speed: SpeedDisplayData,
         val trafficUpdates: List<TrafficData>,
+        val pendingSwitchTraffic: Triple<Long, Long, Long>? = null,
     )
 
     private suspend fun <T> withStateLock(block: suspend () -> T): T {
@@ -65,16 +68,18 @@ class TrafficLooper
         job = null
         // finally traffic post
         if (!DataStore.profileTrafficStatistics) return
+        val targetProxy = boundProxy ?: data.proxy
+        val trafficToSave = mutableListOf<Triple<Long, Long, Long>>()
+        val traffic = mutableMapOf<Long, TrafficData>()
         withStateLock {
             lastRatesWereZero = false
             trafficUpdater?.updateAll()
-            val traffic = mutableMapOf<Long, TrafficData>()
-            data.proxy?.config?.trafficMap?.forEach { (_, ents) ->
+            targetProxy?.config?.trafficMap?.forEach { (_, ents) ->
                 for (ent in ents) {
                     val item = idMap[ent.id] ?: return@forEach
                     ent.rx = item.rx
                     ent.tx = item.tx
-                    ProfileManager.updateTraffic(ent.id, ent.rx, ent.tx)
+                    trafficToSave.add(Triple(ent.id, ent.rx, ent.tx))
                     traffic[ent.id] = TrafficData(
                         id = ent.id,
                         rx = ent.rx,
@@ -82,13 +87,18 @@ class TrafficLooper
                     )
                 }
             }
-            if (traffic.isNotEmpty()) {
-                val batches = traffic.values.chunked(TRAFFIC_BATCH_SIZE).map {
-                    TrafficDataBatch(ArrayList(it))
-                }
-                data.binder.broadcast { callback ->
-                    batches.forEach { callback.cbTrafficUpdate(it) }
-                }
+        }
+        for ((id, rx, tx) in trafficToSave) {
+            ProfileManager.updateTraffic(id, rx, tx)
+        }
+        val isCurrent = data.proxy === targetProxy &&
+            (boundProxy == null || data.applyGeneration == runtimeGeneration)
+        if (isCurrent && traffic.isNotEmpty()) {
+            val batches = traffic.values.chunked(TRAFFIC_BATCH_SIZE).map {
+                TrafficDataBatch(ArrayList(it))
+            }
+            data.binder.broadcast { callback ->
+                batches.forEach { callback.cbTrafficUpdate(it) }
             }
         }
         Logs.d({ "finally traffic post done" })
@@ -103,24 +113,32 @@ class TrafficLooper
     private var lastSentSelections: LongArray? = null
     private var lastRatesWereZero = false
 
-    suspend fun selectMain(id: Long) = withStateLock {
-        selectMainLocked(id)
+    suspend fun selectMain(id: Long) {
+        val toUpdate = withStateLock {
+            selectMainLocked(id)
+        }
+        if (toUpdate != null) {
+            ProfileManager.updateTraffic(toUpdate.first, toUpdate.second, toUpdate.third)
+        }
+        requestUpdate()
     }
 
-    private suspend fun selectMainLocked(id: Long, statsTag: String = TAG_PROXY) {
+    private fun selectMainLocked(id: Long, statsTag: String = TAG_PROXY): Triple<Long, Long, Long>? {
         lastRatesWereZero = false
         Logs.d({ "select traffic count $TAG_PROXY to $id, old id is $selectorNowId" })
         val oldData = idMap[selectorNowId]
-        val newData = idMap[id] ?: return
+        val newData = idMap[id] ?: return null
+        var toUpdate: Triple<Long, Long, Long>? = null
         oldData?.apply {
             tag = selectorNowFakeTag
             ignore = true
             // post traffic when switch
             if (DataStore.profileTrafficStatistics) {
-                data.proxy?.config?.trafficMap?.get(tag)?.firstOrNull()?.let {
+                val targetProxy = boundProxy ?: data.proxy
+                targetProxy?.config?.trafficMap?.get(tag)?.firstOrNull()?.let {
                     it.rx = rx
                     it.tx = tx
-                    ProfileManager.updateTraffic(it.id, it.rx, it.tx)
+                    toUpdate = Triple(it.id, it.rx, it.tx)
                 }
             }
         }
@@ -135,24 +153,28 @@ class TrafficLooper
         if (statsTag != TAG_PROXY) {
             tagIndexMap[statsTag]?.let { indexedItems?.set(it, newData) }
         }
+        return toUpdate
     }
 
-    private suspend fun syncUrlTestWinnerLocked(proxy: ProxyInstance): LongArray {
+    private fun syncUrlTestWinnerLocked(proxy: ProxyInstance): Pair<LongArray, Triple<Long, Long, Long>?> {
         val selections = proxy.currentUrlTestSelections()
-        val mainTag = proxy.config.mainUrlTestTag ?: return selections
+        val mainTag = proxy.config.mainUrlTestTag ?: return (selections to null)
         val mainRouterId = proxy.config.routerUrlTestTags.entries
-            .firstOrNull { it.value == mainTag }?.key ?: return selections
+            .firstOrNull { it.value == mainTag }?.key ?: return (selections to null)
         val selectionMap = io.nekohasekai.sagernet.route.RouterRuntimeSelection.toMap(selections)
-        val winnerId = selectionMap[mainRouterId] ?: return selections
-        if (winnerId != selectorNowId) selectMainLocked(winnerId, mainTag)
-        return selections
+        val winnerId = selectionMap[mainRouterId] ?: return (selections to null)
+        var toUpdate: Triple<Long, Long, Long>? = null
+        if (winnerId != selectorNowId) {
+            toUpdate = selectMainLocked(winnerId, mainTag)
+        }
+        return (selections to toUpdate)
     }
 
     suspend fun resetTraffic(profileIds: LongArray) {
         val targetIds = profileIds.asSequence().filter { it > 0L }.toHashSet()
         if (targetIds.isEmpty()) return
 
-        withStateLock {
+        val batches = withStateLock {
             lastRatesWereZero = false
             trafficUpdater?.updateAll()
             val changed = linkedMapOf<Long, TrafficData>()
@@ -162,7 +184,8 @@ class TrafficLooper
                 }
             }
 
-            data.proxy?.config?.trafficMap?.values?.forEach { entities ->
+            val targetProxy = boundProxy ?: data.proxy
+            targetProxy?.config?.trafficMap?.values?.forEach { entities ->
                 entities.forEach { entity ->
                     if (entity.id in targetIds) {
                         entity.tx = 0L
@@ -182,10 +205,16 @@ class TrafficLooper
                 }
                 changed[id] = TrafficData(id = id, rx = 0L, tx = 0L)
             }
-            ProfileManager.resetTraffic(targetIds.toLongArray())
-            val batches = changed.values.chunked(TRAFFIC_BATCH_SIZE).map {
+            changed.values.chunked(TRAFFIC_BATCH_SIZE).map {
                 TrafficDataBatch(ArrayList(it))
             }
+        }
+
+        ProfileManager.resetTraffic(targetIds.toLongArray())
+        val targetProxy = boundProxy ?: data.proxy
+        val isCurrent = data.proxy === targetProxy &&
+            (boundProxy == null || data.applyGeneration == runtimeGeneration)
+        if (isCurrent && batches.isNotEmpty()) {
             data.binder.broadcast { callback ->
                 if (data.binder.callbackIdMap[callback] ==
                     SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
@@ -194,6 +223,7 @@ class TrafficLooper
                 }
             }
         }
+        requestUpdate()
     }
 
     private suspend fun loop() {
@@ -205,7 +235,7 @@ class TrafficLooper
         val itemBypass = TrafficUpdater.TrafficLooperData(tag = TAG_BYPASS)
 
         while (currentCoroutineContext().isActive) {
-            val proxy = data.proxy
+            val proxy = boundProxy ?: data.proxy
             if (proxy == null) {
                 awaitUpdate(TrafficLoopPolicy.initializationRetryMillis(delayMs))
                 continue
@@ -213,6 +243,10 @@ class TrafficLooper
             if (!proxy.isInitialized()) {
                 awaitUpdate(TrafficLoopPolicy.initializationRetryMillis(delayMs))
                 continue
+            }
+            if (data.proxy !== proxy || (boundProxy != null && data.applyGeneration != runtimeGeneration)) {
+                // Runtime generation changed or proxy replaced; drop out of old looper immediately
+                break
             }
 
             // Resolved once per tick: containsValue() scans the whole callback map,
@@ -256,6 +290,10 @@ class TrafficLooper
                 continue
             }
             val snapshot = withStateLock {
+                if (data.proxy !== proxy || (boundProxy != null && data.applyGeneration != runtimeGeneration)) {
+                    return@withStateLock null
+                }
+                var pendingSwitchTraffic: Triple<Long, Long, Long>? = null
                 if (trafficUpdater == null) {
                     idMap.clear()
                     idMap[-1] = itemBypass
@@ -300,9 +338,10 @@ class TrafficLooper
                     indexedItems = indexed
 
                     if (proxy.config.mainUrlTestTag != null) {
-                        syncUrlTestWinnerLocked(proxy)
+                        val (_, toUpdate) = syncUrlTestWinnerLocked(proxy)
+                        pendingSwitchTraffic = toUpdate
                     } else if (proxy.config.selectorGroupId >= 0L) {
-                        selectMainLocked(proxy.config.mainEntId)
+                        pendingSwitchTraffic = selectMainLocked(proxy.config.mainEntId)
                     }
 
                     trackedList = idMap.values.toList()
@@ -315,14 +354,17 @@ class TrafficLooper
                     proxy.box.setV2rayStats(tagList.joinToString("\n"))
                 }
 
-                val urlTestSelections = if (shouldQueryUrlTestSelections(
+                val (urlTestSelections, toUpdate) = if (shouldQueryUrlTestSelections(
                         mainActivityForeground = mainActivityForeground,
                         hasMainUrlTestTag = proxy.config.mainUrlTestTag != null,
                     )
                 ) {
                     syncUrlTestWinnerLocked(proxy)
                 } else {
-                    lastSentSelections ?: longArrayOf()
+                    (lastSentSelections ?: longArrayOf()) to null
+                }
+                if (toUpdate != null) {
+                    pendingSwitchTraffic = toUpdate
                 }
                 trafficUpdater!!.updateAll()
                 currentCoroutineContext().ensureActive()
@@ -370,7 +412,7 @@ class TrafficLooper
                     } else {
                         emptyList()
                     }
-                    val snapshot = LoopSnapshot(
+                    LoopSnapshot(
                         speed = SpeedDisplayData(
                             mainTxRate,
                             mainRxRate,
@@ -381,32 +423,46 @@ class TrafficLooper
                             urlTestSelections,
                         ),
                         trafficUpdates = trafficUpdates,
+                        pendingSwitchTraffic = pendingSwitchTraffic,
                     )
-                    if (mainActivityForeground && data.state == BaseService.State.Connected) {
-                        if (delayMs > 0L) {
-                            broadcastSpeedIfSelectionChanged(snapshot.speed)
-                        }
-                        if (snapshot.trafficUpdates.isNotEmpty()) {
-                            val batches = if (snapshot.trafficUpdates.size <= TRAFFIC_BATCH_SIZE) {
-                                listOf(TrafficDataBatch(ArrayList(snapshot.trafficUpdates)))
-                            } else {
-                                snapshot.trafficUpdates.chunked(TRAFFIC_BATCH_SIZE).map {
-                                    TrafficDataBatch(ArrayList(it))
-                                }
-                            }
-                            data.binder.broadcast { callback ->
-                                if (data.binder.callbackIdMap[callback] ==
-                                    SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
-                                ) {
-                                    batches.forEach { callback.cbTrafficUpdate(it) }
-                                }
-                            }
-                        }
-                    }
-                    snapshot
                 }
             }
             currentCoroutineContext().ensureActive()
+
+            if (snapshot?.pendingSwitchTraffic != null) {
+                ProfileManager.updateTraffic(
+                    snapshot.pendingSwitchTraffic.first,
+                    snapshot.pendingSwitchTraffic.second,
+                    snapshot.pendingSwitchTraffic.third,
+                )
+            }
+
+            val isCurrent = data.proxy === proxy &&
+                (boundProxy == null || data.applyGeneration == runtimeGeneration)
+
+            if (isCurrent && snapshot != null) {
+                if (mainActivityForeground && data.state == BaseService.State.Connected) {
+                    if (delayMs > 0L) {
+                        broadcastSpeedIfSelectionChanged(snapshot.speed)
+                    }
+                    if (snapshot.trafficUpdates.isNotEmpty()) {
+                        val batches = if (snapshot.trafficUpdates.size <= TRAFFIC_BATCH_SIZE) {
+                            listOf(TrafficDataBatch(ArrayList(snapshot.trafficUpdates)))
+                        } else {
+                            snapshot.trafficUpdates.chunked(TRAFFIC_BATCH_SIZE).map {
+                                TrafficDataBatch(ArrayList(it))
+                            }
+                        }
+                        data.binder.broadcast { callback ->
+                            if (data.binder.callbackIdMap[callback] ==
+                                SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND
+                            ) {
+                                batches.forEach { callback.cbTrafficUpdate(it) }
+                            }
+                        }
+                    }
+                }
+            }
 
             // ServiceNotification
             data.notification?.apply {

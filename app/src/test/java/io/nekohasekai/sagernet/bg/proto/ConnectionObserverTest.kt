@@ -660,6 +660,134 @@ class ConnectionObserverTest {
 
         observer.stop()
     }
+
+    @Test
+    fun snapshotFailureDoesNotAdvanceRevisionAndNextPollRetries() = runBlocking {
+        var reqRevPolled = -100L
+        var returnFailure = false
+
+        val observer = ConnectionObserver(
+            snapshot = { "" },
+            snapshotSince = { reqRev ->
+                reqRevPolled = reqRev
+                if (returnFailure) {
+                    ConnectionObserver.SnapshotResult(
+                        revision = 10L,
+                        unchanged = false,
+                        payload = "", // Blank payload simulates serialization failure
+                    )
+                } else {
+                    ConnectionObserver.SnapshotResult(
+                        revision = if (reqRev < 9L) 9L else 10L,
+                        unchanged = false,
+                        payload = """{"flows":[{"id":"flow-${reqRev}","logicalOutbound":"p","finalOutboundTag":"n"}]}""",
+                    )
+                }
+            },
+            publish = {},
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            scope = this,
+        )
+
+        observer.start()
+
+        // 1. Initial poll -> reaches revision 9
+        assertTrue(observer.pollOnce())
+        assertEquals(-1L, reqRevPolled)
+
+        // 2. Poll with failure -> revision 10 fails serialization, returns blank payload
+        returnFailure = true
+        assertFalse(observer.pollOnce())
+        assertEquals(9L, reqRevPolled)
+
+        // 3. Next poll -> reqRev MUST STILL BE 9 (not 10!), retrying revision 10
+        returnFailure = false
+        assertTrue(observer.pollOnce())
+        assertEquals(9L, reqRevPolled) // Verifies rev 9 was retained and retried!
+
+        // 4. Following poll -> now at rev 10
+        assertTrue(observer.pollOnce())
+        assertEquals(10L, reqRevPolled)
+
+        observer.stop()
+    }
+
+    @Test
+    fun normalPathHasZeroFallbackCount() = runBlocking {
+        val observer = ConnectionObserver(
+            snapshot = { "" },
+            snapshotSince = {
+                ConnectionObserver.SnapshotResult(
+                    revision = 1L,
+                    unchanged = false,
+                    payload = """{"flows":[{"id":"f1","logicalOutbound":"p","finalOutboundTag":"n"}]}""",
+                )
+            },
+            publish = {},
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            scope = this,
+        )
+
+        observer.start()
+        observer.pollOnce()
+        observer.pollOnce()
+        assertEquals(0, observer.fallbackCount.get())
+        observer.stop()
+    }
+
+    @Test
+    fun multiRoundStartStopLifecycleStress() = runBlocking {
+        var reqRevPolled = -100L
+        var polls = 0
+        var publishedCount = 0
+
+        val observer = ConnectionObserver(
+            snapshot = { "" },
+            snapshotSince = { reqRev ->
+                reqRevPolled = reqRev
+                polls++
+                ConnectionObserver.SnapshotResult(
+                    revision = polls.toLong(),
+                    unchanged = false,
+                    payload = """{"flows":[{"id":"flow-$polls","logicalOutbound":"p","finalOutboundTag":"n"}]}""",
+                )
+            },
+            publish = { publishedCount++ },
+            isCurrent = { true },
+            maps = { RequestDisplayMaps() },
+            runtimeGeneration = 1L,
+            scope = this,
+        )
+
+        // Run 5 cycles of start -> poll -> stop
+        repeat(5) { cycle ->
+            observer.start()
+            assertTrue(observer.enabled)
+            assertTrue(observer.pollActive)
+
+            // Every new session MUST start with reqRev = -1L
+            observer.pollOnce()
+            assertEquals(-1L, reqRevPolled)
+
+            // Subsequent poll in same session sends the previous revision
+            val prevRev = polls.toLong()
+            observer.pollOnce()
+            assertEquals(prevRev, reqRevPolled)
+
+            delay(10)
+            observer.stop()
+            assertFalse(observer.enabled)
+            assertFalse(observer.pollActive)
+        }
+
+        delay(50)
+        // Publisher should have cleanly delivered batches
+        assertTrue(publishedCount >= 5)
+    }
 }
 
 class RequestFlowMapperTest {

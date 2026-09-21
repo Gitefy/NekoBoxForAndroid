@@ -94,4 +94,46 @@ class RouterRuntimeSelectionTest {
         assertEquals(0, batchCalls)
         assertArrayEquals(longArrayOf(), selections)
     }
+
+    @Test
+    fun resolveBatchWithMixedChangesAndUnknownGroup() {
+        val routerTags = linkedMapOf(
+            100L to "selector-a",
+            200L to "urltest-b",
+            300L to "router-c",
+        )
+        val profileTags = linkedMapOf(
+            1L to "node-a1",
+            2L to "node-a2",
+            3L to "node-b1",
+            4L to "node-b2",
+            5L to "node-c1",
+        )
+
+        // Baseline: selector-a was 1L (node-a1), urltest-b was 3L (node-b1), router-c was 5L (node-c1)
+        // Now:
+        // selector-a -> node-a2 (changed!)
+        // urltest-b  -> node-b2 (changed!)
+        // router-c   -> node-c1 (unchanged!)
+        // "unknown-group" -> "node-unknown" (invalid/unknown group)
+        val winners = mapOf(
+            "selector-a" to "node-a2",
+            "urltest-b" to "node-b2",
+            "router-c" to "node-c1",
+            "unknown-group" to "node-unknown",
+        )
+
+        val selections = RouterRuntimeSelection.resolveBatch(
+            routerTags = routerTags,
+            profileTags = profileTags,
+            batchQuery = { winners },
+        )
+
+        val resultMap = RouterRuntimeSelection.toMap(selections)
+        assertEquals(2L, resultMap[100L]) // selector-a correctly updated to node-a2
+        assertEquals(4L, resultMap[200L]) // urltest-b correctly updated to node-b2
+        assertEquals(5L, resultMap[300L]) // router-c correctly kept at node-c1
+        assertEquals(3, resultMap.size) // unknown group did not corrupt result
+        assertArrayEquals(longArrayOf(100L, 2L, 200L, 4L, 300L, 5L), selections)
+    }
 }

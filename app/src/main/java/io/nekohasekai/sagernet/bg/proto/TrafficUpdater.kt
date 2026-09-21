@@ -125,8 +125,11 @@ class TrafficUpdater(
         }
     }
 
+    val fallbackCount = java.util.concurrent.atomic.AtomicInteger(0)
+
     fun updateAll() {
         if (batchSnapshot == null) {
+            fallbackCount.incrementAndGet()
             updateAllLegacy()
             return
         }
@@ -134,6 +137,7 @@ class TrafficUpdater(
         val bytes = try {
             batchSnapshot.invoke()
         } catch (e: Exception) {
+            fallbackCount.incrementAndGet()
             Logs.w("P3_D_TRAFFIC_BATCH_FALLBACK: ${e.message}")
             updateAllLegacy()
             return
@@ -141,6 +145,7 @@ class TrafficUpdater(
 
         if (bytes == null || bytes.isEmpty()) {
             if (queryStats != null && items.isNotEmpty()) {
+                fallbackCount.incrementAndGet()
                 Logs.w("P3_D_TRAFFIC_BATCH_FALLBACK: empty snapshot bytes")
                 updateAllLegacy()
             } else {
@@ -166,6 +171,7 @@ class TrafficUpdater(
             val buf = ByteBuffer.wrap(bytes)
             val version = buf.get().toInt()
             if (version != 1) {
+                fallbackCount.incrementAndGet()
                 Logs.w("P3_D_TRAFFIC_BATCH_FALLBACK: unsupported version $version")
                 updateAllLegacy()
                 return
@@ -196,6 +202,7 @@ class TrafficUpdater(
                 }
             }
         } catch (e: Exception) {
+            fallbackCount.incrementAndGet()
             Logs.w("P3_D_TRAFFIC_BATCH_FALLBACK: decode error ${e.message}")
             updateAllLegacy()
         }

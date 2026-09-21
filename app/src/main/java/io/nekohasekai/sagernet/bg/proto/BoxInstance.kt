@@ -41,6 +41,8 @@ abstract class BoxInstance(
         return ::config.isInitialized && ::box.isInitialized
     }
 
+    val groupSelectionFallbackCount = java.util.concurrent.atomic.AtomicInteger(0)
+
     fun currentUrlTestSelections(): LongArray {
         if (!isInitialized()) return longArrayOf()
         return RouterRuntimeSelection.resolveBatch(
@@ -51,6 +53,7 @@ abstract class BoxInstance(
                     val raw = box.currentGroupSelections(tags.joinToString("\n"))?.value.orEmpty()
                     RouterRuntimeSelection.parseGroupSelections(raw)
                 }.getOrElse {
+                    groupSelectionFallbackCount.incrementAndGet()
                     Logs.w("P3_D_GROUP_SELECTION_FALLBACK: ${it.message}")
                     tags.associateWith { tag -> box.currentOutboundFor(tag) }
                 }

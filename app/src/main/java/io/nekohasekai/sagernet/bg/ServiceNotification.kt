@@ -247,10 +247,14 @@ class ServiceNotification(
 
     override fun onReceive(context: Context, intent: Intent) {
         if (service.data.state == BaseService.State.Connected) {
+            val prev = listenPostSpeed
             listenPostSpeed = shouldPostSpeed(
                 visible,
                 intent.action == Intent.ACTION_SCREEN_ON,
             )
+            if (!prev && listenPostSpeed) {
+                service.data.proxy?.looper?.requestUpdate()
+            }
         }
     }
 

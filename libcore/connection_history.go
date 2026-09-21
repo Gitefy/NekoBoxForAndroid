@@ -432,9 +432,16 @@ func (h *connectionHistory) listen(
 }
 
 func (h *connectionHistory) MergeAndSnapshotSince(source liveConnectionSource, lastRevision int64) *ConnectionSnapshotResponse {
+	if h == nil {
+		return &ConnectionSnapshotResponse{Revision: 0, Unchanged: true, Payload: wrapString(`{"flows":[]}`)}
+	}
 	if source != nil {
 		h.liveScans.Add(1)
-		metas := source.Connections()
+		var metas []*trafficcontrol.TrackerMetadata
+		func() {
+			defer func() { _ = recover() }()
+			metas = source.Connections()
+		}()
 		var flows []connectionFlow
 		if len(metas) > 0 {
 			flows = make([]connectionFlow, 0, len(metas))
@@ -454,6 +461,15 @@ func (h *connectionHistory) MergeAndSnapshotSince(source liveConnectionSource, l
 		h.mu.Lock()
 		if !h.stopped {
 			h.evictLocked()
+		}
+	}
+
+	if h.stopped {
+		h.mu.Unlock()
+		return &ConnectionSnapshotResponse{
+			Revision:  lastRevision,
+			Unchanged: true,
+			Payload:   wrapString(""),
 		}
 	}
 
@@ -487,13 +503,17 @@ func (h *connectionHistory) MergeAndSnapshotSince(source liveConnectionSource, l
 	h.mu.Unlock()
 
 	raw, err := json.Marshal(connectionSnapshotEnvelope{Flows: out})
-	jsonStr := string(raw)
 	if err != nil {
-		jsonStr = `{"flows":[]}`
+		return &ConnectionSnapshotResponse{
+			Revision:  lastRevision,
+			Unchanged: false,
+			Payload:   wrapString(""),
+		}
 	}
+	jsonStr := string(raw)
 
 	h.mu.Lock()
-	if h.revision == rev {
+	if h.revision == rev && !h.stopped {
 		h.cachedRevision = rev
 		h.cachedJSON = jsonStr
 	}
@@ -545,6 +565,9 @@ func (h *connectionHistory) Dispose() {
 	unsub := h.unsub
 	h.unsub = nil
 	close(h.stopCh)
+	h.cachedRevision = 0
+	h.cachedJSON = ""
+	h.byID = nil
 	h.mu.Unlock()
 	if unsub != nil {
 		unsub()

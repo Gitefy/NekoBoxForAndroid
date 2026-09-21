@@ -152,5 +152,27 @@ class TrafficUpdaterTest {
         assertEquals(150L, item.rx)
         assertEquals(150L, item.tx)
         assertTrue(item.hasTrafficDelta)
+        assertEquals(1, updater.fallbackCount.get())
+    }
+
+    @Test
+    fun normalBatchSnapshotHasZeroFallbackCount() {
+        var now = 10_000L
+        val item = TrafficUpdater.TrafficLooperData("proxy")
+        val buf = ByteBuffer.allocate(5)
+        buf.put(1.toByte())
+        buf.putShort(0.toShort())
+        buf.putShort(0.toShort())
+
+        val updater = TrafficUpdater(
+            items = listOf(item),
+            monotonicMillis = { now },
+            batchSnapshot = { buf.array() },
+            indexedItems = arrayOf(item),
+        )
+
+        now += 1_000L
+        updater.updateAll()
+        assertEquals(0, updater.fallbackCount.get())
     }
 }

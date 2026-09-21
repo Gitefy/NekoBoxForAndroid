@@ -43,7 +43,7 @@ class ProxyInstance(profile: ProxyEntity, var service: BaseService.Interface? = 
     override fun launch() {
         box.setAsMain()
         super.launch() // start box
-        looper = service?.let { TrafficLooper(it.data, runtimeScope) }
+        looper = service?.let { TrafficLooper(it.data, runtimeScope, this) }
         looper?.start()
         connectionObserver = service?.let { svc ->
             ConnectionObserver(

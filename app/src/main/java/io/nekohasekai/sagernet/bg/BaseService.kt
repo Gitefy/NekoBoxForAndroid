@@ -148,6 +148,8 @@ class BaseService {
         private val broadcastMutex = Mutex()
 
         suspend fun publishRequestSnapshot(batch: io.nekohasekai.sagernet.aidl.RequestFlowBatch) {
+            val gen = data?.applyGeneration ?: return
+            if (gen != batch.runtimeGeneration) return
             if (!requestObservers.hasSubscribers()) return
             broadcast { cb ->
                 val token = cb.asBinder() ?: return@broadcast

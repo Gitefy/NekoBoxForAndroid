@@ -215,11 +215,16 @@ func (b *BoxInstance) Close() (err error) {
 	return nil
 }
 
+// ConnectionSnapshotRevision is a legacy fallback only. Prefer ConnectionSnapshotSince.
 func (b *BoxInstance) ConnectionSnapshotRevision() int64 {
 	if b == nil {
 		return 0
 	}
 	b.access.Lock()
+	if b.state != 1 {
+		b.access.Unlock()
+		return 0
+	}
 	history := b.connHistory
 	manager := b.trafficManager
 	b.access.Unlock()
@@ -229,11 +234,16 @@ func (b *BoxInstance) ConnectionSnapshotRevision() int64 {
 	return history.MergeLive(manager)
 }
 
+// ConnectionSnapshot is a legacy fallback only. Prefer ConnectionSnapshotSince.
 func (b *BoxInstance) ConnectionSnapshot() *StringBox {
 	if b == nil {
 		return wrapString(`{"flows":[]}`)
 	}
 	b.access.Lock()
+	if b.state != 1 {
+		b.access.Unlock()
+		return wrapString(`{"flows":[]}`)
+	}
 	history := b.connHistory
 	manager := b.trafficManager
 	b.access.Unlock()
@@ -249,6 +259,10 @@ func (b *BoxInstance) ConnectionSnapshotSince(lastRevision int64) *ConnectionSna
 		return &ConnectionSnapshotResponse{Revision: 0, Unchanged: true, Payload: wrapString(`{"flows":[]}`)}
 	}
 	b.access.Lock()
+	if b.state != 1 {
+		b.access.Unlock()
+		return &ConnectionSnapshotResponse{Revision: 0, Unchanged: true, Payload: wrapString(`{"flows":[]}`)}
+	}
 	history := b.connHistory
 	manager := b.trafficManager
 	b.access.Unlock()
@@ -297,6 +311,7 @@ func (b *BoxInstance) SetV2rayStats(outbounds string) {
 	b.Box.Router().AppendTracker(statsService)
 }
 
+// QueryStats is a legacy fallback only. Prefer TrafficStatsSnapshot.
 func (b *BoxInstance) QueryStats(tag, direct string) int64 {
 	if b.v2api == nil {
 		return 0
@@ -338,6 +353,7 @@ func (b *BoxInstance) SelectOutboundFor(selectorTag, tag string) bool {
 	return selectOutboundFor(proxy, tag)
 }
 
+// CurrentOutboundFor is a legacy fallback only. Prefer CurrentGroupSelections.
 func (b *BoxInstance) CurrentOutboundFor(groupTag string) string {
 	b.access.Lock()
 	defer b.access.Unlock()

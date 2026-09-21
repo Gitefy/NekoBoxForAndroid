@@ -83,6 +83,8 @@ class ConnectionObserver(
         setEnabled(false)
     }
 
+    val fallbackCount = java.util.concurrent.atomic.AtomicInteger(0)
+
     fun pollOnce(): Boolean {
         if (!enabled || !isCurrent()) return false
         return try {
@@ -96,9 +98,15 @@ class ConnectionObserver(
                     if (resp.unchanged && reqRev >= 0L) {
                         return true
                     }
-                    raw = resp.payload.orEmpty()
+                    val payload = resp.payload.orEmpty()
+                    if (payload.isBlank()) {
+                        // Serialization or payload failure: do not advance lastRevision
+                        return false
+                    }
+                    raw = payload
                     currentRev = resp.revision
                 } else {
+                    fallbackCount.incrementAndGet()
                     Logs.w("P3_D_CONNECTION_SNAPSHOT_FALLBACK: snapshotSince returned null")
                     val rev = revision?.invoke()
                     synchronized(gate) {
@@ -111,6 +119,7 @@ class ConnectionObserver(
                     currentRev = rev
                 }
             } else {
+                fallbackCount.incrementAndGet()
                 val rev = revision?.invoke()
                 synchronized(gate) {
                     if (!enabled || !isCurrent()) return false
