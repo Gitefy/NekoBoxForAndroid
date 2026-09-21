@@ -1360,7 +1360,6 @@ class ConfigurationFragment @JvmOverloads constructor(
         if (DataStore.runningTest) return else DataStore.runningTest = true
         val test = TestDialog()
         val dialog = test.builder.show()
-        val testJobs = mutableListOf<Job>()
         val (routerGroup, group) = currentConnectionTestGroup()
         val groupName = routerGroup?.name ?: group!!.displayName()
 
@@ -1399,7 +1398,6 @@ class ConfigurationFragment @JvmOverloads constructor(
             dialog.dismiss()
             runOnDefaultDispatcher {
                 mainJob.cancel()
-                testJobs.forEach { it.cancel() }
                 test.results.forEach {
                     try {
                         ProfileManager.updateProfile(it)

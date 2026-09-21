@@ -42,9 +42,11 @@ class BatchUrlTestRunnerTest {
         val startCount = AtomicInteger(0)
         val closeCount = AtomicInteger(0)
         val probedTags = CopyOnWriteArrayList<String>()
+        var onStart: () -> Unit = {}
 
         override fun start() {
             startCount.incrementAndGet()
+            onStart()
         }
 
         override fun close() {
@@ -324,4 +326,43 @@ class BatchUrlTestRunnerTest {
         val runnerZero = BatchUrlTestRunner(configuredConcurrency = 0)
         assertEquals(1, runnerZero.effectiveConcurrency)
     }
+
+    @Test
+    fun startFailureClosesBridgeExactlyOnceAndExecutesFallback() = runBlocking {
+        val profiles = (1..3).map { socks(it.toLong()) }
+        val fallbackTested = CopyOnWriteArrayList<Long>()
+        val fakeBridge = FakeBoxBridge().apply {
+            onStart = {
+                throw IllegalStateException("Simulated bridge start failure")
+            }
+        }
+
+        val runner = BatchUrlTestRunner(
+            boxFactory = { fakeBridge },
+            singleTester = { profile ->
+                fallbackTested.add(profile.id)
+                88
+            },
+        )
+
+        val results = CopyOnWriteArrayList<ProxyEntity>()
+        runner.run(profiles) { results.add(it) }
+
+        // All 3 profiles tested via fallback
+        assertEquals(3, results.size)
+        assertEquals(listOf(1L, 2L, 3L), fallbackTested.sorted())
+        assertTrue(results.all { it.status == 1 && it.ping == 88 })
+
+        // Bridge was created, start was attempted, and close was called EXACTLY ONCE
+        assertEquals(1, fakeBridge.startCount.get())
+        assertEquals(1, fakeBridge.closeCount.get())
+
+        // Metrics: boxStartCount must NOT be incremented since start failed
+        assertEquals(1, runner.lastMetrics.boxCreateCount)
+        assertEquals(0, runner.lastMetrics.boxStartCount)
+        assertEquals(1, runner.lastMetrics.boxCloseCount)
+        assertEquals(0, runner.lastMetrics.batchProbeCount)
+        assertEquals(3, runner.lastMetrics.fallbackProbeCount)
+    }
 }
+

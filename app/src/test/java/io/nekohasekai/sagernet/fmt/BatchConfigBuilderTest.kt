@@ -207,4 +207,46 @@ class BatchConfigBuilderTest {
         assertEquals(1, outbounds.count { it == "ut-10-main" })
         assertEquals(1, outbounds.count { it == "ut-20-main" })
     }
+
+    @Test
+    fun customOutboundJsonCannotOverrideBatchNamespacedTag() {
+        val p1 = socks(10L, "10.0.0.1", 1080).apply {
+            val bean = requireBean()
+            bean.customOutboundJson = """{"tag":"evil","idle_timeout":"60s"}"""
+            putBean(bean)
+        }
+        val p2 = socks(20L, "10.0.0.2", 1080).apply {
+            val bean = requireBean()
+            bean.customOutboundJson = """{"tag":"evil","idle_timeout":"90s"}"""
+            putBean(bean)
+        }
+
+        val result = BatchConfigBuilder.build(listOf(p1, p2))
+
+        assertEquals(2, result.batchEligibleProfiles.size)
+        val tagA = result.targetTagMap[10L]
+        val tagB = result.targetTagMap[20L]
+        assertNotNull(tagA)
+        assertNotNull(tagB)
+        assertEquals("ut-10-main", tagA)
+        assertEquals("ut-20-main", tagB)
+        assertTrue("A and B must have unique tags", tagA != tagB)
+
+        val json = JsonParser.parseString(result.config).asJsonObject
+        val outbounds = json.getAsJsonArray("outbounds").map { it.asJsonObject }
+
+        // Must not contain any outbound with tag "evil"
+        assertFalse("Tag 'evil' from customOutboundJson must not exist", outbounds.any { it.get("tag")?.asString == "evil" })
+
+        // Outbound A has unique namespaced tag and retained idle_timeout
+        val outboundA = outbounds.firstOrNull { it.get("tag")?.asString == "ut-10-main" }
+        assertNotNull("Outbound A with namespaced tag ut-10-main must exist", outboundA)
+        assertEquals("60s", outboundA!!.get("idle_timeout")?.asString)
+
+        // Outbound B has unique namespaced tag and retained idle_timeout
+        val outboundB = outbounds.firstOrNull { it.get("tag")?.asString == "ut-20-main" }
+        assertNotNull("Outbound B with namespaced tag ut-20-main must exist", outboundB)
+        assertEquals("90s", outboundB!!.get("idle_timeout")?.asString)
+    }
 }
+

@@ -32,6 +32,7 @@ import moe.matsuri.nb4a.proxy.anytls.buildSingBoxOutboundAnyTLSBean
 import moe.matsuri.nb4a.proxy.config.ConfigBean
 import moe.matsuri.nb4a.proxy.shadowtls.ShadowTLSBean
 import moe.matsuri.nb4a.proxy.shadowtls.buildSingBoxOutboundShadowTLSBean
+import com.google.gson.JsonParser
 import moe.matsuri.nb4a.utils.JavaUtil.gsonCompact
 
 /**
@@ -277,7 +278,19 @@ object BatchConfigBuilder {
         } catch (_: Exception) {
         }
 
-        outbound._hack_custom_config = bean.customOutboundJson
+        val customJson = bean.customOutboundJson
+        if (!customJson.isNullOrBlank()) {
+            outbound._hack_custom_config = runCatching {
+                val element = JsonParser.parseString(customJson)
+                if (element.isJsonObject) {
+                    val obj = element.asJsonObject
+                    obj.remove("tag")
+                    gsonCompact.toJson(obj)
+                } else {
+                    customJson
+                }
+            }.getOrDefault(customJson)
+        }
         return outbound
     }
 }

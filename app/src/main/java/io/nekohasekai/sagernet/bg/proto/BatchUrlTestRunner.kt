@@ -120,9 +120,9 @@ class BatchUrlTestRunner(
                 metrics.boxCreateCount++
                 val bridge = boxFactory(batchResult.config)
                     ?: throw IllegalStateException("boxFactory returned null")
+                batchBridge = bridge
                 bridge.start()
                 metrics.boxStartCount++
-                batchBridge = bridge
                 batchQueue.addAll(batchEligible)
                 Logs.d("BatchUrlTest: started shared BoxInstance for ${batchEligible.size} nodes")
             } catch (e: Exception) {
