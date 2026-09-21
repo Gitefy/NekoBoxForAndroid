@@ -8,14 +8,22 @@ class TrafficUpdater(
     val items: List<TrafficLooperData>, // contain "bypass"
     private val monotonicMillis: () -> Long = { System.nanoTime() / 1_000_000L },
     private val batchSnapshot: (() -> ByteArray?)? = null,
-    private val indexedItems: Array<TrafficLooperData?>? = null,
-    private val tagToItem: Map<String, TrafficLooperData>? = null,
+    indexedItems: Array<TrafficLooperData?>? = null,
+    tagToItem: Map<String, TrafficLooperData>? = null,
+    private val indexedConsumers: Array<out List<TrafficLooperData>?>? = null,
+    private val tagToConsumers: Map<String, List<TrafficLooperData>>? = null,
 ) {
     companion object {
         private fun makeSnapshotSupplier(box: libcore.BoxInstance): () -> ByteArray? = {
             runCatching { box.trafficStatsSnapshot() }.getOrNull()
         }
     }
+
+    private val effectiveIndexedConsumers: Array<out List<TrafficLooperData>?>? =
+        indexedConsumers ?: indexedItems?.map { it?.let { single -> listOf(single) } }?.toTypedArray()
+
+    private val effectiveTagToConsumers: Map<String, List<TrafficLooperData>>? =
+        tagToConsumers ?: tagToItem?.mapValues { listOf(it.value) }
 
     constructor(box: libcore.BoxInstance, items: List<TrafficLooperData>) :
         this(
@@ -35,6 +43,19 @@ class TrafficUpdater(
         batchSnapshot = makeSnapshotSupplier(box),
         indexedItems = indexedItems,
         tagToItem = tagToItem,
+    )
+
+    constructor(
+        box: libcore.BoxInstance,
+        items: List<TrafficLooperData>,
+        indexedConsumers: Array<out List<TrafficLooperData>?>?,
+        tagToConsumers: Map<String, List<TrafficLooperData>>?,
+    ) : this(
+        queryStats = box::queryStats,
+        items = items,
+        batchSnapshot = makeSnapshotSupplier(box),
+        indexedConsumers = indexedConsumers,
+        tagToConsumers = tagToConsumers,
     )
 
     init {
@@ -172,8 +193,7 @@ class TrafficUpdater(
             val version = buf.get().toInt()
             if (version != 1) {
                 fallbackCount.incrementAndGet()
-                Logs.w("P3_D_TRAFFIC_BATCH_FALLBACK: unsupported version $version")
-                updateAllLegacy()
+                Logs.w("P3_D_TRAFFIC_BATCH_FALLBACK: unsupported version $version (snapshot counters already consumed)")
                 return
             }
 
@@ -182,9 +202,11 @@ class TrafficUpdater(
                 val idx = buf.short.toInt() and 0xFFFF
                 val rx = buf.long
                 val tx = buf.long
-                val item = indexedItems?.getOrNull(idx) ?: continue
-                if (!item.ignore) {
-                    applyDelta(item, rx, tx)
+                val consumers = effectiveIndexedConsumers?.getOrNull(idx) ?: continue
+                for (item in consumers) {
+                    if (!item.ignore) {
+                        applyDelta(item, rx, tx)
+                    }
                 }
             }
 
@@ -196,15 +218,16 @@ class TrafficUpdater(
                 val rx = buf.long
                 val tx = buf.long
                 val tagName = String(tagBytes, Charsets.UTF_8)
-                val item = tagToItem?.get(tagName) ?: continue
-                if (!item.ignore) {
-                    applyDelta(item, rx, tx)
+                val consumers = effectiveTagToConsumers?.get(tagName) ?: continue
+                for (item in consumers) {
+                    if (!item.ignore) {
+                        applyDelta(item, rx, tx)
+                    }
                 }
             }
         } catch (e: Exception) {
             fallbackCount.incrementAndGet()
-            Logs.w("P3_D_TRAFFIC_BATCH_FALLBACK: decode error ${e.message}")
-            updateAllLegacy()
+            Logs.w("P3_D_TRAFFIC_BATCH_FALLBACK: decode error ${e.message} (snapshot counters already consumed)")
         }
     }
 }

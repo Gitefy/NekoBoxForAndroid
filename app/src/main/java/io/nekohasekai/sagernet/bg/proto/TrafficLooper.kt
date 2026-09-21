@@ -41,8 +41,8 @@ class TrafficLooper(
         withTimeoutOrNull(delayMillis) { updateRequests.receive() }
     }
     private val idMap = mutableMapOf<Long, TrafficUpdater.TrafficLooperData>() // id to 1 data
-    private val tagMap = mutableMapOf<String, TrafficUpdater.TrafficLooperData>() // tag to 1 data
-    private var indexedItems: Array<TrafficUpdater.TrafficLooperData?>? = null
+    private val tagMap = mutableMapOf<String, MutableList<TrafficUpdater.TrafficLooperData>>() // tag to list of data
+    private var indexedConsumers: Array<MutableList<TrafficUpdater.TrafficLooperData>?>? = null
     private var tagIndexMap: Map<String, Int> = emptyMap()
     private var trackedList: List<TrafficUpdater.TrafficLooperData> = emptyList()
     private val stateMutex = Mutex()
@@ -129,29 +129,37 @@ class TrafficLooper(
         val oldData = idMap[selectorNowId]
         val newData = idMap[id] ?: return null
         var toUpdate: Triple<Long, Long, Long>? = null
-        oldData?.apply {
-            tag = selectorNowFakeTag
-            ignore = true
+        if (oldData != null) {
+            val oldConsumers = tagMap[selectorNowFakeTag] ?: listOf(oldData)
+            for (consumer in oldConsumers) {
+                consumer.tag = selectorNowFakeTag
+                consumer.ignore = true
+            }
             // post traffic when switch
             if (DataStore.profileTrafficStatistics) {
                 val targetProxy = boundProxy ?: data.proxy
-                targetProxy?.config?.trafficMap?.get(tag)?.firstOrNull()?.let {
-                    it.rx = rx
-                    it.tx = tx
+                targetProxy?.config?.trafficMap?.get(selectorNowFakeTag)?.firstOrNull { it.id == selectorNowId }?.let {
+                    it.rx = oldData.rx
+                    it.tx = oldData.tx
+                    toUpdate = Triple(it.id, it.rx, it.tx)
+                } ?: targetProxy?.config?.trafficMap?.get(selectorNowFakeTag)?.firstOrNull()?.let {
+                    it.rx = oldData.rx
+                    it.tx = oldData.tx
                     toUpdate = Triple(it.id, it.rx, it.tx)
                 }
             }
         }
         selectorNowFakeTag = newData.tag
         selectorNowId = id
-        newData.apply {
-            tag = statsTag
-            ignore = false
+        val newConsumers = tagMap[selectorNowFakeTag] ?: mutableListOf(newData)
+        for (consumer in newConsumers) {
+            consumer.tag = statsTag
+            consumer.ignore = false
         }
         val proxyIdx = tagIndexMap[TAG_PROXY] ?: 0
-        indexedItems?.set(proxyIdx, newData)
+        indexedConsumers?.set(proxyIdx, newConsumers)
         if (statsTag != TAG_PROXY) {
-            tagIndexMap[statsTag]?.let { indexedItems?.set(it, newData) }
+            tagIndexMap[statsTag]?.let { indexedConsumers?.set(it, newConsumers) }
         }
         return toUpdate
     }
@@ -304,7 +312,9 @@ class TrafficLooper(
                     // Nodes belonging to independent Router groups must never be mass-ignored:
                     // they accumulate traffic independently of the main selector winner.
                     val routerMemberIds = proxy.config.routerAllMemberIds
+                    tagMap.clear()
                     proxy.config.trafficMap.forEach { (tag, ents) ->
+                        val list = tagMap.getOrPut(tag) { mutableListOf() }
                         for (ent in ents) {
                             val belongsToRouter = ent.id in routerMemberIds
                             val item = TrafficUpdater.TrafficLooperData(
@@ -317,7 +327,7 @@ class TrafficLooper(
                                 ignore = dynamicMain && !belongsToRouter,
                             )
                             idMap[ent.id] = item
-                            tagMap[tag] = item
+                            list.add(item)
                         }
                     }
 
@@ -328,14 +338,14 @@ class TrafficLooper(
                     proxy.config.trafficMap.keys.forEach { if (it !in tagList) tagList.add(it) }
 
                     tagIndexMap = tagList.mapIndexed { idx, tag -> tag to idx }.toMap()
-                    val indexed = arrayOfNulls<TrafficUpdater.TrafficLooperData>(tagList.size)
-                    indexed[1] = itemBypass
+                    val indexed = arrayOfNulls<MutableList<TrafficUpdater.TrafficLooperData>>(tagList.size)
+                    indexed[1] = mutableListOf(itemBypass)
                     tagList.forEachIndexed { idx, tag ->
                         if (idx >= 2) {
                             tagMap[tag]?.let { indexed[idx] = it }
                         }
                     }
-                    indexedItems = indexed
+                    indexedConsumers = indexed
 
                     if (proxy.config.mainUrlTestTag != null) {
                         val (_, toUpdate) = syncUrlTestWinnerLocked(proxy)
@@ -348,8 +358,8 @@ class TrafficLooper(
                     trafficUpdater = TrafficUpdater(
                         box = proxy.box,
                         items = trackedList,
-                        indexedItems = indexed,
-                        tagToItem = tagMap,
+                        indexedConsumers = indexed,
+                        tagToConsumers = tagMap,
                     )
                     proxy.box.setV2rayStats(tagList.joinToString("\n"))
                 }
@@ -380,13 +390,13 @@ class TrafficLooper(
                 ) {
                     null
                 } else {
-                    // add all non-bypass to "main"
+                    // add all non-bypass to "main" (each physical stats tag counted once)
                     var mainTxRate = 0L
                     var mainRxRate = 0L
                     var mainTx = 0L
                     var mainRx = 0L
-                    for (i in trackedList.indices) {
-                        val it = trackedList[i]
+                    tagMap.values.forEach { consumers ->
+                        val it = consumers.firstOrNull() ?: return@forEach
                         if (!it.ignore) {
                             mainTxRate += it.txRate
                             mainRxRate += it.rxRate

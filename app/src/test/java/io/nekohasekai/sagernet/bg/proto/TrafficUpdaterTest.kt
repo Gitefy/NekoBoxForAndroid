@@ -175,4 +175,74 @@ class TrafficUpdaterTest {
         updater.updateAll()
         assertEquals(0, updater.fallbackCount.get())
     }
+
+    @Test
+    fun malformedBatchSnapshotAfterResetDoesNotInvokeLegacyQuery() {
+        var now = 10_000L
+        var legacyCalls = 0
+        val item = TrafficUpdater.TrafficLooperData("node")
+
+        val updater = TrafficUpdater(
+            queryStats = { _, _ -> legacyCalls++; 150L },
+            items = listOf(item),
+            monotonicMillis = { now },
+            batchSnapshot = { byteArrayOf(99) }, // unsupported version
+        )
+
+        now += 1_000L
+        updater.updateAll()
+
+        assertEquals(0, legacyCalls)
+        assertEquals(0L, item.rx)
+        assertEquals(0L, item.tx)
+        assertFalse(item.hasTrafficDelta)
+    }
+
+    @Test
+    fun batchSnapshotAppliesSameDeltaToAllConsumersSharingTagOrIndex() {
+        var now = 10_000L
+        val itemA = TrafficUpdater.TrafficLooperData(tag = "c-10", profileId = 1L)
+        val itemB = TrafficUpdater.TrafficLooperData(tag = "c-10", profileId = 2L)
+        val itemC = TrafficUpdater.TrafficLooperData(tag = "c-10", profileId = 3L)
+
+        val indexedConsumers = arrayOf<List<TrafficUpdater.TrafficLooperData>?>(
+            listOf(itemA, itemB, itemC)
+        )
+
+        val buf = ByteBuffer.allocate(1 + 2 + 18 + 2)
+        buf.put(1.toByte()) // version
+        buf.putShort(1.toShort()) // 1 indexed entry
+        buf.putShort(0.toShort()) // index 0 ("c-10")
+        buf.putLong(1000L) // rx
+        buf.putLong(2000L) // tx
+        buf.putShort(0.toShort()) // 0 named entries
+
+        val updater = TrafficUpdater(
+            items = listOf(itemA, itemB, itemC),
+            monotonicMillis = { now },
+            batchSnapshot = { buf.array() },
+            indexedConsumers = indexedConsumers,
+        )
+
+        now += 1_000L
+        updater.updateAll()
+
+        assertEquals(1000L, itemA.rx)
+        assertEquals(2000L, itemA.tx)
+        assertEquals(1000L, itemA.rxRate)
+        assertEquals(2000L, itemA.txRate)
+        assertTrue(itemA.hasTrafficDelta)
+
+        assertEquals(1000L, itemB.rx)
+        assertEquals(2000L, itemB.tx)
+        assertEquals(1000L, itemB.rxRate)
+        assertEquals(2000L, itemB.txRate)
+        assertTrue(itemB.hasTrafficDelta)
+
+        assertEquals(1000L, itemC.rx)
+        assertEquals(2000L, itemC.tx)
+        assertEquals(1000L, itemC.rxRate)
+        assertEquals(2000L, itemC.txRate)
+        assertTrue(itemC.hasTrafficDelta)
+    }
 }
