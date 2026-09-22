@@ -137,7 +137,10 @@ fun Project.setupAppCommon() {
     }
 
     android.apply {
-        if (targetKeystore != null && targetKeystore.exists() && keystorePwd != null && alias != null && pwd != null) {
+        if (
+            targetKeystore != null && targetKeystore.exists() &&
+            !keystorePwd.isNullOrBlank() && !alias.isNullOrBlank() && !pwd.isNullOrBlank()
+        ) {
             signingConfigs {
                 create("release") {
                     storeFile = targetKeystore
