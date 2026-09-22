@@ -3,12 +3,14 @@ package io.nekohasekai.sagernet.database.preference
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * S2-B1 readiness contract. Every assertion is about the store constructor
@@ -22,8 +24,12 @@ class StoreAsyncReadinessTest {
         @Volatile var shouldFail: Boolean = false,
     ) : KeyValuePair.Dao {
         val allReads = AtomicInteger(0)
+        val readStarted = CountDownLatch(1)
+        val readThread = AtomicReference<Thread?>()
         override fun all(): List<KeyValuePair> {
+            readThread.set(Thread.currentThread())
             allReads.incrementAndGet()
+            readStarted.countDown()
             if (shouldFail) throw IllegalStateException("injected prime failure")
             if (!latch.await(10, TimeUnit.SECONDS)) error("prime gate not released")
             return emptyList()
@@ -37,11 +43,14 @@ class StoreAsyncReadinessTest {
     }
 
     @Test
-    fun constructorDoesNotReadDao() {
+    fun constructorDoesNotReadDaoOnCallingThread() {
+        val callingThread = Thread.currentThread()
         val dao = BlockingFakeDao(CountDownLatch(1))
         val store = RoomPreferenceDataStore(dao, tableSnapshot = dao::all)
         assertTrue(store.readiness is RoomPreferenceDataStore.StoreReadiness.Loading)
-        assertEquals(0, dao.allReads.get())
+        assertTrue("background DAO read did not start", dao.readStarted.await(5, TimeUnit.SECONDS))
+        assertNotSame(callingThread, dao.readThread.get())
+        assertEquals(1, dao.allReads.get())
         dao.latch.countDown()
         runBlocking { store.awaitReady() }
         assertTrue(store.readiness is RoomPreferenceDataStore.StoreReadiness.Ready)
