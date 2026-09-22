@@ -3,6 +3,7 @@
 import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 import java.io.File
+import java.util.Properties
 
 plugins {
     id("com.android.application")
@@ -183,6 +184,8 @@ val verifyEgoXBranding by tasks.registering {
     val legacyMetadata = rootProject.file("asteria.properties")
     val helpersFile = rootProject.file("buildSrc/src/main/kotlin/Helpers.kt")
     val buildWorkflowFile = rootProject.file(".github/workflows/build.yml")
+    val readmeFile = rootProject.file("README.md")
+    val nativeEnvFile = rootProject.file("buildScript/init/env.sh")
 
     inputs.files(
         shortcuts,
@@ -191,7 +194,9 @@ val verifyEgoXBranding by tasks.registering {
         metadata,
         legacyMetadata,
         helpersFile,
-        buildWorkflowFile
+        buildWorkflowFile,
+        readmeFile,
+        nativeEnvFile
     )
 
     doLast {
@@ -209,6 +214,46 @@ val verifyEgoXBranding by tasks.registering {
         val buildWorkflow = buildWorkflowFile.readText()
         if (buildWorkflow.contains("asteria.properties")) {
             problems += "Build workflow still watches asteria.properties"
+        }
+
+        val props = Properties().apply { metadata.inputStream().use { load(it) } }
+        val expectedMetadata = mapOf(
+            "PACKAGE_NAME" to "com.egox",
+            "VERSION_NAME" to "4.3.2",
+            "PRE_VERSION_NAME" to "pre-4.3.2",
+            "VERSION_CODE" to "61"
+        )
+        expectedMetadata.forEach { (key, expected) ->
+            if (props.getProperty(key) != expected) {
+                problems += "$key must be $expected, was ${props.getProperty(key)}"
+            }
+        }
+
+        val readme = readmeFile.readText()
+        if (readme.lineSequence().firstOrNull() != "# EgoX" ||
+            !readme.contains("EgoX 4.3.2") || !readme.contains("API-36")) {
+            problems += "README must identify EgoX 4.3.2 and API 36 at the top/status section"
+        }
+
+        if (rootProject.file("tools/icon_preview").exists()) {
+            problems += "Obsolete one-off icon preview tooling remains"
+        }
+
+        val nativeEnv = nativeEnvFile.readText()
+        listOf(
+            "ANDROID_ARM_CC",
+            "ANDROID_ARM_CXX",
+            "ANDROID_ARM_STRIP",
+            "ANDROID_X86_CC",
+            "ANDROID_X86_CXX",
+            "ANDROID_X86_STRIP",
+            "ANDROID_X86_64_CC",
+            "ANDROID_X86_64_CXX",
+            "ANDROID_X86_64_STRIP"
+        ).forEach { token ->
+            if (nativeEnv.contains(token)) {
+                problems += "Unused Android ABI compiler export remains: $token"
+            }
         }
 
         val shortcutTargets = Regex("""android:targetPackage="([^"]+)"""")

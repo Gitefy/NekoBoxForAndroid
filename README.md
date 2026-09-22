@@ -1,7 +1,7 @@
-# NekoBox for Android
+# EgoX
 
-[![API](https://img.shields.io/badge/API-21%2B-brightgreen.svg?style=flat)](https://android-arsenal.com/api?level=21)
-[![Releases](https://img.shields.io/github/v/release/MatsuriDayo/NekoBoxForAndroid)](https://github.com/MatsuriDayo/NekoBoxForAndroid/releases)
+[![API](https://img.shields.io/badge/API-36-brightgreen.svg?style=flat)](https://android-arsenal.com/api?level=36)
+[![Releases](https://img.shields.io/github/v/release/Gitefy/NekoBoxForAndroid)](https://github.com/Gitefy/NekoBoxForAndroid/releases)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-orange.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Contributors](https://img.shields.io/github/contributors/starifly/NekoBoxForAndroid)](https://github.com/starifly/NekoBoxForAndroid/graphs/contributors)
 
@@ -10,8 +10,6 @@
 > 免责声明：本项目仅用于技术研究与代码学习之目的，不提供任何形式的网络代理服务。请勿将本项目用于违反当地法律法规的任何活动。请勿在生产环境中使用本项目，使用者应自行承担使用本项目可能带来的全部风险。若您下载或引用本项目，请在 24 小时内自行删除相关内容，并避免长期存储、分享或传播本项目的任何部分。**作者保留随时修改、更新或移除本项目及其内容的权利，恕不另行通知。**
 > 
 > Disclaimer: This project is intended solely for technical research and code learning purposes and does not provide any form of network proxy service. Please do not use this project for any activities that violate local laws and regulations. Do not use this project in production environments. Users are fully responsible for any risks that may arise from using this project. If you download or reference this project, please delete all related content within 24 hours and avoid long-term storage, distribution, or dissemination of any part of this project. **The author reserves the right to modify, update, or remove any part of this project or its contents at any time without prior notice.**
-# EgoX
-
 > A personal-use engineering fork of NekoBox for Android, focused on policy-based routing, runtime observability, state consistency, and long-running stability.
 
 EgoX 是基于 [NekoBox for Android](https://github.com/starifly/NekoBoxForAndroid) 持续演进的个人使用向分支。
@@ -49,7 +47,7 @@ Performance
 当前主线：
 
 ```text
-EgoX 4.2.0
+EgoX 4.3.2
 main
 ```
 
