@@ -15,13 +15,7 @@ import kotlin.system.exitProcess
 private val Project.android get() = extensions.getByName<ApplicationExtension>("android")
 
 fun Project.requireMetadata(): Properties {
-    val primary = rootProject.file("egox.properties")
-    val fallback = rootProject.file("asteria.properties")
-    val file = when {
-        primary.exists() -> primary
-        fallback.exists() -> fallback
-        else -> primary
-    }
+    val file = rootProject.file("egox.properties")
     val props = Properties()
     if (file.exists()) {
         file.inputStream().use { props.load(it) }
@@ -126,12 +120,10 @@ fun Project.setupAppCommon() {
     val pwd = lp.getProperty("ALIAS_PASS") ?: System.getenv("ALIAS_PASS")
 
     val egoxKeystore = rootProject.file("egox.keystore")
-    val asteriaKeystore = rootProject.file("asteria.keystore")
     val releaseKeystore = rootProject.file("release.keystore")
     val targetKeystore = when {
         !keystorePath.isNullOrBlank() -> rootProject.file(keystorePath)
         egoxKeystore.exists() -> egoxKeystore
-        asteriaKeystore.exists() -> asteriaKeystore
         releaseKeystore.exists() -> releaseKeystore
         else -> null
     }

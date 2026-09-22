@@ -6,7 +6,6 @@ on:
       - main
     paths:
       - 'egox.properties'
-      - 'asteria.properties'
 jobs:
   libcore:
     name: Native Build (LibCore)

@@ -179,10 +179,38 @@ val verifyEgoXBranding by tasks.registering {
         "src/main/java/io/nekohasekai/sagernet/ui/BackupFragment.kt"
     )
 
-    inputs.files(shortcuts, localeStrings, runtimeSources)
+    val metadata = rootProject.file("egox.properties")
+    val legacyMetadata = rootProject.file("asteria.properties")
+    val helpersFile = rootProject.file("buildSrc/src/main/kotlin/Helpers.kt")
+    val buildWorkflowFile = rootProject.file(".github/workflows/build.yml")
+
+    inputs.files(
+        shortcuts,
+        localeStrings,
+        runtimeSources,
+        metadata,
+        legacyMetadata,
+        helpersFile,
+        buildWorkflowFile
+    )
 
     doLast {
         val problems = mutableListOf<String>()
+        if (!metadata.isFile) problems += "Missing egox.properties"
+        if (legacyMetadata.exists()) {
+            problems += "Obsolete asteria.properties remains"
+        }
+
+        val helpers = helpersFile.readText()
+        listOf("asteria.properties", "asteria.keystore", "asteriaKeystore").forEach { token ->
+            if (helpers.contains(token)) problems += "Obsolete build fallback remains: $token"
+        }
+
+        val buildWorkflow = buildWorkflowFile.readText()
+        if (buildWorkflow.contains("asteria.properties")) {
+            problems += "Build workflow still watches asteria.properties"
+        }
+
         val shortcutTargets = Regex("""android:targetPackage="([^"]+)"""")
             .findAll(shortcuts.readText())
             .map { it.groupValues[1] }
