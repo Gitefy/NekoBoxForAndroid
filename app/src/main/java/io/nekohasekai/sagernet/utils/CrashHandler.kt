@@ -36,7 +36,7 @@ object CrashHandler : Thread.UncaughtExceptionHandler {
         }
 
         ProcessPhoenix.triggerRebirth(app, Intent(app, BlankActivity::class.java).apply {
-            putExtra("sendLog", "Asteria Crash")
+            putExtra("sendLog", "EgoX Crash")
         })
     }
 

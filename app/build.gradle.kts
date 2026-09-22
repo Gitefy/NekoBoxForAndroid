@@ -2,6 +2,7 @@
 
 import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
+import java.io.File
 
 plugins {
     id("com.android.application")
@@ -164,6 +165,59 @@ tasks.matching { it.name == "assembleOssDebug" }.configureEach {
     dependsOn(verifyOssDebugLibcoreCallers)
 }
 
+val verifyEgoXBranding by tasks.registering {
+    group = "verification"
+    description = "Checks the active EgoX runtime branding contract"
+
+    val shortcuts = file("src/main/res/xml/shortcuts.xml")
+    val localeStrings = fileTree("src/main/res") {
+        include("values*/strings.xml")
+    }
+    val runtimeSources = files(
+        "src/main/java/io/nekohasekai/sagernet/utils/CrashHandler.kt",
+        "src/main/java/io/nekohasekai/sagernet/ui/LogcatFragment.kt",
+        "src/main/java/io/nekohasekai/sagernet/ui/BackupFragment.kt"
+    )
+
+    inputs.files(shortcuts, localeStrings, runtimeSources)
+
+    doLast {
+        val problems = mutableListOf<String>()
+        val shortcutTargets = Regex("""android:targetPackage="([^"]+)"""")
+            .findAll(shortcuts.readText())
+            .map { it.groupValues[1] }
+            .toList()
+        if (shortcutTargets.size != 4 || shortcutTargets.any { it != "com.egox" }) {
+            problems += "All four static shortcuts must target com.egox: $shortcutTargets"
+        }
+
+        localeStrings.files.sortedBy { it.path }.forEach { stringsFile ->
+            if (Regex(""">\s*Asteria(?: for Android| для Android)?\s*<""")
+                    .containsMatchIn(stringsFile.readText())) {
+                problems += "Active Asteria locale branding: ${stringsFile.relativeTo(projectDir)}"
+            }
+        }
+
+        runtimeSources.files.forEach { sourceFile ->
+            if (sourceFile.readText().contains("asteria", ignoreCase = true)) {
+                problems += "Active Asteria runtime branding: ${sourceFile.relativeTo(projectDir)}"
+            }
+        }
+
+        listOf(
+            file("src/main/res/drawable/ic_asteria_foreground.xml"),
+            file("src/main/res/drawable/ic_asteria_monochrome.xml")
+        ).filter(File::exists).forEach {
+            problems += "Unreferenced Asteria resource remains: ${it.relativeTo(projectDir)}"
+        }
+
+        if (problems.isNotEmpty()) {
+            throw GradleException(problems.joinToString(separator = "\n"))
+        }
+    }
+}
+
 tasks.named("preBuild") {
     dependsOn(verifyLibcore)
+    dependsOn(verifyEgoXBranding)
 }
