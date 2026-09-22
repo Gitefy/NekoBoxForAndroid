@@ -260,8 +260,8 @@ val verifyEgoXBranding by tasks.registering {
             .findAll(shortcuts.readText())
             .map { it.groupValues[1] }
             .toList()
-        if (shortcutTargets.size != 4 || shortcutTargets.any { it != "com.egox" }) {
-            problems += "All four static shortcuts must target com.egox: $shortcutTargets"
+        if (shortcutTargets.size != 4 || shortcutTargets.any { it != "@string/shortcut_target_package" }) {
+            problems += "All four static shortcuts must use the variant-aware package resource: $shortcutTargets"
         }
 
         localeStrings.files.sortedBy { it.path }.forEach { stringsFile ->
