@@ -124,11 +124,19 @@ abstract class BoxInstance(
         val cacheDir = File(SagerNet.application.cacheDir, "tmpcfg")
         cacheDir.mkdirs()
 
+        var boxStarted = false
         for ((chain) in config.externalIndex) {
             chain.entries.forEachIndexed { index, (port, profile) ->
                 val bean = profile.requireBean()
                 val needChain = index != chain.size - 1
                 val (profileType, config) = pluginConfigs[port] ?: (0 to "")
+
+                if (bean is VelaBean && !boxStarted) {
+                    // Vela dials through the protected local mapping created by sing-box.
+                    // Start sing-box first so that mapping is listening before the client connects.
+                    box.start()
+                    boxStarted = true
+                }
 
                 when {
                     externalInstances.containsKey(port) -> {
@@ -261,7 +269,7 @@ abstract class BoxInstance(
             }
         }
 
-        box.start()
+        if (!boxStarted) box.start()
     }
 
     private fun awaitVelaReady(port: Int) {
