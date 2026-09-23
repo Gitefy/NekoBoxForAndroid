@@ -677,7 +677,6 @@ fun compileConfig(captured: CapturedConfig): ConfigBuildResult {
                         type = "socks"
                         server = LOCALHOST
                         server_port = localPort
-                        if (bean is VelaBean) network = "tcp,udp"
                     }
                 } else {
                     // internal outbound
