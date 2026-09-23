@@ -4,8 +4,24 @@ on:
   push:
     branches:
       - main
+      - codex/vela-protocol-egox
     paths:
       - 'egox.properties'
+      - 'app/build.gradle.kts'
+      - 'app/src/main/AndroidManifest.xml'
+      - 'app/src/main/rust/**'
+      - 'app/src/main/java/io/nekohasekai/sagernet/fmt/vela/**'
+      - 'app/src/main/java/io/nekohasekai/sagernet/database/ProxyEntity.kt'
+      - 'app/src/main/java/io/nekohasekai/sagernet/database/SagerDatabase.kt'
+      - 'app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt'
+      - 'app/src/main/java/io/nekohasekai/sagernet/fmt/KryoConverters.java'
+      - 'app/src/main/java/io/nekohasekai/sagernet/fmt/TypeMap.kt'
+      - 'app/src/main/java/io/nekohasekai/sagernet/ktx/Formats.kt'
+      - 'app/src/main/java/io/nekohasekai/sagernet/ui/profile/VelaSettingsActivity.kt'
+      - 'app/src/main/res/xml/vela_preferences.xml'
+      - 'app/src/main/res/values/strings.xml'
+      - 'app/schemas/**'
+      - 'app/src/test/java/io/nekohasekai/sagernet/fmt/vela/**'
 jobs:
   libcore:
     name: Native Build (LibCore)
@@ -54,6 +70,10 @@ jobs:
           path: |
             app/libs/libcore.aar
           key: ${{ hashFiles('.github/workflows/*', 'golang_status', 'libcore_status') }}
+      - name: Install Rust Android target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
       - name: Gradle cache
         uses: actions/cache@v5
         with:

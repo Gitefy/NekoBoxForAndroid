@@ -1,6 +1,8 @@
 package io.nekohasekai.sagernet.bg.proto
 
 import android.os.SystemClock
+import android.system.Os
+import android.system.OsConstants
 import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.bg.AbstractInstance
 import io.nekohasekai.sagernet.bg.GuardedProcessPool
@@ -16,6 +18,7 @@ import io.nekohasekai.sagernet.fmt.naive.NaiveBean
 import io.nekohasekai.sagernet.fmt.naive.buildNaiveConfig
 import io.nekohasekai.sagernet.fmt.trojan_go.TrojanGoBean
 import io.nekohasekai.sagernet.fmt.trojan_go.buildTrojanGoConfig
+import io.nekohasekai.sagernet.fmt.vela.VelaBean
 import io.nekohasekai.sagernet.ktx.*
 import io.nekohasekai.sagernet.plugin.PluginManager
 import io.nekohasekai.sagernet.route.RouterRuntimeSelection
@@ -24,6 +27,9 @@ import libcore.BoxInstance
 import libcore.Libcore
 import moe.matsuri.nb4a.net.LocalResolverImpl
 import java.io.File
+import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.Socket
 
 abstract class BoxInstance(
     val profile: ProxyEntity
@@ -105,6 +111,8 @@ abstract class BoxInstance(
                             }
                         }
                     }
+
+                    is VelaBean -> bean.validate()
                 }
             }
         }
@@ -125,6 +133,37 @@ abstract class BoxInstance(
                 when {
                     externalInstances.containsKey(port) -> {
                         externalInstances[port]!!.launch()
+                    }
+
+                    bean is VelaBean -> {
+                        val executable = File(SagerNet.application.applicationInfo.nativeLibraryDir, "libvela.so")
+                        if (!executable.canExecute()) {
+                            throw IOException("Vela client executable is missing or not executable")
+                        }
+                        val keyFile = File(
+                            SagerNet.application.noBackupFilesDir,
+                            "vela/${profile.id}/client.key"
+                        )
+                        keyFile.parentFile?.mkdirs()
+                        keyFile.writeText(bean.clientPrivateKey.trim())
+                        Os.chmod(keyFile.parent, OsConstants.S_IRWXU)
+                        Os.chmod(keyFile.absolutePath, OsConstants.S_IRUSR or OsConstants.S_IWUSR)
+                        cacheFiles.add(keyFile)
+
+                        val serverAddress = bean.serverAddress.let { host ->
+                            if (host.contains(":") && !host.startsWith("[")) "[$host]" else host
+                        }
+                        processes.start(
+                            listOf(
+                                executable.absolutePath,
+                                "run",
+                                "--listen", "127.0.0.1:$port",
+                                "--server", "$serverAddress:${bean.serverPort}",
+                                "--key", keyFile.absolutePath,
+                                "--server-key", bean.serverPublicKey.trim()
+                            )
+                        )
+                        awaitVelaReady(port)
                     }
 
                     bean is TrojanGoBean -> {
@@ -222,6 +261,26 @@ abstract class BoxInstance(
         }
 
         box.start()
+    }
+
+    private fun awaitVelaReady(port: Int) {
+        val deadline = SystemClock.elapsedRealtime() + 20_000
+        while (SystemClock.elapsedRealtime() < deadline) {
+            try {
+                Socket().use { socket ->
+                    socket.connect(InetSocketAddress("127.0.0.1", port), 300)
+                    socket.soTimeout = 300
+                    socket.getOutputStream().write(byteArrayOf(5, 1, 0))
+                    if (socket.getInputStream().read() == 5 && socket.getInputStream().read() == 0) {
+                        return
+                    }
+                }
+            } catch (_: IOException) {
+                // The guarded process may still be completing its authenticated handshake.
+            }
+            SystemClock.sleep(100)
+        }
+        throw IOException("Vela client did not become ready on its local SOCKS listener")
     }
 
     @Suppress("EXPERIMENTAL_API_USAGE")

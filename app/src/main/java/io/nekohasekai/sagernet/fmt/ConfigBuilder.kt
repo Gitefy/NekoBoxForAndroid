@@ -23,6 +23,7 @@ import io.nekohasekai.sagernet.fmt.ssh.SSHBean
 import io.nekohasekai.sagernet.fmt.ssh.buildSingBoxOutboundSSHBean
 import io.nekohasekai.sagernet.fmt.tuic.TuicBean
 import io.nekohasekai.sagernet.fmt.tuic.buildSingBoxOutboundTuicBean
+import io.nekohasekai.sagernet.fmt.vela.VelaBean
 import io.nekohasekai.sagernet.fmt.juicity.JuicityBean
 import io.nekohasekai.sagernet.fmt.juicity.buildSingBoxOutboundJuicityBean
 import io.nekohasekai.sagernet.fmt.v2ray.StandardV2RayBean
@@ -676,6 +677,7 @@ fun compileConfig(captured: CapturedConfig): ConfigBuildResult {
                         type = "socks"
                         server = LOCALHOST
                         server_port = localPort
+                        if (bean is VelaBean) network = "tcp,udp"
                     }
                 } else {
                     // internal outbound

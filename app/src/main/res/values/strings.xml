@@ -193,6 +193,8 @@
     <string name="grpc_service_name">gRPC ServiceName</string>
     <string name="tls">Use TLS</string>
     <string name="sni">Server Name Indication</string>
+    <string name="vela_client_private_key">Vela client private key</string>
+    <string name="vela_server_public_key">Vela server public key</string>
     <string name="alpn">Application-Layer Protocol Negotiation</string>
     <string name="certificates">Certificates</string>
     <string name="early_data_header_name">Early Data Header Name</string>

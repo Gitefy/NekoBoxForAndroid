@@ -1,0 +1,16 @@
+[package]
+name = "vela-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+vela-proto = { path = "../vela-proto" }
+vela-wire = { path = "../vela-wire" }
+vela-crypto = { path = "../vela-crypto" }
+vela-session = { path = "../vela-session" }
+thiserror = "2.0"
+
+[lints]
+workspace = true

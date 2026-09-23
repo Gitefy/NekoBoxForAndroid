@@ -13,7 +13,7 @@ import io.nekohasekai.sagernet.fmt.gson.GsonConverters
 
 @Database(
     entities = [ProxyGroup::class, ProxyEntity::class, RuleEntity::class, RouterGroup::class, RouterMember::class, RouterGroupSource::class],
-    version = 10,
+    version = 11,
     // This phase supports upgrades from v3 through v9; v1/v2 compatibility is deferred to a separate migration task.
     autoMigrations = [
         AutoMigration(from = 3, to = 4),
@@ -22,7 +22,8 @@ import io.nekohasekai.sagernet.fmt.gson.GsonConverters
         AutoMigration(from = 6, to = 7),
         AutoMigration(from = 7, to = 8),
         AutoMigration(from = 8, to = 9),
-        AutoMigration(from = 9, to = 10)
+        AutoMigration(from = 9, to = 10),
+        AutoMigration(from = 10, to = 11)
     ]
 )
 @TypeConverters(value = [KryoConverters::class, GsonConverters::class])

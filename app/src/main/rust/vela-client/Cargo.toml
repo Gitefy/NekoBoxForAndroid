@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/vela-proto",
+  "crates/vela-wire",
+  "crates/vela-crypto",
+  "crates/vela-session",
+  "crates/vela-transport",
+  "crates/vela-policy",
+  "crates/vela-client",
+  "bins/vela",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"

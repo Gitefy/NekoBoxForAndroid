@@ -1,0 +1,12 @@
+[package]
+name = "vela-policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+vela-proto = { path = "../vela-proto" }
+
+[lints]
+workspace = true

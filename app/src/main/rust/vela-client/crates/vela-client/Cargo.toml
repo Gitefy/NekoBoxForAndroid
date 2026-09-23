@@ -1,0 +1,15 @@
+[package]
+name = "vela-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+vela-proto = { path = "../vela-proto" }
+vela-crypto = { path = "../vela-crypto" }
+vela-session = { path = "../vela-session" }
+vela-transport = { path = "../vela-transport" }
+
+[lints]
+workspace = true

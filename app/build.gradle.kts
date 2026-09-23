@@ -4,6 +4,7 @@ import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 import java.io.File
 import java.util.Properties
+import org.gradle.api.tasks.Exec
 
 plugins {
     id("com.android.application")
@@ -15,6 +16,11 @@ plugins {
 setupApp()
 
 android {
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
     defaultConfig {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -37,6 +43,9 @@ android {
         generateLocaleConfig = true
     }
     sourceSets {
+        getByName("main") {
+            jniLibs.srcDir(layout.buildDirectory.dir("generated/vela/jniLibs"))
+        }
         getByName("androidTest") {
             assets.srcDir("$projectDir/schemas")
         }
@@ -293,4 +302,59 @@ val verifyEgoXBranding by tasks.registering {
 tasks.named("preBuild") {
     dependsOn(verifyLibcore)
     dependsOn(verifyEgoXBranding)
+    dependsOn("buildVelaClient")
+}
+
+val velaSourceRoot = file("src/main/rust/vela-client")
+val velaJniLib = layout.buildDirectory.file("generated/vela/jniLibs/arm64-v8a/libvela.so")
+val buildVelaClient by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the bundled arm64 Vela SOCKS client"
+    inputs.file(file("src/main/rust/vela-client/Cargo.toml"))
+    inputs.file(file("src/main/rust/vela-client/Cargo.lock"))
+    inputs.dir(file("src/main/rust/vela-client/crates"))
+    inputs.dir(file("src/main/rust/vela-client/bins"))
+    inputs.property("androidPageAlignment", 16384)
+    outputs.file(velaJniLib)
+
+    doFirst {
+        val localProps = Properties().apply {
+            rootProject.file("local.properties").takeIf { it.isFile }?.inputStream()?.use(::load)
+        }
+        val sdkRoot = localProps.getProperty("sdk.dir")
+            ?: System.getenv("ANDROID_HOME")
+            ?: System.getenv("ANDROID_SDK_ROOT")
+            ?: throw GradleException("Android SDK path is required to build Vela")
+        val ndkRoot = localProps.getProperty("ndk.dir")
+            ?: System.getenv("ANDROID_NDK_HOME")
+            ?: file("$sdkRoot/ndk/25.0.8775105").absolutePath
+        val windows = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
+        val hostTag = if (windows) "windows-x86_64" else "linux-x86_64"
+        val bin = file("$ndkRoot/toolchains/llvm/prebuilt/$hostTag/bin")
+        val suffix = if (windows) ".cmd" else ""
+        val linker = file("${bin.path}/aarch64-linux-android24-clang$suffix")
+        if (!linker.isFile) throw GradleException("Android NDK linker not found: $linker")
+        environment("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER", linker.absolutePath)
+        environment("CC_aarch64_linux_android", linker.absolutePath)
+        environment("AR_aarch64_linux_android", file("${bin.path}/llvm-ar${if (windows) ".exe" else ""}").absolutePath)
+        environment("RUSTFLAGS", "-C link-arg=-Wl,-z,max-page-size=16384")
+        environment("CARGO_TARGET_DIR", layout.buildDirectory.dir("vela-target").get().asFile.absolutePath)
+        workingDir(velaSourceRoot)
+        commandLine(
+            "cargo", "build", "--release", "--locked",
+            "--target", "aarch64-linux-android", "--bin", "vela"
+        )
+    }
+
+    doLast {
+        val targetDir = layout.buildDirectory.dir("vela-target/aarch64-linux-android/release").get().asFile
+        val executable = targetDir.resolve("vela")
+        if (!executable.isFile) throw GradleException("Vela client build output is missing: $executable")
+        val destination = velaJniLib.get().asFile
+        destination.parentFile.mkdirs()
+        executable.copyTo(destination, overwrite = true)
+        if (!destination.setExecutable(true, false)) {
+            throw GradleException("Could not mark bundled Vela client executable")
+        }
+    }
 }
