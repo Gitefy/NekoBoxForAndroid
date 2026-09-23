@@ -103,6 +103,7 @@ import io.nekohasekai.sagernet.ui.profile.SocksSettingsActivity
 import io.nekohasekai.sagernet.ui.profile.TrojanGoSettingsActivity
 import io.nekohasekai.sagernet.ui.profile.TrojanSettingsActivity
 import io.nekohasekai.sagernet.ui.profile.TuicSettingsActivity
+import io.nekohasekai.sagernet.ui.profile.VelaSettingsActivity
 import io.nekohasekai.sagernet.ui.profile.VMessSettingsActivity
 import io.nekohasekai.sagernet.ui.profile.WireGuardSettingsActivity
 import io.nekohasekai.sagernet.widget.QRCodeDialog
@@ -825,6 +826,10 @@ class ConfigurationFragment @JvmOverloads constructor(
 
             R.id.action_new_snell -> {
                 startActivity(Intent(requireActivity(), SnellSettingsActivity::class.java))
+            }
+
+            R.id.action_new_vela -> {
+                startActivity(Intent(requireActivity(), VelaSettingsActivity::class.java))
             }
 
             R.id.action_new_wg -> {

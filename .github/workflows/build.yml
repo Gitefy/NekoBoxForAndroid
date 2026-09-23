@@ -9,6 +9,7 @@ on:
       - 'egox.properties'
       - 'app/build.gradle.kts'
       - 'app/src/main/AndroidManifest.xml'
+      - 'app/src/main/res/menu/add_profile_menu.xml'
       - 'app/src/main/rust/**'
       - 'app/src/main/java/io/nekohasekai/sagernet/fmt/vela/**'
       - 'app/src/main/java/io/nekohasekai/sagernet/database/ProxyEntity.kt'
@@ -18,8 +19,10 @@ on:
       - 'app/src/main/java/io/nekohasekai/sagernet/fmt/TypeMap.kt'
       - 'app/src/main/java/io/nekohasekai/sagernet/ktx/Formats.kt'
       - 'app/src/main/java/io/nekohasekai/sagernet/ui/profile/VelaSettingsActivity.kt'
+      - 'app/src/main/java/io/nekohasekai/sagernet/ui/ConfigurationFragment.kt'
       - 'app/src/main/res/xml/vela_preferences.xml'
       - 'app/src/main/res/values/strings.xml'
+      - 'app/src/main/res/values-zh-rCN/strings.xml'
       - 'app/schemas/**'
       - 'app/src/test/java/io/nekohasekai/sagernet/fmt/vela/**'
 jobs:
