@@ -150,15 +150,16 @@ abstract class BoxInstance(
                         Os.chmod(keyFile.absolutePath, OsConstants.S_IRUSR or OsConstants.S_IWUSR)
                         cacheFiles.add(keyFile)
 
-                        val serverAddress = bean.serverAddress.let { host ->
+                        val serverHost = (bean.finalAddress ?: bean.serverAddress).let { host ->
                             if (host.contains(":") && !host.startsWith("[")) "[$host]" else host
                         }
+                        val serverPort = bean.finalPort.takeIf { it in 1..65535 } ?: bean.serverPort
                         processes.start(
                             listOf(
                                 executable.absolutePath,
                                 "run",
                                 "--listen", "127.0.0.1:$port",
-                                "--server", "$serverAddress:${bean.serverPort}",
+                                "--server", "$serverHost:$serverPort",
                                 "--key", keyFile.absolutePath,
                                 "--server-key", bean.serverPublicKey.trim()
                             )
