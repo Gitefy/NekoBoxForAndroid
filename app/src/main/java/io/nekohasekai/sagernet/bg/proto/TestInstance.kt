@@ -1,5 +1,6 @@
 package io.nekohasekai.sagernet.bg.proto
 
+import android.os.SystemClock
 import io.nekohasekai.sagernet.BuildConfig
 import io.nekohasekai.sagernet.bg.GuardedProcessPool
 import io.nekohasekai.sagernet.database.ProxyEntity
@@ -31,11 +32,24 @@ class TestInstance(profile: ProxyEntity, val link: String, private val timeout: 
                             // wait for plugin start
                             delay(500)
                         }
-                        c.tryResume(
-                            Libcore.urlTestWithTarget(
+                        val probeStartedAt = SystemClock.elapsedRealtime()
+                        Logs.i {
+                            "URLTest isolated start profile=${profile.id} type=${profile.type} timeout=${timeout}ms"
+                        }
+                        try {
+                            val latency = Libcore.urlTestWithTarget(
                                 box, link, timeout, config.connectionTestTargetTag.orEmpty()
                             )
-                        )
+                            Logs.i {
+                                "URLTest isolated success profile=${profile.id} type=${profile.type} latency=${latency}ms elapsed=${SystemClock.elapsedRealtime() - probeStartedAt}ms"
+                            }
+                            c.tryResume(latency)
+                        } catch (e: Exception) {
+                            Logs.w {
+                                "URLTest isolated failed profile=${profile.id} type=${profile.type} elapsed=${SystemClock.elapsedRealtime() - probeStartedAt}ms: ${e.localizedMessage?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName}"
+                            }
+                            throw e
+                        }
                     } catch (e: Exception) {
                         c.tryResumeWithException(e)
                     }

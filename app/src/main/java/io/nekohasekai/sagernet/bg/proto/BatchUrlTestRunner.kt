@@ -161,6 +161,9 @@ class BatchUrlTestRunner(
                             } catch (e: Exception) {
                                 profile.status = 3
                                 profile.error = e.readableMsg
+                                Logs.w {
+                                    "URLTest batch failed profile=${profile.id} type=${profile.type}: ${e.readableMsg}"
+                                }
                             }
                             batchProbeCounter.incrementAndGet()
                             recordResult(profile)
@@ -212,6 +215,9 @@ class BatchUrlTestRunner(
                 profile.status = 3
             }
             profile.error = e.readableMsg
+            Logs.w {
+                "URLTest isolated failed profile=${profile.id} type=${profile.type}: ${e.readableMsg}"
+            }
         }
         onResult(profile)
     }
@@ -219,4 +225,3 @@ class BatchUrlTestRunner(
 
 private val Throwable.readableMsg: String
     get() = localizedMessage.takeIf { !it.isNullOrBlank() } ?: javaClass.simpleName
-
