@@ -459,21 +459,22 @@ fun compileConfig(captured: CapturedConfig): ConfigBuildResult {
     var connectionTestTargetTag: String? = null
 
     return MyOptions().apply {
-	if (!forTest) {
-            experimental = ExperimentalOptions().apply {
-                cache_file = CacheFile().apply {
-                    enabled = true
+        experimental = ExperimentalOptions().apply {
+            cache_file = CacheFile().apply {
+                // URLTest uses short-lived isolated instances and does not need
+                // persistent cache state. Explicitly disable it instead of relying
+                // on sing-box defaults while the main VPN instance may own the cache.
+                enabled = !forTest
+                if (!forTest) {
                     path = "../cache/cache.db"
-                    // if (snap.enableClashAPI) {
                     store_fakeip = true
-                    // }
                 }
-                
-                if (snap.enableClashAPI) {
-                    clash_api = ClashAPIOptions().apply {
-                        external_controller = "127.0.0.1:9090"
-                        external_ui = "../files/yacd"
-                    }
+            }
+
+            if (!forTest && snap.enableClashAPI) {
+                clash_api = ClashAPIOptions().apply {
+                    external_controller = "127.0.0.1:9090"
+                    external_ui = "../files/yacd"
                 }
             }
         }
