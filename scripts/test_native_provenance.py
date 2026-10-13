@@ -59,6 +59,28 @@ class NativeProvenanceTest(unittest.TestCase):
 
 
 
+    def test_source_diff_ignores_git_abbreviation_and_diff_preferences(self):
+        repository = self.root / "repository"
+        repository.mkdir()
+        def git(*args):
+            return provenance.git(repository, *args)
+        git("init")
+        source = repository / "source.go"
+        source.write_text("".join(f"// line {i}\n" for i in range(50)))
+        git("add", "source.go")
+        git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture")
+        source.write_text(source.read_text().replace("// line 25", "// changed 25"))
+        git("config", "core.abbrev", "7")
+        first_default = git("diff", "--binary", "HEAD")
+        first_canonical = provenance.source_diff(repository, ".")
+        git("config", "core.abbrev", "12")
+        git("config", "diff.context", "25")
+        second_default = git("diff", "--binary", "HEAD")
+        self.assertNotEqual(first_default, second_default)
+        self.assertEqual(first_canonical, provenance.source_diff(repository, "."))
+        self.assertRegex(first_canonical.decode(), r"index [a-f0-9]{40}\.\.[a-f0-9]{40}")
+
+
 class CoreFetchScriptTest(unittest.TestCase):
     def test_fresh_clone_checks_out_an_already_matching_head(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -82,6 +104,8 @@ class CoreFetchScriptTest(unittest.TestCase):
             result = subprocess.run([bash, "-s"], input=command, text=True, capture_output=True)
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual("fixture", (target / "source.txt").read_text())
+
+
 
 
 if __name__ == "__main__":

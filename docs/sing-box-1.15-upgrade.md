@@ -46,7 +46,7 @@ Router 不可用时的既有回退行为和备份 Parcel 格式保留。
 
 ### 迁移内容
 
-- 隐藏节点分享链接与插件命令中的敏感参数；日志页面离线程读取、分类并保留原始诊断。
+- 隐藏节点分享链接与插件命令中的敏感参数；日志页面后台线程读取、分类并保留原始诊断。
 - 清理缓存保留 FakeIP 数据库、日志及运行中的插件配置；独立测速使用临时缓存，
   TCP ping 工作任务上限 16，取消与异常路径释放资源。
 - 测速只写入 `status/ping/error`，不覆盖节点编辑、订阅刷新或流量计数。
@@ -70,13 +70,15 @@ Router 不可用时的既有回退行为和备份 Parcel 格式保留。
 - 固定 Matsuri gomobile 源码 `17d6af34f6bd6d7e1e428e0c652c8b54a46bda4f`；
   绑定工具在 `.deps/tool-bin` 构建，保持 Go 1.25.5，不安装浮动 `gobind@latest`。
   Android arm64 绑定不使用 OpenAL，只准备所需工作目录。
+- 原生来源 diff 固定完整哈希、上下文及算法；避免不同克隆对象数量和 Git 偏好导致误报。
+  在与 CI 相同的新克隆上复现了 7/8 位缩写差异，修复后与原工作区补丁表示完全一致。
 - 普通和完整 Release 标签 Go 测试、核心补丁回归、干净 alpha.12 补丁重放及原生来源验证通过。
-- Debug / Release JVM 各 504 项测试通过（包含面板认证与导出隔离）；原生来源/获取测试 7 项通过。
+- Debug / Release JVM 各 504 项测试通过（包含面板认证与导出隔离）；原生来源/获取测试 8 项通过。
 - Debug / Release lint 均为 0 错误，分别保留 61 / 44 项已有警告；两种 APK 构建通过。
 - AAR 与两种 APK 的 native 字节相同，alpha.12 / revision / Go 版本正确；ELF 与 APK 16 KB 对齐通过，
   Release v2 签名证书与原版本一致。新交付文件：
   `app/build/outputs/verified/EgoX-4.3.2-alpha.12-reference-hardening-arm64-v8a.apk`，
-  SHA256 `fc7c68f81f51e553c6283f73fbf2c39e1b4d0642eb6e50bc289726e9a783b49a`。
+  SHA256 `6b7febc7be2a14419b245181506fd3d89ab7484f25bccaa0c2b267e2d79f1b82`。
 - AndroidTest Kotlin 编译通过，新增 Room 延迟测速写回用例尚未在设备执行。
 - 无连接设备；VPN、切网、UDP/QUIC、休眠及数据库并发设备验收仍待完成。
   Windows 未执行 Go `-race`；Linux CI 执行 libcore 与核心补丁的竞态回归。

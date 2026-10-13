@@ -1,5 +1,5 @@
 diff --git a/adapter/fakeip.go b/adapter/fakeip.go
-index a17ab63..f04f82b 100644
+index a17ab63e05615a7a5c6b4c3ee1fc16eb50d896f8..f04f82b630130695bfae3b2ffa7200d1e214fc75 100644
 --- a/adapter/fakeip.go
 +++ b/adapter/fakeip.go
 @@ -11,6 +11,7 @@ type FakeIPStore interface {
@@ -11,7 +11,7 @@ index a17ab63..f04f82b 100644
  }
  
 diff --git a/common/trafficcontrol/manager.go b/common/trafficcontrol/manager.go
-index 5e938cf..7708570 100644
+index 5e938cf6fcaa3a37c73258e546480f2c11304d0f..770857078ab2664dfb4491325f74aa51ce99f6e5 100644
 --- a/common/trafficcontrol/manager.go
 +++ b/common/trafficcontrol/manager.go
 @@ -95,8 +95,9 @@ func (m *Manager) leave(tracker Tracker) {
@@ -26,7 +26,7 @@ index 5e938cf..7708570 100644
  		evicted := m.closedConnections.PopFront()
  		m.closedUploadTotal += evicted.Upload.Load()
 diff --git a/dns/transport/fakeip/store.go b/dns/transport/fakeip/store.go
-index aa948a1..e9d8c02 100644
+index aa948a162b30745cae84039bc4145044d88092be..e9d8c0239fecb963ff9608e104b4cab2897e7532 100644
 --- a/dns/transport/fakeip/store.go
 +++ b/dns/transport/fakeip/store.go
 @@ -80,7 +80,7 @@ func (s *Store) Start() error {
@@ -71,7 +71,7 @@ index aa948a1..e9d8c02 100644
  	return s.storage.FakeIPReset()
  }
 diff --git a/experimental/cachefile/fakeip.go b/experimental/cachefile/fakeip.go
-index ba8764d..92ae5aa 100644
+index ba8764dc09489655614bb8c852c5ad6b0a8f345c..92ae5aa62f4661bba43577906c9f1eb8aa5b0bde 100644
 --- a/experimental/cachefile/fakeip.go
 +++ b/experimental/cachefile/fakeip.go
 @@ -28,10 +28,26 @@ func (c *CacheFile) FakeIPMetadata() *adapter.FakeIPMetadata {
@@ -104,7 +104,7 @@ index ba8764d..92ae5aa 100644
  	if err != nil {
  		return nil
 diff --git a/option/rule_action.go b/option/rule_action.go
-index ae05200..0f0f8b7 100644
+index ae05200430bfaca77a436ef28f38316f149006b7..0f0f8b758ed8db0e0f81b096474a2b79be990bba 100644
 --- a/option/rule_action.go
 +++ b/option/rule_action.go
 @@ -323,8 +323,9 @@ func (r *RejectActionOptions) UnmarshalJSON(bytes []byte) error {
@@ -120,7 +120,7 @@ index ae05200..0f0f8b7 100644
  
  type RouteActionResolve struct {
 diff --git a/protocol/group/urltest.go b/protocol/group/urltest.go
-index f69773e..66fb858 100644
+index f69773ef93656765310c28da729792aca6dea330..66fb858e6cf1e768d185ba701a523ccccfc67c51 100644
 --- a/protocol/group/urltest.go
 +++ b/protocol/group/urltest.go
 @@ -182,7 +182,7 @@ func (s *URLTest) DialContext(ctx context.Context, network string, destination M
@@ -153,7 +153,7 @@ index f69773e..66fb858 100644
  	ctx                          context.Context
  	outbound                     adapter.OutboundManager
 diff --git a/route/route.go b/route/route.go
-index 24befe3..728816b 100644
+index 24befe38333475c65fb9fa5d154bb47004d1d14d..728816be5cd48000c1fb6ffe4eb0febbefae2f02 100644
 --- a/route/route.go
 +++ b/route/route.go
 @@ -393,11 +393,18 @@ func (r *Router) PreMatch(metadata adapter.InboundContext, firstPacket []byte) a
@@ -238,7 +238,7 @@ index 24befe3..728816b 100644
  			}
  			if metadata.Domain != "" && metadata.Client != "" {
 diff --git a/route/rule/rule_action.go b/route/rule/rule_action.go
-index cb65611..b5d6638 100644
+index cb6561181b2da67dbb33790af47065c79b05e0aa..b5d6638bf10abcd370495bae7efb556330a95add 100644
 --- a/route/rule/rule_action.go
 +++ b/route/rule/rule_action.go
 @@ -105,8 +105,9 @@ func NewRuleAction(ctx context.Context, logger logger.ContextLogger, action opti

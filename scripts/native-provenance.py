@@ -37,6 +37,14 @@ def git(directory, *args):
     return subprocess.run(["git", "-C", str(directory), *args], check=True, capture_output=True).stdout
 
 
+def source_diff(directory, *paths):
+    # Abbreviated object IDs depend on clone depth/object count; user diff
+    # preferences must not change the native provenance representation either.
+    return git(directory, "diff", "--binary", "--full-index", "--no-ext-diff", "--no-color",
+               "--no-renames", "--diff-algorithm=myers", "--no-indent-heuristic", "--unified=3",
+               "HEAD", "--", *paths)
+
+
 def check_sources():
     pins = dict(re.findall(r'export (\w+)="([^"]+)"', (ROOT / "buildScript/lib/core/get_source_env.sh").read_text()))
     for name, key in (("sing-box", "COMMIT_SING_BOX"), ("libneko", "COMMIT_LIBNEKO")):
@@ -44,8 +52,8 @@ def check_sources():
         if git(directory, "rev-parse", "HEAD").decode().strip() != pins[key]:
             raise ValueError(f"Unpinned {name} source")
         if name == "sing-box":
-            actual = git(directory, "diff", "--binary", "HEAD", "--", ".", ":(exclude)**/*_test.go")
-            expected = (ROOT / "buildScript/lib/core/patches/egox-core.patch").read_bytes()
+            actual = source_diff(directory, ".", ":(exclude)**/*_test.go")
+            expected = (ROOT / "buildScript/lib/core/patches/egox-core.patch").read_bytes().replace(b"\r\n", b"\n")
             if actual != expected:
                 raise ValueError("sing-box modifications differ from the tracked patch")
             untracked = git(directory, "ls-files", "--others", "--exclude-standard").decode().splitlines()

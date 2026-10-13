@@ -1,6 +1,6 @@
 diff --git a/common/trafficcontrol/egox_metadata_test.go b/common/trafficcontrol/egox_metadata_test.go
 new file mode 100644
-index 0000000..6bca2a7
+index 0000000000000000000000000000000000000000..6bca2a7dc9be4cb59bf64c585128ed7ec5a11f59
 --- /dev/null
 +++ b/common/trafficcontrol/egox_metadata_test.go
 @@ -0,0 +1,50 @@
@@ -56,7 +56,7 @@ index 0000000..6bca2a7
 +}
 diff --git a/experimental/cachefile/egox_fakeip_test.go b/experimental/cachefile/egox_fakeip_test.go
 new file mode 100644
-index 0000000..b9b33d8
+index 0000000000000000000000000000000000000000..b9b33d845f3bcea7f91d3d8266cc286fdb740f6f
 --- /dev/null
 +++ b/experimental/cachefile/egox_fakeip_test.go
 @@ -0,0 +1,158 @@
@@ -220,7 +220,7 @@ index 0000000..b9b33d8
 +}
 diff --git a/protocol/group/egox_failover_test.go b/protocol/group/egox_failover_test.go
 new file mode 100644
-index 0000000..53dfacd
+index 0000000000000000000000000000000000000000..53dfacd37a24b6a99637cf120a2bf2d07d5f278f
 --- /dev/null
 +++ b/protocol/group/egox_failover_test.go
 @@ -0,0 +1,68 @@
@@ -294,7 +294,7 @@ index 0000000..53dfacd
 +}
 diff --git a/route/udp_sniff_packet_test.go b/route/udp_sniff_packet_test.go
 new file mode 100644
-index 0000000..e66af0b
+index 0000000000000000000000000000000000000000..e66af0b9ca87dfb47470854e03a48924fb37c5f4
 --- /dev/null
 +++ b/route/udp_sniff_packet_test.go
 @@ -0,0 +1,47 @@
