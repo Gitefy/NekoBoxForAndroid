@@ -1,5 +1,7 @@
 package io.nekohasekai.sagernet.ui
 
+import io.nekohasekai.sagernet.group.ImportLimits
+
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.graphics.Color
@@ -588,21 +590,31 @@ class ConfigurationFragment @JvmOverloads constructor(
                     val proxies = mutableListOf<AbstractBean>()
                     if (fileName != null && fileName.endsWith(".zip")) {
                         // try parse wireguard zip
-                        val zip =
-                            ZipInputStream(requireContext().contentResolver.openInputStream(file)!!)
-                        while (true) {
-                            val entry = zip.nextEntry ?: break
-                            if (entry.isDirectory) continue
-                            val fileText = zip.bufferedReader().readText()
-                            RawUpdater.parseRaw(fileText, entry.name)
-                                ?.let { pl -> proxies.addAll(pl) }
-                            zip.closeEntry()
+                        ZipInputStream(requireContext().contentResolver.openInputStream(file)!!).use { zip ->
+                            var totalBytes = 0
+                            var entries = 0
+                            while (true) {
+                                val entry = zip.nextEntry ?: break
+                                require(++entries <= ImportLimits.PROFILES) { "Too many ZIP entries" }
+                                if (entry.isDirectory) {
+                                    ImportLimits.readBytes(zip, 0)
+                                    zip.closeEntry()
+                                    continue
+                                }
+                                val bytes = ImportLimits.readBytes(zip, minOf(
+                                    ImportLimits.SUBSCRIPTION_BYTES, ImportLimits.BACKUP_BYTES - totalBytes
+                                ))
+                                totalBytes += bytes.size
+                                RawUpdater.parseRaw(bytes.toString(Charsets.UTF_8), entry.name)
+                                    ?.let { pl -> proxies.addAll(pl) }
+                                require(proxies.size <= ImportLimits.PROFILES) { "Too many imported profiles" }
+                                zip.closeEntry()
+                            }
                         }
-                        zip.closeQuietly()
                     } else {
                         val fileText =
                             requireContext().contentResolver.openInputStream(file)!!.use {
-                                it.bufferedReader().readText()
+                                ImportLimits.readBytes(it, ImportLimits.SUBSCRIPTION_BYTES).toString(Charsets.UTF_8)
                             }
                         RawUpdater.parseRaw(fileText, fileName ?: "")
                             ?.let { pl -> proxies.addAll(pl) }

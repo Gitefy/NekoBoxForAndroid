@@ -1,9 +1,36 @@
 package libcore
 
 import (
+	"encoding/json"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestUDPOnlyURLTestSelection(t *testing.T) {
+	cachePath, _ := json.Marshal(filepath.Join(t.TempDir(), "cache.db"))
+	config := fmt.Sprintf(`{"log":{"disabled":true},"experimental":{"cache_file":{"enabled":true,"path":%s}},"outbounds":[
+		{"type":"direct","tag":"direct"},
+		{"type":"shadowsocks","tag":"udp-node","server":"127.0.0.1","server_port":1,"method":"aes-128-gcm","password":"test-password","network":"udp"},
+		{"type":"urltest","tag":"udp-group","outbounds":["udp-node"]}
+	],"route":{"final":"direct"}}`, cachePath)
+	b, err := NewSingBoxInstance(config, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err := b.Start(); err != nil {
+		t.Fatal(err)
+	}
+	outbound, ok := b.Outbound().Outbound("udp-group")
+	if !ok {
+		t.Fatal("missing group")
+	}
+	if selected := queryGroupSelection(outbound); selected != "udp-node" {
+		t.Fatalf("UDP winner lost: %q", selected)
+	}
+}
 
 func TestCurrentGroupSelectionsParsing(t *testing.T) {
 	// Test newline/tab formatted string parsing

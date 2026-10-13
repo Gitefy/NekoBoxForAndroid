@@ -13,6 +13,7 @@ import (
 	"libcore/device"
 	"libcore/ech"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -58,6 +59,7 @@ type HTTPResponse interface {
 	GetHeader(string) *StringBox
 	GetContent() ([]byte, error)
 	GetContentString() (*StringBox, error)
+	GetContentStringLimited(maxBytes int64) (*StringBox, error)
 	WriteTo(path string) error
 }
 
@@ -366,11 +368,37 @@ func (h *httpResponse) GetHeader(key string) *StringBox {
 }
 
 func (h *httpResponse) GetContent() ([]byte, error) {
+	return h.readContent(0)
+}
+
+func (h *httpResponse) readContent(maxBytes int64) ([]byte, error) {
 	h.getContentOnce.Do(func() {
 		defer h.Body.Close()
-		h.content, h.contentError = io.ReadAll(h.Body)
+		var reader io.Reader = h.Body
+		if maxBytes > 0 {
+			reader = io.LimitReader(reader, maxBytes+1)
+		}
+		h.content, h.contentError = io.ReadAll(reader)
+		if maxBytes > 0 && int64(len(h.content)) > maxBytes {
+			h.content = nil
+			h.contentError = fmt.Errorf("response exceeds size limit (%d bytes)", maxBytes)
+		}
 	})
+	if maxBytes > 0 && int64(len(h.content)) > maxBytes {
+		return nil, fmt.Errorf("response exceeds size limit (%d bytes)", maxBytes)
+	}
 	return h.content, h.contentError
+}
+
+func (h *httpResponse) GetContentStringLimited(maxBytes int64) (*StringBox, error) {
+	if maxBytes <= 0 || maxBytes == math.MaxInt64 {
+		return nil, errors.New("invalid response size limit")
+	}
+	content, err := h.readContent(maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	return wrapString(string(content)), nil
 }
 
 func (h *httpResponse) GetContentString() (*StringBox, error) {

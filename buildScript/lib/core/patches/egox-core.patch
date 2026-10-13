@@ -1,0 +1,198 @@
+diff --git a/adapter/fakeip.go b/adapter/fakeip.go
+index a17ab63..f04f82b 100644
+--- a/adapter/fakeip.go
++++ b/adapter/fakeip.go
+@@ -11,6 +11,7 @@ type FakeIPStore interface {
+ 	Contains(address netip.Addr) bool
+ 	Create(domain string, isIPv6 bool) (netip.Addr, error)
+ 	Lookup(address netip.Addr) (string, bool)
++	Update(address netip.Addr, domain string)
+ 	Reset() error
+ }
+ 
+diff --git a/dns/transport/fakeip/store.go b/dns/transport/fakeip/store.go
+index aa948a1..e9d8c02 100644
+--- a/dns/transport/fakeip/store.go
++++ b/dns/transport/fakeip/store.go
+@@ -80,7 +80,7 @@ func (s *Store) Start() error {
+ 		storage = NewMemoryStorage()
+ 	}
+ 	metadata := storage.FakeIPMetadata()
+-	if metadata != nil && metadata.Inet4Range == s.inet4Range && metadata.Inet6Range == s.inet6Range {
++	if metadata != nil && recoverableRange(s.inet4Range, metadata.Inet4Range, metadata.Inet4Current) && recoverableRange(s.inet6Range, metadata.Inet6Range, metadata.Inet6Current) {
+ 		s.inet4Current = metadata.Inet4Current
+ 		s.inet6Current = metadata.Inet6Current
+ 	} else {
+@@ -93,7 +93,17 @@ func (s *Store) Start() error {
+ 		_ = storage.FakeIPReset()
+ 	}
+ 	s.storage = storage
+-	return nil
++	return storage.FakeIPSaveMetadata(&adapter.FakeIPMetadata{
++		Inet4Range: s.inet4Range, Inet6Range: s.inet6Range,
++		Inet4Current: s.inet4Current, Inet6Current: s.inet6Current,
++	})
++}
++
++func recoverableRange(configured, stored netip.Prefix, current netip.Addr) bool {
++	if !configured.IsValid() {
++		return !stored.IsValid() && !current.IsValid()
++	}
++	return configured.Contains(current) && (stored == configured || !stored.IsValid())
+ }
+ 
+ func (s *Store) Contains(address netip.Addr) bool {
+@@ -171,6 +181,12 @@ func (s *Store) Lookup(address netip.Addr) (string, bool) {
+ 	return s.storage.FakeIPLoad(address)
+ }
+ 
++func (s *Store) Update(address netip.Addr, domain string) {
++	s.addressAccess.Lock()
++	defer s.addressAccess.Unlock()
++	s.storage.FakeIPStoreAsync(address, domain, s.logger)
++}
++
+ func (s *Store) Reset() error {
+ 	return s.storage.FakeIPReset()
+ }
+diff --git a/experimental/cachefile/fakeip.go b/experimental/cachefile/fakeip.go
+index ba8764d..92ae5aa 100644
+--- a/experimental/cachefile/fakeip.go
++++ b/experimental/cachefile/fakeip.go
+@@ -28,10 +28,26 @@ func (c *CacheFile) FakeIPMetadata() *adapter.FakeIPMetadata {
+ 			return os.ErrNotExist
+ 		}
+ 		metadataBinary := bucket.Get(keyMetadata)
+-		if len(metadataBinary) == 0 {
++		if len(metadataBinary) > 0 {
++			return metadata.UnmarshalBinary(metadataBinary)
++		}
++		// Older EgoX builds could remove the cursor while retaining mappings.
++		cursor := bucket.Cursor()
++		for key, _ := cursor.First(); key != nil; key, _ = cursor.Next() {
++			address, ok := netip.AddrFromSlice(key)
++			if !ok {
++				continue
++			}
++			if address.Is4() && (!metadata.Inet4Current.IsValid() || address.Compare(metadata.Inet4Current) > 0) {
++				metadata.Inet4Current = address
++			} else if address.Is6() && (!metadata.Inet6Current.IsValid() || address.Compare(metadata.Inet6Current) > 0) {
++				metadata.Inet6Current = address
++			}
++		}
++		if !metadata.Inet4Current.IsValid() && !metadata.Inet6Current.IsValid() {
+ 			return os.ErrInvalid
+ 		}
+-		return metadata.UnmarshalBinary(metadataBinary)
++		return nil
+ 	})
+ 	if err != nil {
+ 		return nil
+diff --git a/option/rule_action.go b/option/rule_action.go
+index ae05200..0f0f8b7 100644
+--- a/option/rule_action.go
++++ b/option/rule_action.go
+@@ -323,8 +323,9 @@ func (r *RejectActionOptions) UnmarshalJSON(bytes []byte) error {
+ }
+ 
+ type RouteActionSniff struct {
+-	Sniffer badoption.Listable[string] `json:"sniffer,omitempty" enum:"tls,http,quic,dns,stun,bittorrent,dtls,ssh,rdp,ntp"`
+-	Timeout badoption.Duration         `json:"timeout,omitempty"`
++	Sniffer             badoption.Listable[string] `json:"sniffer,omitempty" enum:"tls,http,quic,dns,stun,bittorrent,dtls,ssh,rdp,ntp"`
++	Timeout             badoption.Duration         `json:"timeout,omitempty"`
++	OverrideDestination bool                       `json:"override_destination,omitempty"`
+ }
+ 
+ type RouteActionResolve struct {
+diff --git a/route/route.go b/route/route.go
+index 24befe3..2441680 100644
+--- a/route/route.go
++++ b/route/route.go
+@@ -393,11 +393,18 @@ func (r *Router) PreMatch(metadata adapter.InboundContext, firstPacket []byte) a
+ 				}
+ 				continue
+ 			}
+-			//goland:noinspection GoDeprecation
+-			if action.OverrideDestination && M.IsDomainName(metadata.Domain) {
+-				metadata.Destination = M.Socksaddr{
+-					Fqdn: metadata.Domain,
+-					Port: metadata.Destination.Port,
++			if (action.OverrideDestination || metadata.FakeIP) && M.IsDomainName(metadata.Domain) {
++				if metadata.Destination.Fqdn != metadata.Domain {
++					if metadata.FakeIP {
++						r.logger.InfoContext(ctx, "correcting fakeip destination from ", metadata.Destination.Fqdn, " to sniffed domain: ", metadata.Domain)
++						if metadata.OriginDestination.Addr.IsValid() && r.dnsTransport != nil && r.dnsTransport.FakeIP() != nil {
++							r.dnsTransport.FakeIP().Store().Update(metadata.OriginDestination.Addr, metadata.Domain)
++						}
++					}
++					metadata.Destination = M.Socksaddr{
++						Fqdn: metadata.Domain,
++						Port: metadata.Destination.Port,
++					}
+ 				}
+ 			}
+ 			if metadata.Domain != "" && metadata.Client != "" {
+@@ -776,11 +783,18 @@ func (r *Router) actionSniff(
+ 		metadata.SnifferNames = action.SnifferNames
+ 		metadata.SniffError = err
+ 		if err == nil {
+-			//goland:noinspection GoDeprecation
+-			if action.OverrideDestination && M.IsDomainName(metadata.Domain) {
+-				metadata.Destination = M.Socksaddr{
+-					Fqdn: metadata.Domain,
+-					Port: metadata.Destination.Port,
++			if (action.OverrideDestination || metadata.FakeIP) && M.IsDomainName(metadata.Domain) {
++				if metadata.Destination.Fqdn != metadata.Domain {
++					if metadata.FakeIP {
++						r.logger.InfoContext(ctx, "correcting fakeip destination from ", metadata.Destination.Fqdn, " to sniffed domain: ", metadata.Domain)
++						if metadata.OriginDestination.Addr.IsValid() && r.dnsTransport != nil && r.dnsTransport.FakeIP() != nil {
++							r.dnsTransport.FakeIP().Store().Update(metadata.OriginDestination.Addr, metadata.Domain)
++						}
++					}
++					metadata.Destination = M.Socksaddr{
++						Fqdn: metadata.Domain,
++						Port: metadata.Destination.Port,
++					}
+ 				}
+ 			}
+ 			if metadata.Domain != "" && metadata.Client != "" {
+@@ -899,11 +913,18 @@ func (r *Router) actionSniff(
+ 		}
+ 	finally:
+ 		if err == nil {
+-			//goland:noinspection GoDeprecation
+-			if action.OverrideDestination && M.IsDomainName(metadata.Domain) {
+-				metadata.Destination = M.Socksaddr{
+-					Fqdn: metadata.Domain,
+-					Port: metadata.Destination.Port,
++			if (action.OverrideDestination || metadata.FakeIP) && M.IsDomainName(metadata.Domain) {
++				if metadata.Destination.Fqdn != metadata.Domain {
++					if metadata.FakeIP {
++						r.logger.InfoContext(ctx, "correcting fakeip destination from ", metadata.Destination.Fqdn, " to sniffed domain: ", metadata.Domain)
++						if metadata.OriginDestination.Addr.IsValid() && r.dnsTransport != nil && r.dnsTransport.FakeIP() != nil {
++							r.dnsTransport.FakeIP().Store().Update(metadata.OriginDestination.Addr, metadata.Domain)
++						}
++					}
++					metadata.Destination = M.Socksaddr{
++						Fqdn: metadata.Domain,
++						Port: metadata.Destination.Port,
++					}
+ 				}
+ 			}
+ 			if metadata.Domain != "" && metadata.Client != "" {
+diff --git a/route/rule/rule_action.go b/route/rule/rule_action.go
+index cb65611..b5d6638 100644
+--- a/route/rule/rule_action.go
++++ b/route/rule/rule_action.go
+@@ -105,8 +105,9 @@ func NewRuleAction(ctx context.Context, logger logger.ContextLogger, action opti
+ 		return &RuleActionHijackDNS{}, nil
+ 	case C.RuleActionTypeSniff:
+ 		sniffAction := &RuleActionSniff{
+-			SnifferNames: action.SniffOptions.Sniffer,
+-			Timeout:      time.Duration(action.SniffOptions.Timeout),
++			SnifferNames:        action.SniffOptions.Sniffer,
++			Timeout:             time.Duration(action.SniffOptions.Timeout),
++			OverrideDestination: action.SniffOptions.OverrideDestination,
+ 		}
+ 		return sniffAction, sniffAction.build()
+ 	case C.RuleActionTypeResolve:

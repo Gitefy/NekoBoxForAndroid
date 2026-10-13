@@ -5,6 +5,7 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/protocol/group"
+	N "github.com/sagernet/sing/common/network"
 )
 
 type outboundSelector interface {
@@ -45,14 +46,20 @@ func queryGroupSelection(outbound adapter.Outbound) string {
 	if outbound == nil {
 		return ""
 	}
+	var selected adapter.Outbound
 	switch g := outbound.(type) {
 	case *group.Selector:
-		return g.Now()
+		selected = g.Selected(N.NetworkTCP)
 	case *group.URLTest:
-		return g.Now()
-	default:
-		return ""
+		selected = g.Selected(N.NetworkTCP)
+		if selected == nil {
+			selected = g.Selected(N.NetworkUDP)
+		}
 	}
+	if selected != nil {
+		return selected.Tag()
+	}
+	return ""
 }
 
 func (b *BoxInstance) CurrentGroupSelections(groupTags string) *StringBox {

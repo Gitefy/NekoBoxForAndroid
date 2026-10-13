@@ -23,6 +23,9 @@ jniLibs/
 *.log
 /nekobox_*.json
 .superpowers/
+/.deps/
+.kotlin/
+__pycache__/
 
 # Private configuration exports: local only, never include in source uploads.
 **/nekobox_*.json

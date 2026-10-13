@@ -32,7 +32,8 @@ jobs:
         with:
           path: |
             app/libs/libcore.aar
-          key: ${{ hashFiles('.github/workflows/*', 'golang_status', 'libcore_status') }}
+            app/libs/libcore.aar.provenance.json
+          key: ${{ hashFiles('.github/workflows/*', 'golang_status', 'libcore_status', 'buildScript/lib/core/patches/**', 'scripts/native-provenance.py') }}
       - name: Install Golang
         uses: actions/setup-go@v6
         with:
@@ -72,7 +73,8 @@ jobs:
         with:
           path: |
             app/libs/libcore.aar
-          key: ${{ hashFiles('.github/workflows/*', 'golang_status', 'libcore_status') }}
+            app/libs/libcore.aar.provenance.json
+          key: ${{ hashFiles('.github/workflows/*', 'golang_status', 'libcore_status', 'buildScript/lib/core/patches/**', 'scripts/native-provenance.py') }}
       - name: Gradle cache
         uses: actions/cache@v5
         with:

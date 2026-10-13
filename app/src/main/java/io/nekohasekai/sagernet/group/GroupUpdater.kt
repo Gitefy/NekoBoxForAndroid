@@ -41,7 +41,6 @@ abstract class GroupUpdater {
     ) {
         val ipv6Mode = DataStore.ipv6Mode
         val lookupPool = newFixedThreadPoolContext(5, "DNS Lookup")
-        val lookupJobs = mutableListOf<Job>()
         val progress = Progress(profiles.size)
         if (groupId != null) {
             GroupUpdater.progress[groupId] = progress
@@ -54,46 +53,54 @@ abstract class GroupUpdater {
             null
         }
 
-        for (profile in profiles) {
-            when (profile) {
-                // SNI rewrite unsupported
-                is NaiveBean -> continue
+        try {
+            coroutineScope {
+                for (profile in profiles) {
+                    when (profile) {
+                        // SNI rewrite unsupported
+                        is NaiveBean -> continue
+                    }
+
+                    if (profile.serverAddress.isIpAddress()) continue
+
+                    launch(lookupPool) {
+                        try {
+                            val underlyingNetwork = SagerNet.underlyingNetwork
+                            val results = if (
+                                underlyingNetwork != null &&
+                                DataStore.enableFakeDns &&
+                                DataStore.serviceState.started &&
+                                DataStore.serviceMode == Key.MODE_VPN
+                            ) {
+                                // FakeDNS
+                                underlyingNetwork!!
+                                    .getAllByName(profile.serverAddress)
+                                    .filterNotNull()
+                            } else {
+                                // System DNS is enough (when VPN connected, it uses v2ray-core)
+                                InetAddress.getAllByName(profile.serverAddress).filterNotNull()
+                            }
+                            if (results.isEmpty()) error("empty response")
+                            ensureActive()
+                            rewriteAddress(profile, results, ipv6First)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Logs.d(e) { "Lookup ${profile.serverAddress} failed: ${e.readableMessage}" }
+                        }
+                        if (groupId != null) {
+                            progress.progress++
+                            if (reloadBatcher?.shouldReloadNow() == true) {
+                                GroupManager.postReload(groupId)
+                            }
+                        }
+                    }
+                }
+
             }
-
-            if (profile.serverAddress.isIpAddress()) continue
-
-            lookupJobs.add(GlobalScope.launch(lookupPool) {
-                try {
-                    val results = if (
-                        SagerNet.underlyingNetwork != null &&
-                        DataStore.enableFakeDns &&
-                        DataStore.serviceState.started &&
-                        DataStore.serviceMode == Key.MODE_VPN
-                    ) {
-                        // FakeDNS
-                        SagerNet.underlyingNetwork!!
-                            .getAllByName(profile.serverAddress)
-                            .filterNotNull()
-                    } else {
-                        // System DNS is enough (when VPN connected, it uses v2ray-core)
-                        InetAddress.getAllByName(profile.serverAddress).filterNotNull()
-                    }
-                    if (results.isEmpty()) error("empty response")
-                    rewriteAddress(profile, results, ipv6First)
-                } catch (e: Exception) {
-                    Logs.d(e) { "Lookup ${profile.serverAddress} failed: ${e.readableMessage}" }
-                }
-                if (groupId != null) {
-                    progress.progress++
-                    if (reloadBatcher?.shouldReloadNow() == true) {
-                        GroupManager.postReload(groupId)
-                    }
-                }
-            })
+        } finally {
+            lookupPool.close()
         }
-
-        lookupJobs.joinAll()
-        lookupPool.close()
         if (groupId != null) {
             GroupManager.postReload(groupId)
             reloadBatcher?.markFlushed()
@@ -162,6 +169,9 @@ abstract class GroupUpdater {
                     RawUpdater.doUpdate(proxyGroup, subscription, userInterface, byUser)
                     GroupManager.reconcileRouterMembers(routerSnapshot)
                     true
+                } catch (e: CancellationException) {
+                    withContext(NonCancellable) { finishUpdate(proxyGroup) }
+                    throw e
                 } catch (e: Throwable) {
                     Logs.w(e)
                     GroupManager.markRouterRefreshFailed(proxyGroup.id, e.readableMessage)

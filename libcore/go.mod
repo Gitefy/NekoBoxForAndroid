@@ -9,10 +9,10 @@ require (
 	github.com/miekg/dns v1.1.72
 	github.com/oschwald/maxminddb-golang v1.13.1
 	github.com/sagernet/gvisor v0.0.0-20260727.0-sing-box-mod.1 // indirect
-	github.com/sagernet/quic-go v0.61.0-sing-box-mod.7
-	github.com/sagernet/sing v0.9.5-0.20260917164122-8fc5da509c10
+	github.com/sagernet/quic-go v0.61.0-sing-box-mod.9
+	github.com/sagernet/sing v0.9.7-0.20260929150544-6f21f2425a95
 	github.com/sagernet/sing-box v1.0.0 // replaced
-	github.com/sagernet/sing-tun v0.9.4-0.20260917142847-fbc0c3dff312
+	github.com/sagernet/sing-tun v0.9.7-0.20261009022811-5c2edb183cc9
 	github.com/ulikunitz/xz v0.5.15
 	golang.org/x/mobile v0.0.0-20231108233038-35478a0c49da
 	golang.org/x/sys v0.47.0
@@ -61,17 +61,17 @@ require (
 	github.com/sagernet/fswatch v0.1.2 // indirect
 	github.com/sagernet/netlink v0.0.0-20260814022025-64455d367bbf // indirect
 	github.com/sagernet/nftables v0.3.0-mod.4 // indirect
-	github.com/sagernet/sing-anytls v0.0.0-20260904135308-cec2d74334be // indirect
-	github.com/sagernet/sing-mux v0.3.7-0.20260905054442-91d1502591ce // indirect
-	github.com/sagernet/sing-quic v0.7.1-0.20260904135313-497364e8ee3e // indirect
-	github.com/sagernet/sing-shadowsocks v0.2.8 // indirect
-	github.com/sagernet/sing-shadowsocks2 v0.2.1 // indirect
-	github.com/sagernet/sing-shadowtls v0.2.1 // indirect
+	github.com/sagernet/sing-anytls v0.0.0-20260928104022-580984e4d8cb // indirect
+	github.com/sagernet/sing-mux v0.3.10-0.20260929204512-caf09fe32475 // indirect
+	github.com/sagernet/sing-quic v0.7.2-0.20261002084117-75c3ac4fa12b // indirect
+	github.com/sagernet/sing-shadowsocks v0.2.9-0.20260929204512-65740e0f0e3e // indirect
+	github.com/sagernet/sing-shadowsocks2 v0.2.2-0.20260929152114-a69d1086332b // indirect
+	github.com/sagernet/sing-shadowtls v0.2.2-0.20260928201441-a9c0127d5c99 // indirect
 	github.com/sagernet/sing-snell v0.0.0-20260904135315-bc5a12ac736f // indirect
 	github.com/sagernet/sing-usbip v0.0.0-20260817040617-28bd42667eca // indirect
-	github.com/sagernet/sing-vmess v0.2.8 // indirect
+	github.com/sagernet/sing-vmess v0.2.9-0.20260929152519-9b95ab8c9478 // indirect
 	github.com/sagernet/smux v1.5.50-sing-box-mod.1 // indirect
-	github.com/sagernet/wireguard-go v0.0.8-0.20260917055437-bc6039037038 // indirect
+	github.com/sagernet/wireguard-go v0.0.8-0.20260929150556-ca3bc60c4ce7 // indirect
 	github.com/sagernet/ws v0.0.0-20231204124109-acfe8907c854 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
@@ -94,9 +94,9 @@ require (
 	lukechampine.com/blake3 v1.3.0 // indirect
 )
 
-replace github.com/matsuridayo/libneko => ../../libneko
+replace github.com/matsuridayo/libneko => ../.deps/libneko
 
-replace github.com/sagernet/sing-box => ../../sing-box
+replace github.com/sagernet/sing-box => ../.deps/sing-box
 
 // Pseudo-version 20260727 sorts below older 20250325 in MVS; pin explicitly.
 replace github.com/sagernet/gvisor => github.com/sagernet/gvisor v0.0.0-20260727.0-sing-box-mod.1

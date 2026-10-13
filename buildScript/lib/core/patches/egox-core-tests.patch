@@ -1,0 +1,164 @@
+diff --git a/experimental/cachefile/egox_fakeip_test.go b/experimental/cachefile/egox_fakeip_test.go
+new file mode 100644
+index 0000000..b9b33d8
+--- /dev/null
++++ b/experimental/cachefile/egox_fakeip_test.go
+@@ -0,0 +1,158 @@
++package cachefile_test
++
++import (
++	"context"
++	"fmt"
++	"net/netip"
++	"path/filepath"
++	"testing"
++
++	"github.com/sagernet/bbolt"
++	"github.com/sagernet/sing-box/adapter"
++	"github.com/sagernet/sing-box/dns/transport/fakeip"
++	"github.com/sagernet/sing-box/experimental/cachefile"
++	"github.com/sagernet/sing-box/log"
++	"github.com/sagernet/sing-box/option"
++	"github.com/sagernet/sing/service"
++)
++
++func TestFakeIPMetadataPersistenceAndRecovery(t *testing.T) {
++	tempDir := t.TempDir()
++	dbPath := filepath.Join(tempDir, "cache.db")
++	ctx := context.Background()
++	logger := log.NewNOPFactory().NewLogger("")
++
++	cf := cachefile.New(ctx, logger, option.CacheFileOptions{
++		Path:        dbPath,
++		StoreFakeIP: true,
++	})
++	scope_cf := adapter.NewScope(ctx, logger)
++	if err := cf.Start(adapter.StartStateInitialize, scope_cf); err != nil {
++		t.Fatalf("failed to start cachefile: %v", err)
++	}
++
++	net4Range := netip.MustParsePrefix("198.18.0.0/15")
++	addr1 := netip.MustParseAddr("198.18.0.10")
++	addr2 := netip.MustParseAddr("198.18.0.25")
++
++	// Store fakeip addresses
++	if err := cf.FakeIPStore(addr1, "example.com"); err != nil {
++		t.Fatalf("failed to store addr1: %v", err)
++	}
++	if err := cf.FakeIPStore(addr2, "youtube.com"); err != nil {
++		t.Fatalf("failed to store addr2: %v", err)
++	}
++
++	// Save metadata
++	meta := &adapter.FakeIPMetadata{
++		Inet4Range:   net4Range,
++		Inet4Current: addr2,
++	}
++	if err := cf.FakeIPSaveMetadata(meta); err != nil {
++		t.Fatalf("failed to save metadata: %v", err)
++	}
++	_ = scope_cf.Close()
++
++	// Reopen 1: verify FakeIPMetadata does NOT delete metadata on read
++	cf2 := cachefile.New(ctx, logger, option.CacheFileOptions{
++		Path:        dbPath,
++		StoreFakeIP: true,
++	})
++	scope_cf2 := adapter.NewScope(ctx, logger)
++	if err := cf2.Start(adapter.StartStateInitialize, scope_cf2); err != nil {
++		t.Fatalf("failed to reopen cachefile: %v", err)
++	}
++	loadedMeta := cf2.FakeIPMetadata()
++	if loadedMeta == nil {
++		t.Fatalf("expected metadata to be loaded, got nil")
++	}
++	if loadedMeta.Inet4Current != addr2 {
++		t.Fatalf("expected Inet4Current %v, got %v", addr2, loadedMeta.Inet4Current)
++	}
++
++	// Read again: should still be present!
++	loadedMeta2 := cf2.FakeIPMetadata()
++	if loadedMeta2 == nil {
++		t.Fatalf("metadata was deleted on read! expected persistent metadata")
++	}
++	if loadedMeta2.Inet4Current != addr2 {
++		t.Fatalf("expected Inet4Current %v, got %v", addr2, loadedMeta2.Inet4Current)
++	}
++	_ = scope_cf2.Close()
++
++	// Reopen 3: delete keyMetadata manually to simulate older unclean shutdown,
++	// and verify that FakeIPMetadata recovers Inet4Current from the existing keys!
++	cf3 := cachefile.New(ctx, logger, option.CacheFileOptions{
++		Path:        dbPath,
++		StoreFakeIP: true,
++	})
++	scope_cf3 := adapter.NewScope(ctx, logger)
++	if err := cf3.Start(adapter.StartStateInitialize, scope_cf3); err != nil {
++		t.Fatalf("failed to start cf3: %v", err)
++	}
++	// Manually delete keyMetadata to test recovery
++	_ = cf3.DB.Update(func(tx *bbolt.Tx) error {
++		b := tx.Bucket([]byte("fakeip_address"))
++		if b != nil {
++			return b.Delete([]byte("fakeip_metadata"))
++		}
++		return nil
++	})
++
++	recoveredMeta := cf3.FakeIPMetadata()
++	if recoveredMeta == nil {
++		t.Fatalf("expected metadata recovery from bucket keys, got nil")
++	}
++	if recoveredMeta.Inet4Current != addr2 {
++		t.Fatalf("expected recovered Inet4Current %v, got %v", addr2, recoveredMeta.Inet4Current)
++	}
++	_ = scope_cf3.Close()
++}
++
++func TestEgoXStoreRecoversLegacyMappings(t *testing.T) {
++	for _, dual := range []bool{false, true} {
++		t.Run(fmt.Sprintf("dual=%v", dual), func(t *testing.T) {
++			ctx := context.Background()
++			logger := log.NewNOPFactory().NewLogger("")
++			cf := cachefile.New(ctx, logger, option.CacheFileOptions{Path: filepath.Join(t.TempDir(), "cache.db"), StoreFakeIP: true})
++			scope := adapter.NewScope(ctx, logger)
++			t.Cleanup(func() { _ = scope.Close() })
++			if err := cf.Start(adapter.StartStateInitialize, scope); err != nil {
++				t.Fatal(err)
++			}
++			address4 := netip.MustParseAddr("198.18.0.25")
++			if err := cf.FakeIPStore(address4, "old.example"); err != nil {
++				t.Fatal(err)
++			}
++			range6 := netip.Prefix{}
++			if dual {
++				range6 = netip.MustParsePrefix("fc00::/18")
++				if err := cf.FakeIPStore(netip.MustParseAddr("fc00::25"), "old6.example"); err != nil {
++					t.Fatal(err)
++				}
++			}
++			store := fakeip.NewStore(service.ContextWith[adapter.CacheFile](ctx, cf), logger, netip.MustParsePrefix("198.18.0.0/15"), range6)
++			if err := store.Start(); err != nil {
++				t.Fatal(err)
++			}
++			t.Cleanup(func() { _ = store.Close() })
++			if domain, ok := store.Lookup(address4); !ok || domain != "old.example" {
++				t.Fatalf("mapping lost: %q %v", domain, ok)
++			}
++			next, err := store.Create("new.example", false)
++			if err != nil || next.Compare(address4) <= 0 {
++				t.Fatalf("address reused: %v %v", next, err)
++			}
++			if dual {
++				address6 := netip.MustParseAddr("fc00::25")
++				if domain, ok := store.Lookup(address6); !ok || domain != "old6.example" {
++					t.Fatalf("IPv6 mapping lost: %q %v", domain, ok)
++				}
++				next6, err := store.Create("new6.example", true)
++				if err != nil || next6.Compare(address6) <= 0 {
++					t.Fatalf("IPv6 address reused: %v %v", next6, err)
++				}
++			}
++		})
++	}
++}

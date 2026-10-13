@@ -33,8 +33,6 @@ import org.ini4j.Ini
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
-import org.yaml.snakeyaml.TypeDescription
-import org.yaml.snakeyaml.Yaml
 import org.yaml.snakeyaml.error.YAMLException
 import java.io.StringReader
 import java.util.IdentityHashMap
@@ -54,9 +52,9 @@ object RawUpdater : GroupUpdater() {
         val link = subscription.link
         var proxies: List<AbstractBean>
         if (link.startsWith("content://")) {
-            val contentText = app.contentResolver.openInputStream(link.toUri())
-                ?.bufferedReader()
-                ?.readText()
+            val contentText = app.contentResolver.openInputStream(link.toUri())?.use {
+                ImportLimits.readBytes(it, ImportLimits.SUBSCRIPTION_BYTES).toString(Charsets.UTF_8)
+            }
 
             proxies = contentText?.let { parseRaw(contentText) }
                 ?: error(app.getString(R.string.no_proxies_found_in_subscription))
@@ -79,7 +77,7 @@ object RawUpdater : GroupUpdater() {
                 setURL(subscription.link)
                 setUserAgent(subscription.customUserAgent.takeIf { it.isNotBlank() } ?: USER_AGENT)
             }.execute()
-            val content = Util.getStringBox(response.contentString)
+            val content = Util.getStringBox(response.getContentStringLimited(ImportLimits.SUBSCRIPTION_BYTES.toLong()))
             proxies = parseRaw(content)
                 ?: error(app.getString(R.string.no_proxies_found))
 
@@ -276,8 +274,15 @@ object RawUpdater : GroupUpdater() {
         return title
     }
 
-    @Suppress("UNCHECKED_CAST")
     suspend fun parseRaw(text: String, fileName: String = ""): List<AbstractBean>? {
+        ImportLimits.checkSubscription(text)
+        return parseRawUnchecked(text, fileName)?.also {
+            require(it.size <= ImportLimits.PROFILES) { "Too many subscription profiles" }
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private suspend fun parseRawUnchecked(text: String, fileName: String): List<AbstractBean>? {
 
         val proxies = mutableListOf<AbstractBean>()
 
@@ -287,9 +292,7 @@ object RawUpdater : GroupUpdater() {
 
             try {
 
-                val yaml = Yaml().apply {
-                    addTypeDescription(TypeDescription(String::class.java, "str"))
-                }.loadAs(text, Map::class.java)
+                val yaml = ImportLimits.parseYaml(text)
 
                 val globalClientFingerprint = yaml["global-client-fingerprint"]?.toString() ?: ""
 

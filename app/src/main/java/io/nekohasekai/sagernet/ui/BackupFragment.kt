@@ -1,5 +1,7 @@
 package io.nekohasekai.sagernet.ui
 
+import io.nekohasekai.sagernet.group.ImportLimits
+
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -228,19 +230,24 @@ class BackupFragment : ToolbarFragment(R.layout.layout_backup) {
                     ZipInputStream(BufferedInputStream(input)).use { zis ->
                         zis.nextEntry?.let { entry ->
                             if (entry.name.endsWith(".json")) {
-                                zis.readBytes().toString(Charsets.UTF_8)
+                                ImportLimits.readBytes(zis, ImportLimits.BACKUP_BYTES).toString(Charsets.UTF_8)
                             } else {
                                 throw Exception("Invalid backup file format")
                             }
                         } ?: throw Exception("Invalid backup file format")
                     }
                 } else {
-                    input.readBytes().toString(Charsets.UTF_8)
+                    ImportLimits.readBytes(input, ImportLimits.BACKUP_BYTES).toString(Charsets.UTF_8)
                 }
             }
             }
 
             val json = JSONObject(content)
+            for (key in json.keys()) {
+                json.optJSONArray(key)?.let {
+                    require(it.length() <= ImportLimits.BACKUP_RECORDS) { "Too many backup records: $key" }
+                }
+            }
             onMainDispatcher {
                 val import = LayoutImportBinding.inflate(layoutInflater)
                 if (!json.has("profiles")) {

@@ -23,12 +23,12 @@ func (d *dummyDialer) ListenPacket(ctx context.Context, destination M.Socksaddr)
 	return nil, errors.New("not implemented")
 }
 
-func (d *dummyDialer) Type() string { return "dummy" }
-func (d *dummyDialer) Tag() string  { return d.tag }
-func (d *dummyDialer) Start(stage adapter.StartStage) error { return nil }
-func (d *dummyDialer) Close() error { return nil }
-func (d *dummyDialer) Network() []string { return []string{N.NetworkTCP} }
-func (d *dummyDialer) Dependencies() []string { return nil }
+func (d *dummyDialer) Type() string                                               { return "dummy" }
+func (d *dummyDialer) Tag() string                                                { return d.tag }
+func (d *dummyDialer) Start(stage adapter.StartStage, scope *adapter.Scope) error { return nil }
+func (d *dummyDialer) Close() error                                               { return nil }
+func (d *dummyDialer) Network() []string                                          { return []string{N.NetworkTCP} }
+func (d *dummyDialer) Dependencies() []string                                     { return nil }
 
 type mockOutboundManager struct {
 	adapter.OutboundManager

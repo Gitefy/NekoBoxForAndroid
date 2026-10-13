@@ -7,7 +7,37 @@
 
 本次升级**不删除**原有 gVisor / System / Mixed 回退能力；Go stack 仅作为新安装默认项。
 
-## 当前 pin（v1.15.0-alpha.6）
+## 当前 pin（v1.15.0-alpha.12）
+
+| 组件 | 版本 / Commit |
+|---|---|
+| sing-box | `25b0d5ea3e466d246c708ac0f20d0448110e566c`（官方 tag `v1.15.0-alpha.12`） |
+| sing | `v0.9.7-0.20260929150544-6f21f2425a95` |
+| sing-tun | `v0.9.7-0.20261009022811-5c2edb183cc9` |
+| gvisor | `v0.0.0-20260727.0-sing-box-mod.1`（保留显式固定和旧栈回退） |
+| Go / NDK | `1.25.5` / `25.0.8775105` |
+
+升级适配集中在 libcore：生命周期 `Start(stage, scope)`、Juicity scope 清理、策略组选中项 `Selected(network)`、GeoIP `Prefixable`。Android/JNI 对外方法与既有 P3、URLT-F1/F2 语义保持兼容；新增订阅 HTTP 响应大小限制方法。
+
+### 可重现原生依赖
+
+- 核心与 libneko 使用本项目忽略目录 `.deps/`，不切换或覆盖 `../sing-box`、`../libneko` 的用户工作区。
+- `buildScript/lib/core/get_source.sh` 固定 revision，并幂等应用 `patches/egox-core.patch` 和 `egox-core-tests.patch`。保留旧缓存缺失游标恢复、FakeIP 嗅探目的地修正及原有自定义 sniff 字段；上游已经修复的元数据读取删除问题不重复补丁。
+- `scripts/native-provenance.py` 在构建前检查依赖 revision 和补丁一致性，构建后记录输入摘要与 AAR SHA256。Gradle `verifyLibcore` 拒绝来源缺失、过期或被替换的 AAR。输入摘要规范化 CRLF/LF；源码、pin、补丁或构建脚本变化需要重新构建。
+- CI、Build、Release 固定同一 Go 版本，原生缓存同时保存 AAR 与来源记录，并纳入补丁和校验脚本。
+- 原生补丁的干净重放、FakeIP IPv4-only/双栈旧缓存恢复，以及普通/完整 Release 标签 libcore 测试均在 Windows 主机验证。Android 真机导入、VPN、切网、UDP/QUIC 和休眠恢复须单独验收。
+
+### 2026-10-13 主机验收
+
+- libcore 普通和完整 Release build tags 全量测试通过；HTTP 超限后重读、UDP-only URLTest 选中项回退均有先失败后通过的回归。
+- Debug / Release JVM 各 440 项测试通过，失败、错误、跳过均为 0；新导入安全测试 8 项通过，原生来源/获取测试 7 项通过。
+- Debug lint 0 错误 / 61 警告，Release lint 0 错误 / 44 警告；AndroidTest Kotlin 编译通过。lint 使用离线模式，未查询 Maven 最新版本。
+- Debug / Release APK 构建通过；包内 libgojni.so 与本次 AAR 字节一致，包含 alpha.12、固定 revision 和 Go 1.25.5；ELF LOAD 和 APK zipalign 16 KB 校验通过。
+- 正式 APK 保持 `com.egox`、4.3.2 / 305，签名证书与原 4.3.2 一致。交付文件：`app/build/outputs/verified/EgoX-4.3.2-sing-box-alpha.12-arm64-v8a.apk`。
+- APK SHA256：`d2a8cadfe58d279f554718f40dc03df9d5a96db52b3b8fd2d32678dea18d0c4e`；详细记录：`app/build/outputs/verified/verification.json`。
+- 未连接 Android 设备，未做真机验收；Windows 缺少宿主 Cgo 编译器，未运行 `-race`，已将 FakeIP 竞态回归加入 Linux CI。以上为提交前本地主机验收，远端 CI 结果单独核对。
+
+## 先前 pin（v1.15.0-alpha.6）
 
 | 组件 | 版本 / Commit |
 |---|---|
