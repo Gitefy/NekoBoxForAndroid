@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -180,19 +181,19 @@ func TestDestinationIPv6IsRawWithoutPort(t *testing.T) {
 }
 
 type countingLiveSource struct {
-	live  []*trafficcontrol.TrackerMetadata
-	closed []*trafficcontrol.TrackerMetadata
-	liveCalls   int
-	closedCalls int
+	live        []*trafficcontrol.TrackerMetadata
+	closed      []*trafficcontrol.TrackerMetadata
+	liveCalls   atomic.Int64
+	closedCalls atomic.Int64
 }
 
 func (c *countingLiveSource) Connections() []*trafficcontrol.TrackerMetadata {
-	c.liveCalls++
+	c.liveCalls.Add(1)
 	return c.live
 }
 
 func (c *countingLiveSource) ClosedConnections() []*trafficcontrol.TrackerMetadata {
-	c.closedCalls++
+	c.closedCalls.Add(1)
 	return c.closed
 }
 
@@ -205,15 +206,15 @@ func TestEventPathDoesNotEnumerateLiveConnections(t *testing.T) {
 	}
 	h := newConnectionHistory(func() time.Time { return time.UnixMilli(10) })
 	h.ApplyEvent(src.live[0])
-	if src.liveCalls != 0 {
-		t.Fatalf("event path liveCalls=%d", src.liveCalls)
+	if src.liveCalls.Load() != 0 {
+		t.Fatalf("event path liveCalls=%d", src.liveCalls.Load())
 	}
 	if h.liveScans.Load() != 0 {
 		t.Fatalf("liveScans=%d", h.liveScans.Load())
 	}
 	h.MergeLive(src)
-	if src.liveCalls != 1 || h.liveScans.Load() != 1 {
-		t.Fatalf("liveCalls=%d scans=%d", src.liveCalls, h.liveScans.Load())
+	if src.liveCalls.Load() != 1 || h.liveScans.Load() != 1 {
+		t.Fatalf("liveCalls=%d scans=%d", src.liveCalls.Load(), h.liveScans.Load())
 	}
 }
 
