@@ -11,9 +11,9 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/matsuridayo/libneko/protect_server"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/trafficcontrol"
 	"github.com/sagernet/sing-box/experimental/v2rayapi"
@@ -21,13 +21,14 @@ import (
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
-	"libcore/urltest"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
+	"libcore/urltest"
 )
 
-var mainInstance *BoxInstance
+var mainInstance atomic.Pointer[BoxInstance]
+var mainLifecycleMu sync.Mutex
 
 var buildRevision = "unknown"
 
@@ -79,8 +80,8 @@ func ResetAllConnections(system bool) {
 	}
 	resetConnLast = now
 	resetConnMu.Unlock()
-	if mainInstance != nil && mainInstance.connectionManager != nil {
-		mainInstance.connectionManager.CloseAll()
+	if instance := mainInstance.Load(); instance != nil && instance.connectionManager != nil {
+		instance.connectionManager.CloseAll()
 		log.Println("Reset system connections done")
 	} else {
 		log.Println("Reset system connections: no running instance")
@@ -199,17 +200,18 @@ func (b *BoxInstance) Close() (err error) {
 	}
 
 	// clear main instance
-	if mainInstance == b {
-		mainInstance = nil
+	mainLifecycleMu.Lock()
+	if mainInstance.CompareAndSwap(b, nil) {
 		goServeProtect(false)
 	}
+	mainLifecycleMu.Unlock()
 
 	// close box
 	if b.cancel != nil {
 		b.cancel()
 	}
 	if b.Box != nil {
-		b.Box.Close()
+		return b.Box.Close()
 	}
 
 	return nil
@@ -285,9 +287,19 @@ func (b *BoxInstance) Wake() {
 	}
 }
 
-func (b *BoxInstance) SetAsMain() {
-	mainInstance = b
-	goServeProtect(true)
+func (b *BoxInstance) SetAsMain() error {
+	b.access.Lock()
+	defer b.access.Unlock()
+	if b.state == 2 {
+		return errors.New("instance closed")
+	}
+	mainLifecycleMu.Lock()
+	defer mainLifecycleMu.Unlock()
+	if err := goServeProtect(true); err != nil {
+		return err
+	}
+	mainInstance.Store(b)
+	return nil
 }
 
 func (b *BoxInstance) SetV2rayStats(outbounds string) {
@@ -424,22 +436,25 @@ func urlTestDetourWithTarget(i *BoxInstance, targetTag string) (N.Dialer, error)
 	var boxAccessor urltest.OutboundAccessor
 	if i != nil && i.Box != nil {
 		boxAccessor = i.Box
-	} else if mainInstance != nil && mainInstance.Box != nil {
-		boxAccessor = mainInstance.Box
+	} else if instance := mainInstance.Load(); instance != nil && instance.Box != nil {
+		boxAccessor = instance.Box
 	}
 	return urltest.ResolveTargetDialer(boxAccessor, targetTag)
 }
 
 var protectCloser io.Closer
 
-func goServeProtect(start bool) {
+func goServeProtect(start bool) error {
 	if protectCloser != nil {
 		protectCloser.Close()
 		protectCloser = nil
 	}
 	if start {
-		protectCloser = protect_server.ServeProtect("protect_path", false, 0, func(fd int) {
-			intfBox.AutoDetectInterfaceControl(int32(fd))
+		var err error
+		protectCloser, err = serveProtect("protect_path", func(fd int) error {
+			return intfBox.AutoDetectInterfaceControl(int32(fd))
 		})
+		return err
 	}
+	return nil
 }

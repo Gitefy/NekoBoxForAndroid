@@ -557,6 +557,11 @@ class ConfigurationFragment @JvmOverloads constructor(
         }
     }
 
+    override fun onDestroyView() {
+        if (::groupPager.isInitialized) groupPager.adapter = null
+        super.onDestroyView()
+    }
+
     override fun onDestroy() {
         DataStore.profileCacheStore.unregisterChangeListener(this)
 
@@ -1249,7 +1254,7 @@ class ConfigurationFragment @JvmOverloads constructor(
             }
             test.proxyN = profilesList.size
             val profiles = ConcurrentLinkedQueue(profilesList)
-            repeat(DataStore.connectionTestConcurrent) {
+            repeat(pingWorkerCount(profilesList.size, DataStore.connectionTestConcurrent)) {
                 testJobs.add(launch(Dispatchers.IO) {
                     while (isActive) {
                         val profile = profiles.poll() ?: break
@@ -1258,10 +1263,14 @@ class ConfigurationFragment @JvmOverloads constructor(
                         var address = profile.requireBean().serverAddress
                         if (!address.isIpAddress()) {
                             try {
-                                SagerNet.underlyingNetwork!!.getAllByName(address).apply {
-                                    if (isNotEmpty()) {
-                                        address = this[0].hostAddress
-                                    }
+                                val net = SagerNet.underlyingNetwork
+                                val resolved = if (net != null) {
+                                    net.getAllByName(address)
+                                } else {
+                                    java.net.InetAddress.getAllByName(address)
+                                }
+                                resolved.firstOrNull()?.hostAddress?.let {
+                                    address = it
                                 }
                             } catch (ignored: UnknownHostException) {
                             }
@@ -1334,27 +1343,32 @@ class ConfigurationFragment @JvmOverloads constructor(
                 })
             }
 
-            testJobs.joinAll()
-
-            runOnMainDispatcher {
-                test.cancel()
+            try {
+                testJobs.joinAll()
+            } finally {
+                runOnMainDispatcher {
+                    test.cancel()
+                }
             }
         }
         test.cancel = {
             test.dialogStatus.set(2)
             dialog.dismiss()
             runOnDefaultDispatcher {
-                mainJob.cancel()
-                testJobs.forEach { it.cancel() }
-                test.results.forEach {
-                    try {
-                        ProfileManager.updateProfile(it)
-                    } catch (e: Exception) {
-                        Logs.w(e)
+                try {
+                    mainJob.cancel()
+                    testJobs.forEach { it.cancel() }
+                    test.results.forEach {
+                        try {
+                            ProfileManager.updateTestResult(it)
+                        } catch (e: Exception) {
+                            Logs.w(e)
+                        }
                     }
+                    GroupManager.postReload(DataStore.currentGroupId())
+                } finally {
+                    DataStore.runningTest = false
                 }
-                GroupManager.postReload(DataStore.currentGroupId())
-                DataStore.runningTest = false
             }
         }
         test.minimize = {
@@ -1376,50 +1390,55 @@ class ConfigurationFragment @JvmOverloads constructor(
         val groupName = routerGroup?.name ?: group!!.displayName()
 
         val mainJob = runOnDefaultDispatcher {
-            val profilesList = loadConnectionTestProfiles(routerGroup, group)
-            test.proxyN = profilesList.size
-            if (routerGroup != null && profilesList.isEmpty()) {
-                runOnMainDispatcher {
-                    snackbar(getString(R.string.profile_empty)).show()
-                }
-            }
-            val allGroups = runCatching { SagerDatabase.groupDao.allGroups().associateBy { it.id } }.getOrDefault(emptyMap())
-            val allProxies = runCatching { SagerDatabase.proxyDao.getAll().associateBy { it.id } }.getOrDefault(emptyMap())
-
             try {
-                BatchUrlTestRunner().run(
-                    profilesList = profilesList,
-                    groups = allGroups,
-                    proxies = allProxies,
-                    directDns = DataStore.directDns.lineSequence().firstOrNull().orEmpty(),
-                    onResult = { profile ->
-                        test.update(profile)
-                    },
-                )
-            } catch (_: CancellationException) {
-            } catch (e: Exception) {
-                Logs.w(e)
-            }
+                val profilesList = loadConnectionTestProfiles(routerGroup, group)
+                test.proxyN = profilesList.size
+                if (routerGroup != null && profilesList.isEmpty()) {
+                    runOnMainDispatcher {
+                        snackbar(getString(R.string.profile_empty)).show()
+                    }
+                }
+                val allGroups = runCatching { SagerDatabase.groupDao.allGroups().associateBy { it.id } }.getOrDefault(emptyMap())
+                val allProxies = runCatching { SagerDatabase.proxyDao.getAll().associateBy { it.id } }.getOrDefault(emptyMap())
 
-            runOnMainDispatcher {
-                test.cancel()
+                try {
+                    BatchUrlTestRunner().run(
+                        profilesList = profilesList,
+                        groups = allGroups,
+                        proxies = allProxies,
+                        directDns = DataStore.directDns.lineSequence().firstOrNull().orEmpty(),
+                        onResult = { profile ->
+                            test.update(profile)
+                        },
+                    )
+                } catch (_: CancellationException) {
+                } catch (e: Exception) {
+                    Logs.w(e)
+                }
+            } finally {
+                runOnMainDispatcher {
+                    test.cancel()
+                }
             }
         }
         test.cancel = {
             test.dialogStatus.set(2)
             dialog.dismiss()
             runOnDefaultDispatcher {
-                mainJob.cancel()
-                test.results.forEach {
-                    try {
-                        ProfileManager.updateProfile(it)
-                    } catch (e: Exception) {
-                        Logs.w(e)
+                try {
+                    mainJob.cancel()
+                    test.results.forEach {
+                        try {
+                            ProfileManager.updateTestResult(it)
+                        } catch (e: Exception) {
+                            Logs.w(e)
+                        }
                     }
+                    GroupManager.postReload(DataStore.currentGroupId())
+                    refreshRunningRouterUrlTest(routerGroup)
+                } finally {
+                    DataStore.runningTest = false
                 }
-                GroupManager.postReload(DataStore.currentGroupId())
-                refreshRunningRouterUrlTest(routerGroup)
-                DataStore.runningTest = false
             }
         }
         test.minimize = {
@@ -3086,3 +3105,6 @@ class ConfigurationFragment @JvmOverloads constructor(
     }
 
 }
+
+internal fun pingWorkerCount(profileCount: Int, configuredConcurrency: Int): Int =
+    minOf(profileCount, maxOf(configuredConcurrency, 1), 16)

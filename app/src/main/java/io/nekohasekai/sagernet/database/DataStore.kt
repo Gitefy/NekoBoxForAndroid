@@ -162,6 +162,22 @@ object DataStore : OnPreferenceDataStoreChangeListener {
 
     var appTLSVersion by configurationStore.string(Key.APP_TLS_VERSION)
     var enableClashAPI by configurationStore.boolean(Key.ENABLE_CLASH_API)
+
+    /** Called off main; the Room transaction also serializes first use across processes. */
+    fun ensureClashApiSecret(): String {
+        var secret = ""
+        PublicDatabase.instance.runInTransaction {
+            secret = PublicDatabase.kvPairDao.get("clashApiSecret")?.string.orEmpty()
+            if (secret.isBlank()) {
+                secret = java.util.UUID.randomUUID().toString()
+                PublicDatabase.kvPairDao.put(
+                    io.nekohasekai.sagernet.database.preference.KeyValuePair("clashApiSecret").put(secret),
+                )
+            }
+        }
+        return secret
+    }
+
     var confirmProfileDelete by configurationStore.boolean(Key.CONFIRM_PROFILE_DELETE) { true }
     var groupLayoutMode by configurationStore.stringToInt(Key.GROUP_LAYOUT_MODE) { 0 }
     var profileCardStyle by configurationStore.stringToInt(Key.PROFILE_CARD_STYLE) { 0 }

@@ -286,6 +286,49 @@ class BatchUrlTestRunnerTest {
     }
 
     @Test
+    fun fallbackRunsConcurrentlyWithBatchBridgeWorkers() = runBlocking {
+        val nativeSocks = socks(1L)
+        val pluginNode = trojanGoPlugin(2L)
+
+        val batchStarted = CompletableDeferred<Unit>()
+        val fallbackStarted = CompletableDeferred<Unit>()
+
+        val fakeBridge = FakeBoxBridge {
+            batchStarted.complete(Unit)
+            runBlocking {
+                withTimeout(2000) {
+                    fallbackStarted.await()
+                }
+            }
+            35
+        }
+
+        val runner = BatchUrlTestRunner(
+            boxFactory = { fakeBridge },
+            singleTester = {
+                fallbackStarted.complete(Unit)
+                runBlocking {
+                    withTimeout(2000) {
+                        batchStarted.await()
+                    }
+                }
+                75
+            },
+        )
+
+        val results = ConcurrentHashMap<Long, ProxyEntity>()
+        runner.run(listOf(nativeSocks, pluginNode)) { profile ->
+            results[profile.id] = profile
+        }
+
+        assertEquals(2, results.size)
+        assertEquals(35, results[1L]?.ping)
+        assertEquals(75, results[2L]?.ping)
+        assertEquals(1, runner.lastMetrics.batchProbeCount)
+        assertEquals(1, runner.lastMetrics.fallbackProbeCount)
+    }
+
+    @Test
     fun cancellationClosesBoxAndTerminatesActiveWorkers() = runBlocking {
         val profiles = (1..20).map { socks(it.toLong()) }
         val fakeBridge = FakeBoxBridge {
@@ -328,6 +371,40 @@ class BatchUrlTestRunnerTest {
     }
 
     @Test
+    fun batchAndFallbackShareGlobalConcurrencyLimit() = runBlocking {
+        val active = AtomicInteger(0)
+        val peak = AtomicInteger(0)
+        fun enter() {
+            val current = active.incrementAndGet()
+            peak.updateAndGet { maxOf(it, current) }
+        }
+        fun leave() { active.decrementAndGet() }
+
+        val runner = BatchUrlTestRunner(
+            configuredConcurrency = 25,
+            boxFactory = {
+                FakeBoxBridge {
+                    enter()
+                    try { Thread.sleep(150) } finally { leave() }
+                    40
+                }
+            },
+            singleTester = {
+                enter()
+                try { delay(150) } finally { leave() }
+                50
+            },
+        )
+        val profiles = (1..20).map { socks(it.toLong()) } +
+            (21..30).map { trojanGoPlugin(it.toLong()) }
+
+        runner.run(profiles) {}
+
+        assertTrue("Expected batch and fallback to run together", peak.get() > 1)
+        assertTrue("Peak URLTest concurrency ${peak.get()} exceeded 10", peak.get() <= BatchUrlTestRunner.MAX_BATCH_URL_TEST_CONCURRENCY)
+    }
+
+    @Test
     fun startFailureClosesBridgeExactlyOnceAndExecutesFallback() = runBlocking {
         val profiles = (1..3).map { socks(it.toLong()) }
         val fallbackTested = CopyOnWriteArrayList<Long>()
@@ -364,5 +441,64 @@ class BatchUrlTestRunnerTest {
         assertEquals(0, runner.lastMetrics.batchProbeCount)
         assertEquals(3, runner.lastMetrics.fallbackProbeCount)
     }
+
+    @Test
+    fun activeProfileUsesActiveTesterWhenConnected() = runBlocking {
+        val profile = trojanGoPlugin(42L)
+        var singleTesterCalled = false
+        var activeTesterCalled = false
+
+        val runner = BatchUrlTestRunner(
+            boxFactory = { null },
+            singleTester = {
+                singleTesterCalled = true
+                999
+            },
+            activeTester = {
+                activeTesterCalled = true
+                42
+            },
+            activeProfileId = 42L,
+        )
+
+        val results = CopyOnWriteArrayList<ProxyEntity>()
+        runner.run(listOf(profile)) { results.add(it) }
+
+        assertEquals(1, results.size)
+        assertEquals(1, results[0].status)
+        assertEquals(42, results[0].ping)
+        assertTrue("activeTester must be called", activeTesterCalled)
+        assertFalse("singleTester must NOT be called", singleTesterCalled)
+    }
+
+    @Test
+    fun activeProfileFailureDoesNotFallbackToSingleTester() = runBlocking {
+        val profile = trojanGoPlugin(42L)
+        var singleTesterCalled = false
+        var activeTesterCalled = false
+
+        val runner = BatchUrlTestRunner(
+            boxFactory = { null },
+            singleTester = {
+                singleTesterCalled = true
+                999
+            },
+            activeTester = {
+                activeTesterCalled = true
+                throw java.net.SocketTimeoutException("Active tunnel test timeout")
+            },
+            activeProfileId = 42L,
+        )
+
+        val results = CopyOnWriteArrayList<ProxyEntity>()
+        runner.run(listOf(profile)) { results.add(it) }
+
+        assertEquals(1, results.size)
+        assertEquals(3, results[0].status)
+        assertTrue("activeTester must be called", activeTesterCalled)
+        assertFalse("singleTester must NOT be called when activeTester fails", singleTesterCalled)
+        assertTrue(results[0].error?.contains("timeout", ignoreCase = true) == true)
+    }
+
 }
 

@@ -29,6 +29,7 @@ import io.nekohasekai.sagernet.route.RouterSelectionRequest
 import io.nekohasekai.sagernet.route.RouterUrlTestRefresh
 import io.nekohasekai.sagernet.route.routerNodeKey
 import io.nekohasekai.sagernet.utils.ConnectionResetDebouncer
+import io.nekohasekai.sagernet.utils.NetworkHandover
 import io.nekohasekai.sagernet.utils.DefaultNetworkListener
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
@@ -38,6 +39,21 @@ import moe.matsuri.nb4a.Protocols
 import moe.matsuri.nb4a.utils.Util
 import java.net.UnknownHostException
 import java.util.concurrent.ConcurrentHashMap
+
+internal inline fun dispatchStart(
+    state: BaseService.State,
+    start: () -> Unit,
+    restart: () -> Unit,
+    applied: () -> Unit,
+    failed: () -> Unit,
+) {
+    when (state) {
+        BaseService.State.Stopped -> start()
+        BaseService.State.Connecting -> restart()
+        BaseService.State.Connected -> applied()
+        else -> failed()
+    }
+}
 
 class BaseService {
 
@@ -93,9 +109,11 @@ class BaseService {
 
         val binder = Binder(this)
         var connectingJob: Job? = null
-        var pendingRestorePermit: RestoreCoordinator.Permit? = null
+        @Volatile var pendingRestorePermit: RestoreCoordinator.Permit? = null
         @Volatile var urlTestRefreshJob: Job? = null
         @Volatile var applyGeneration: Long = 0L
+        @Volatile var runtimeGeneration: Long = 0L
+        @Volatile var pendingRestart: Boolean = false
         @Volatile var applyRequest: ApplyRequest? = null
 
         fun changeState(s: State, msg: String? = null) {
@@ -148,10 +166,12 @@ class BaseService {
         private val broadcastMutex = Mutex()
 
         suspend fun publishRequestSnapshot(batch: io.nekohasekai.sagernet.aidl.RequestFlowBatch) {
-            val gen = data?.applyGeneration ?: return
+            val runtime = data?.takeIf { it.proxy != null } ?: return
+            val gen = runtime.runtimeGeneration
             if (gen != batch.runtimeGeneration) return
             if (!requestObservers.hasSubscribers()) return
             broadcast { cb ->
+                if (data?.proxy == null || data?.runtimeGeneration != batch.runtimeGeneration) return@broadcast
                 val token = cb.asBinder() ?: return@broadcast
                 if (requestObservers.contains(token)) {
                     cb.cbRequestUpdate(batch)
@@ -308,14 +328,15 @@ class BaseService {
         }
 
         suspend fun handleApplyIntent(intent: Intent) {
-            val request = parseApplyRequest(intent, CommandKind.RELOAD)
+            val incomingRequest = parseApplyRequest(intent, CommandKind.RELOAD)
             val reused = intent.getLongExtra(Action.EXTRA_INSTANCE_GENERATION, -1L)
             val generation = if (reused > 0L) {
                 if (!ApplyCoordinator.isCurrent(reused)) return
                 reused
             } else {
-                ApplyCoordinator.accept(request).first
+                ApplyCoordinator.accept(incomingRequest).first
             }
+            var request = incomingRequest
             data.applyGeneration = generation
             data.applyRequest = request
             if (request.kind == CommandKind.STOP) {
@@ -333,15 +354,29 @@ class BaseService {
                 if (permit == null) {
                     return
                 }
-                withContext(Dispatchers.IO) {
-                    RestoreCoordinator.recoverLocked(
-                        dir,
-                        { DataStore.configurationStore.restore(it).success },
-                        { RestoreCoordinator.installSagerExport(it) },
-                    )
+                var transferred = false
+                try {
+                    if (!recoverForApply(dir, request, generation)) return
+                    withContext(Dispatchers.Main.immediate) {
+                        if (!ApplyCoordinator.isCurrent(generation)) return@withContext
+                        dispatchStart(
+                            data.state,
+                            start = {
+                                data.pendingRestorePermit = permit
+                                startRunner(request, generation)
+                                transferred = true
+                            },
+                            restart = { stopRunner(true, null, request, generation) },
+                            applied = { completeApply(request, generation, CommandOutcome.APPLIED, true) },
+                            failed = { completeApply(request, generation, CommandOutcome.FAILED, false, ApplyErrorCodes.CORE_FAILED) },
+                        )
+                    }
+                } finally {
+                    if (!transferred) {
+                        if (data.pendingRestorePermit === permit) data.pendingRestorePermit = null
+                        permit.close()
+                    }
                 }
-                data.pendingRestorePermit = permit
-                startRunner(request, generation)
                 return
             }
             val dir = SagerNet.application.filesDir
@@ -350,13 +385,7 @@ class BaseService {
                 return
             }
             try {
-                withContext(Dispatchers.IO) {
-                    RestoreCoordinator.recoverLocked(
-                        dir,
-                        { DataStore.configurationStore.restore(it).success },
-                        { RestoreCoordinator.installSagerExport(it) },
-                    )
-                }
+                if (!recoverForApply(dir, request, generation)) return
                 val failed = ApplyService.validateCommitted(request, generation)
                 if (failed != null) {
                     if (ApplyCoordinator.isCurrent(generation)) data.binder.finishApply(request, generation, failed)
@@ -364,15 +393,21 @@ class BaseService {
                 }
                 if (!ApplyCoordinator.isCurrent(generation)) return
                 when (request.kind) {
-                    CommandKind.START -> {
-                        if (data.state == State.Stopped) startRunner(request, generation)
-                        else completeApply(request, generation, CommandOutcome.APPLIED, true)
+                    CommandKind.START -> withContext(Dispatchers.Main.immediate) {
+                        if (!ApplyCoordinator.isCurrent(generation)) return@withContext
+                        dispatchStart(
+                            data.state,
+                            start = { startRunner(request, generation) },
+                            restart = { stopRunner(true, null, request, generation) },
+                            applied = { completeApply(request, generation, CommandOutcome.APPLIED, true) },
+                            failed = { completeApply(request, generation, CommandOutcome.FAILED, false, ApplyErrorCodes.CORE_FAILED) },
+                        )
                     }
                     CommandKind.RELOAD -> executeReload(request, generation)
                     CommandKind.STOP -> {}
                 }
             } finally {
-                withContext(Dispatchers.IO) { permit.close() }
+                permit.close()
             }
         }
 
@@ -516,16 +551,18 @@ class BaseService {
             startForegroundService(intent)
         }
 
-        fun killProcesses() {
-            data.urlTestRefreshJob?.cancel()
+        suspend fun killProcesses() {
+            data.urlTestRefreshJob?.cancelAndJoin()
             data.urlTestRefreshJob = null
-            data.proxy?.close()
-            wakeLock?.apply {
-                release()
-                wakeLock = null
-            }
-            runOnDefaultDispatcher {
-                DefaultNetworkListener.stop(this)
+            try {
+                data.proxy?.close()
+            } finally {
+                try {
+                    releaseWakeLock()
+                } finally {
+                    wakeLock = null
+                    DefaultNetworkListener.stop(this)
+                }
             }
         }
 
@@ -557,6 +594,31 @@ class BaseService {
             return if (res != null) getString(res) else "${getString(R.string.service_failed)}${errorCode ?: ""}"
         }
 
+        suspend fun recoverForApply(dir: java.io.File, request: ApplyRequest, generation: Long): Boolean {
+            val recovered = withContext(Dispatchers.IO) {
+                runCatching {
+                    RestoreCoordinator.recoverLocked(
+                        dir,
+                        { DataStore.configurationStore.restore(it).success },
+                        { RestoreCoordinator.installSagerExport(it) },
+                    )
+                }.getOrElse {
+                    Logs.w(it)
+                    RestoreCoordinator.Outcome(false, RestoreCoordinator.Phase.IDLE, "recovery I/O failed")
+                }
+            }
+            if (recovered.success) return true
+            Logs.w("restore recovery failed: ${recovered.error}")
+            if (ApplyCoordinator.isCurrent(generation)) {
+                data.binder.finishApply(
+                    request, generation,
+                    ApplyResult(request.requestId, CommandOutcome.FAILED, generation, false, ApplyErrorCodes.RESTORE_FAILED),
+                )
+                stopRunner(false, applyErrorMessage(ApplyErrorCodes.RESTORE_FAILED))
+            }
+            return false
+        }
+
         fun stopRunner(
             restart: Boolean = false,
             msg: String? = null,
@@ -564,43 +626,71 @@ class BaseService {
             stopGeneration: Long? = null,
         ) {
             DataStore.baseService = null
-            DataStore.vpnService = null
             DataStore.mixedInboundAuthed = false
 
+            if (restart) {
+                data.pendingRestart = true
+            } else {
+                data.pendingRestart = false
+            }
+
             if (data.state == State.Stopping) return
-            data.notification?.destroy()
+            val notification = data.notification
             data.notification = null
             this as Service
 
             data.changeState(State.Stopping)
 
             runOnMainDispatcher {
-                data.connectingJob?.cancelAndJoin() // ensure stop connecting first
-                // Close box / stop traffic looper off the main thread to avoid ANR on stop.
-                withContext(Dispatchers.Default) {
-                    killProcesses()
-                }
-                val data = data
-                if (data.closeReceiverRegistered) {
-                    unregisterReceiver(data.receiver)
-                    data.closeReceiverRegistered = false
-                }
-                data.proxy = null
+                withContext(NonCancellable) {
+                    val cleanupFailure = runStopCleanup(
+                        { notification?.destroy() },
+                        { data.connectingJob?.cancelAndJoin() },
+                        {
+                            try { data.pendingRestorePermit?.close() }
+                            finally { data.pendingRestorePermit = null }
+                        },
+                        { withContext(Dispatchers.Default) { killProcesses() } },
+                        {
+                            if (data.closeReceiverRegistered) {
+                                try { unregisterReceiver(data.receiver) }
+                                finally { data.closeReceiverRegistered = false }
+                            }
+                        },
+                    )
+                    cleanupFailure?.let { Logs.e("Service stop cleanup failed", it) }
+                    DataStore.vpnService = null
+                    val data = data
+                    data.proxy = null
 
-                // change the state
-                data.changeState(State.Stopped, msg)
-                if (restart) startRunner() else {
-                    val req = stopRequest ?: data.applyRequest
-                    val gen = stopGeneration ?: data.applyGeneration
-                    if (req != null && req.kind == CommandKind.STOP && ApplyCoordinator.isCurrent(gen)) {
-                        data.binder.finishApply(
-                            req,
-                            gen,
-                            ApplyResult(req.requestId, CommandOutcome.STOPPED, gen, true, null),
-                        )
+                    // change the state
+                    data.changeState(State.Stopped, msg)
+                    val currentReq = data.applyRequest
+                    val currentGen = data.applyGeneration
+                    val isStop = (currentReq?.kind == CommandKind.STOP) || (stopRequest?.kind == CommandKind.STOP)
+                    val shouldRestart = data.pendingRestart && !isStop && cleanupFailure == null
+                    data.pendingRestart = false
+                    if (shouldRestart) {
+                        startRunner()
+                    } else {
+                        val req = stopRequest ?: currentReq
+                        val gen = stopGeneration ?: currentGen
+                        if (req != null && (req.kind == CommandKind.STOP || cleanupFailure != null) && ApplyCoordinator.isCurrent(gen)) {
+                            data.binder.finishApply(
+                                req,
+                                gen,
+                                ApplyResult(
+                                    req.requestId,
+                                    if (cleanupFailure == null) CommandOutcome.STOPPED else CommandOutcome.FAILED,
+                                    gen,
+                                    cleanupFailure == null,
+                                    if (cleanupFailure == null) null else ApplyErrorCodes.STOP_CLEANUP_FAILED,
+                                ),
+                            )
+                        }
+                        try { BootReceiver.enabled = DataStore.persistAcrossReboot }
+                        finally { stopSelf() }
                     }
-                    BootReceiver.enabled = DataStore.persistAcrossReboot
-                    stopSelf()
                 }
             }
         }
@@ -613,26 +703,29 @@ class BaseService {
         var upstreamInterfaceName: String?
 
         suspend fun preInit() {
-            var previousNetwork: android.net.Network? = null
-            var hadNetwork = false
+            val handover = NetworkHandover<Pair<android.net.Network, String>>()
             DefaultNetworkListener.start(this) { network ->
                 if (network == null) {
-                    previousNetwork = null
+                    handover.update(null)
+                    data.urlTestRefreshJob?.cancel()
+                    data.urlTestRefreshJob = null
                     SagerNet.underlyingNetwork = null
+                    upstreamInterfaceName = null
+                    DataStore.vpnService?.updateUnderlyingNetwork()
                     return@start
                 }
-                SagerNet.connectivity.getLinkProperties(network)?.also { link ->
-                    val networkChanged = hadNetwork && previousNetwork != network
-                    previousNetwork = network
-                    hadNetwork = true
+                run {
+                    val interfaceName = DefaultNetworkListener.interfaceName?.takeIf { it.isNotEmpty() } ?: return@start
+                    val networkChanged = handover.update(network to interfaceName)
                     SagerNet.underlyingNetwork = network
                     DataStore.vpnService?.updateUnderlyingNetwork()
                     //
                     val oldName = upstreamInterfaceName
-                    if (oldName != link.interfaceName) {
-                        upstreamInterfaceName = link.interfaceName
+                    val newName = interfaceName
+                    if (oldName != newName) {
+                        upstreamInterfaceName = newName
                     }
-                    if (networkChanged || (oldName != null && upstreamInterfaceName != null && oldName != upstreamInterfaceName)) {
+                    if (networkChanged) {
                         Logs.d({ "Network changed: $oldName -> $upstreamInterfaceName" })
                         if (DataStore.networkChangeResetConnections) {
                             ConnectionResetDebouncer.resetAllConnections()
@@ -644,7 +737,10 @@ class BaseService {
                             data.urlTestRefreshJob = data.binder.launch(Dispatchers.IO) {
                                 delay(URL_TEST_NETWORK_REFRESH_DEBOUNCE_MS)
                                 if (data.state != State.Connected || data.proxy !== runningProxy) return@launch
-                                if (!runningProxy.isInitialized()) return@launch
+                                if (!runningProxy.isInitialized() || SagerNet.underlyingNetwork != network) return@launch
+                                ensureActive()
+                                if (data.state != State.Connected || data.proxy !== runningProxy ||
+                                    SagerNet.underlyingNetwork != network) return@launch
                                 runningProxy.config.routerUrlTestTags.values.distinct().forEach {
                                     runningProxy.box.refreshURLTestFor(it)
                                 }
@@ -658,11 +754,14 @@ class BaseService {
         var wakeLock: PowerManager.WakeLock?
         fun acquireWakeLock()
 
+        fun releaseWakeLock() {
+            val held = wakeLock
+            wakeLock = null
+            if (held?.isHeld == true) held.release()
+        }
+
         suspend fun lateInit() {
-            wakeLock?.apply {
-                release()
-                wakeLock = null
-            }
+            releaseWakeLock()
 
             if (DataStore.acquireWakeLock) {
                 acquireWakeLock()
@@ -696,7 +795,7 @@ class BaseService {
                 data.closeReceiverRegistered = true
             }
 
-            val request = parseApplyRequest(intent, CommandKind.START)
+            val initialRequest = parseApplyRequest(intent, CommandKind.START)
             val reused = intent?.getLongExtra(Action.EXTRA_INSTANCE_GENERATION, -1L) ?: -1L
             val generation = if (reused > 0L) {
                 if (!ApplyCoordinator.isCurrent(reused)) {
@@ -706,13 +805,15 @@ class BaseService {
                 }
                 reused
             } else {
-                ApplyCoordinator.accept(request).first
+                ApplyCoordinator.accept(initialRequest).first
             }
             data.applyGeneration = generation
-            data.applyRequest = request
+            data.applyRequest = initialRequest
 
             data.changeState(State.Connecting)
             data.connectingJob = data.binder.launch(start = CoroutineStart.LAZY) {
+                var request = initialRequest
+                var createdProxy: ProxyInstance? = null
                 try {
                     val startedAt = SystemClock.elapsedRealtime()
                     val placeholderNotification = onMainDispatcher {
@@ -725,11 +826,9 @@ class BaseService {
                         return@launch
                     }
                     val dir = SagerNet.application.filesDir
-                    val permit = withContext(Dispatchers.IO) {
-                        val held = data.pendingRestorePermit
-                        data.pendingRestorePermit = null
-                        held
-                    } ?: acquireApplyPermit(dir, generation)
+                    val held = data.pendingRestorePermit
+                    data.pendingRestorePermit = null
+                    val permit = held ?: acquireApplyPermit(dir, generation)
                     if (permit == null) {
                         stopRunner(
                             false,
@@ -738,20 +837,17 @@ class BaseService {
                         return@launch
                     }
                     try {
-                    withContext(Dispatchers.IO) {
-                        RestoreCoordinator.recoverLocked(
-                            dir,
-                            { DataStore.configurationStore.restore(it).success },
-                            { RestoreCoordinator.installSagerExport(it) },
-                        )
-                    }
+                    if (!recoverForApply(dir, request, generation)) return@launch
                     val failed = ApplyService.validateCommitted(request, generation)
                     if (failed != null) {
                         if (ApplyCoordinator.isCurrent(generation)) data.binder.finishApply(request, generation, failed)
                         stopRunner(false, applyErrorMessage(failed.errorCode))
                         return@launch
                     }
-                    if (!ApplyCoordinator.isCurrent(generation)) return@launch
+                    if (!ApplyCoordinator.isCurrent(generation)) {
+                        if (data.state == State.Connecting) data.changeState(State.Stopped)
+                        return@launch
+                    }
                     val profile = withContext(Dispatchers.IO) {
                         val committed = DataStore.configurationStore.readCommittedSettingsSnapshot()
                         val profileId = ApplyService.resolveCommittedProfileId(request, committed)
@@ -773,44 +869,73 @@ class BaseService {
                         val instance = ProxyInstance(profile, this@Interface)
                         instance to ServiceNotification.genTitle(profile)
                     }
-                    data.proxy = proxy
-                    onMainDispatcher {
-                        data.notification?.let { runCatching { it.postNotificationTitle(title) } }
-                    }
-                    val notificationReadyAt = SystemClock.elapsedRealtime()
-
-                    onDefaultDispatcher {
-                        Executable.killAll()
-                        preInit()
-                        proxy.init()
-                        DataStore.currentProfile = profile.id
-
-                        proxy.processes = GuardedProcessPool {
-                            Logs.w(it)
-                            stopRunner(false, it.readableMessage)
+                        createdProxy = proxy
+                        data.runtimeGeneration = generation
+                        data.proxy = proxy
+                        onMainDispatcher {
+                            data.notification?.let { runCatching { it.postNotificationTitle(title) } }
                         }
+                        val notificationReadyAt = SystemClock.elapsedRealtime()
 
-                        startProcesses()
-                    }
-                    if (!ApplyCoordinator.isCurrent(generation) || data.state == State.Stopping) {
-                        return@launch
-                    }
-                    data.changeState(State.Connected)
-                    data.binder.finishApply(
-                        request,
-                        generation,
-                        ApplyResult(request.requestId, CommandOutcome.APPLIED, generation, true, null),
-                    )
+                        onDefaultDispatcher {
+                            Executable.killAll()
+                            preInit()
+                            proxy.init()
+                            DataStore.currentProfile = profile.id
 
-                    lateInit()
-                    Logs.i({
-                        "$tag startup completed in ${SystemClock.elapsedRealtime() - startedAt} ms " +
-                            "(notification=${notificationReadyAt - startedAt} ms)"
-                    })
+                            proxy.processes = GuardedProcessPool { error ->
+                                if (data.proxy !== proxy || data.state == State.Stopping || data.state == State.Stopped) {
+                                    return@GuardedProcessPool
+                                }
+                                Logs.w(error)
+                                stopRunner(false, error.readableMessage)
+                            }
+
+                            startProcesses()
+                        }
+                        if (!ApplyCoordinator.isCurrent(generation) || data.state == State.Stopping) {
+                            withContext(NonCancellable) {
+                                if (data.proxy === proxy) {
+                                    data.proxy = null
+                                }
+                                onDefaultDispatcher {
+                                    runCatching { proxy.close() }
+                                }
+                            }
+                            if (data.state == State.Connecting && !ApplyCoordinator.hasNewer(generation)) {
+                                data.changeState(State.Stopped)
+                            }
+                            return@launch
+                        }
+                        data.changeState(State.Connected)
+                        data.binder.finishApply(
+                            request,
+                            generation,
+                            ApplyResult(request.requestId, CommandOutcome.APPLIED, generation, true, null),
+                        )
+
+                        lateInit()
+                        Logs.i({
+                            "$tag startup completed in ${SystemClock.elapsedRealtime() - startedAt} ms " +
+                                "(notification=${notificationReadyAt - startedAt} ms)"
+                        })
                     } finally {
                         permit.close()
                     }
                 } catch (_: CancellationException) {
+                    withContext(NonCancellable) {
+                        if (data.proxy === createdProxy) {
+                            data.proxy = null
+                        }
+                        createdProxy?.let { p ->
+                            onDefaultDispatcher {
+                                runCatching { p.close() }
+                            }
+                        }
+                    }
+                    if (data.state == State.Connecting && !ApplyCoordinator.hasNewer(generation)) {
+                        data.changeState(State.Stopped)
+                    }
                 } catch (_: UnknownHostException) {
                     if (ApplyCoordinator.isCurrent(generation)) {
                         data.binder.finishApply(
@@ -847,9 +972,7 @@ class BaseService {
                             ApplyResult(request.requestId, CommandOutcome.FAILED, generation, false, ApplyErrorCodes.CORE_FAILED),
                         )
                     }
-                    stopRunner(
-                        false, "${getString(R.string.service_failed)}: ${exc.readableMessage}"
-                    )
+                    stopRunner(false, "${getString(R.string.service_failed)}: ${exc.readableMessage}")
                 } finally {
                     data.connectingJob = null
                 }

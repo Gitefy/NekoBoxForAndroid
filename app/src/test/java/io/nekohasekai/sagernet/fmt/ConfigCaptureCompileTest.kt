@@ -16,6 +16,7 @@ import moe.matsuri.nb4a.utils.JavaUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -229,5 +230,30 @@ class ConfigCaptureCompileTest {
             assertEquals(id, result.profileIdByTag[tag] ?: id)
         }
         assertNull(result.profileIdByTag["missing-tag"])
+    }
+
+    @Test
+    fun controllerSecretIsCapturedAndNotExportedOrUsedByTestInstances() {
+        val group = ProxyGroup(id = 10L, name = "g")
+        val proxy = socks(1, 10, "proxy.example")
+        val snapshot = captured(proxy, mapOf(1L to proxy), mapOf(10L to group),
+            settings().copy(enableClashAPI = true, clashApiSecret = "fixture-controller-secret"), forTest = false)
+        val runtime = JsonParser.parseString(compileConfig(snapshot).config).asJsonObject
+        assertEquals("fixture-controller-secret", runtime.getAsJsonObject("experimental")
+            .getAsJsonObject("clash_api").get("secret").asString)
+        for (isolated in listOf(snapshot.copy(forExport = true), snapshot.copy(forTest = true))) {
+            val json = compileConfig(isolated).config
+            assertFalse(json.contains("fixture-controller-secret"))
+            assertFalse(JsonParser.parseString(json).asJsonObject.getAsJsonObject("experimental")?.has("clash_api") == true)
+        }
+    }
+
+    @Test
+    fun enabledControllerWithoutCapturedCredentialFailsBeforePublishingConfig() {
+        val group = ProxyGroup(id = 10L, name = "g")
+        val proxy = socks(1, 10, "proxy.example")
+        val snapshot = captured(proxy, mapOf(1L to proxy), mapOf(10L to group),
+            settings().copy(enableClashAPI = true), forTest = false)
+        assertThrows(IllegalArgumentException::class.java) { compileConfig(snapshot) }
     }
 }

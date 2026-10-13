@@ -1,11 +1,14 @@
 package io.nekohasekai.sagernet.bg.proto
 
+import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.ProxyGroup
 import io.nekohasekai.sagernet.fmt.BatchConfigBuilder
 import io.nekohasekai.sagernet.ktx.Logs
+import io.nekohasekai.sagernet.utils.DefaultNetworkListener
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Semaphore
 import libcore.BoxInstance
 import libcore.Libcore
 import moe.matsuri.nb4a.net.LocalResolverImpl
@@ -22,13 +25,17 @@ interface BoxBridge {
     fun urlTestWithTarget(link: String, timeout: Int, targetTag: String): Int
 }
 
-class SingBoxBridge(private val box: BoxInstance) : BoxBridge {
+internal class SingBoxBridge(private val box: BoxInstance, private val cacheFile: UrlTestCacheFile) : BoxBridge {
     override fun start() {
         box.start()
     }
 
     override fun close() {
-        box.close()
+        try {
+            box.close()
+        } finally {
+            cacheFile.close()
+        }
     }
 
     override fun urlTestWithTarget(link: String, timeout: Int, targetTag: String): Int {
@@ -59,12 +66,29 @@ class BatchUrlTestRunner(
     val timeout: Int = runCatching { DataStore.connectionTestTimeout }.getOrDefault(3000),
     val configuredConcurrency: Int = runCatching { DataStore.connectionTestConcurrent }.getOrDefault(5),
     private val boxFactory: (String) -> BoxBridge? = { configJson ->
-        val box = Libcore.newSingBoxInstance(configJson, LocalResolverImpl)
-        if (box != null) SingBoxBridge(box) else null
+        val cacheFile = UrlTestCacheFile.create(SagerNet.application.cacheDir)
+        try {
+            val box = Libcore.newSingBoxInstance(cacheFile.applyTo(configJson), LocalResolverImpl)
+            if (box != null) SingBoxBridge(box, cacheFile) else {
+                cacheFile.close()
+                null
+            }
+        } catch (e: Throwable) {
+            cacheFile.close()
+            throw e
+        }
     },
     private val singleTester: suspend (ProxyEntity) -> Int = { profile ->
         TestInstance(profile, link, timeout).doTest()
     },
+    // Null means absent from the running core; probe failures must propagate.
+    val runtimeTester: (suspend (ProxyEntity) -> Int?)? = null,
+    val activeTester: (suspend (ProxyEntity) -> Int)? = null,
+    val activeProfileId: Long? = runCatching {
+        if (DataStore.serviceState.connected) {
+            DataStore.selectedProxy.takeIf { it > 0 } ?: DataStore.currentProfile
+        } else null
+    }.getOrNull(),
 ) {
 
     companion object {
@@ -89,6 +113,7 @@ class BatchUrlTestRunner(
         val firstResultRecorded = AtomicBoolean(false)
         val batchProbeCounter = AtomicInteger(0)
         val fallbackProbeCounter = AtomicInteger(0)
+        val probePermits = Semaphore(effectiveConcurrency)
 
         fun recordResult(profile: ProxyEntity) {
             if (firstResultRecorded.compareAndSet(false, true)) {
@@ -149,41 +174,65 @@ class BatchUrlTestRunner(
                             val targetTag = batchResult.targetTagMap[profile.id]
                             if (targetTag.isNullOrBlank()) {
                                 fallbackProbeCounter.incrementAndGet()
-                                executeIsolated(profile, ::recordResult)
+                                executeIsolated(profile, probePermits, ::recordResult)
                                 continue
                             }
 
-                            profile.status = 0
+                            probePermits.acquire()
                             try {
-                                val ping = batchBridge.urlTestWithTarget(link, timeout, targetTag)
-                                profile.status = 1
-                                profile.ping = ping
-                            } catch (e: Exception) {
-                                profile.status = 3
-                                profile.error = e.readableMsg
+                                profile.status = 0
+                                try {
+                                    val ping = if (activeTester != null && activeProfileId != null && profile.id == activeProfileId) {
+                                        try {
+                                            activeTester(profile)
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (e: Exception) {
+                                            Logs.w("URLTest: activeTester failed in batch: ${e.readableMsg}; falling back to shared probe", e)
+                                            batchBridge.urlTestWithTarget(link, timeout, targetTag)
+                                        }
+                                    } else {
+                                        batchBridge.urlTestWithTarget(link, timeout, targetTag)
+                                    }
+                                    profile.status = 1
+                                    profile.ping = ping
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    profile.status = 3
+                                    profile.error = e.readableMsg
+                                    Logs.w {
+                                        "URLTest batch failed profile=${profile.id} type=${profile.type}: ${e.readableMsg}"
+                                    }
+                                }
+                            } finally {
+                                probePermits.release()
                             }
                             batchProbeCounter.incrementAndGet()
                             recordResult(profile)
                         }
                     })
                 }
-                workers.joinAll()
-                workers.clear()
             }
 
-            // 2. Process fallback profiles using isolated test
+            // 2. Process fallback profiles concurrently with shared Box testing
             if (fallbackQueue.isNotEmpty()) {
-                repeat(effectiveConcurrency) {
+                val fallbackConcurrency = if (batchBridge != null) {
+                    minOf(effectiveConcurrency, maxOf(1, effectiveConcurrency / 2))
+                } else {
+                    effectiveConcurrency
+                }
+                repeat(fallbackConcurrency) {
                     workers.add(launch(Dispatchers.IO) {
                         while (isActive) {
                             val profile = fallbackQueue.poll() ?: break
                             fallbackProbeCounter.incrementAndGet()
-                            executeIsolated(profile, ::recordResult)
+                            executeIsolated(profile, probePermits, ::recordResult)
                         }
                     })
                 }
-                workers.joinAll()
             }
+            workers.joinAll()
         } finally {
             if (batchBridge != null) {
                 runCatching {
@@ -199,19 +248,42 @@ class BatchUrlTestRunner(
         }
     }
 
-    private suspend fun executeIsolated(profile: ProxyEntity, onResult: (ProxyEntity) -> Unit) {
+    private suspend fun executeIsolated(profile: ProxyEntity, permits: Semaphore, onResult: (ProxyEntity) -> Unit) {
         profile.status = 0
+        permits.acquire()
         try {
-            val ping = singleTester(profile)
-            profile.status = 1
-            profile.ping = ping
-        } catch (e: Exception) {
-            if (e.javaClass.simpleName == "PluginNotFoundException") {
-                profile.status = 2
-            } else {
-                profile.status = 3
+            try {
+                val ping = if (runtimeTester != null) {
+                    runtimeTester.invoke(profile) ?: singleTester(profile)
+                } else if (activeTester != null && activeProfileId != null && profile.id == activeProfileId) {
+                    try {
+                        activeTester(profile)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Logs.w("URLTest: activeTester failed for active profile ${profile.id}: ${e.readableMsg}", e)
+                        throw e
+                    }
+                } else {
+                    singleTester(profile)
+                }
+                profile.status = 1
+                profile.ping = ping
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (e.javaClass.simpleName == "PluginNotFoundException") {
+                    profile.status = 2
+                } else {
+                    profile.status = 3
+                }
+                profile.error = e.readableMsg
+                Logs.w {
+                    "URLTest isolated failed profile=${profile.id} type=${profile.type}: ${e.readableMsg}"
+                }
             }
-            profile.error = e.readableMsg
+        } finally {
+            permits.release()
         }
         onResult(profile)
     }
@@ -219,4 +291,3 @@ class BatchUrlTestRunner(
 
 private val Throwable.readableMsg: String
     get() = localizedMessage.takeIf { !it.isNullOrBlank() } ?: javaClass.simpleName
-

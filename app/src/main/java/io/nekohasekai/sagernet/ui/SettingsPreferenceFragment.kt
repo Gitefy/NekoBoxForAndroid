@@ -184,7 +184,7 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
             MaterialAlertDialogBuilder(requireContext()).setTitle("Log buffer size (kb)")
                 .setView(view)
                 .setPositiveButton(android.R.string.ok) { _, _ ->
-                    DataStore.logBufSize = view.text.toString().toInt()
+                    DataStore.logBufSize = view.text.toString().toIntOrNull()?.coerceIn(1, 16384) ?: 50
                     if (DataStore.logBufSize <= 0) DataStore.logBufSize = 50
                     needRestart()
                 }
@@ -389,12 +389,14 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
     private fun clearAppCache() {
         try {
             val cacheDir = SagerNet.application.cacheDir
-            clearDirFiles(cacheDir, skipFiles = setOf("neko.log"))
+            val running = DataStore.serviceState.started
+            val skipNames = setOf("neko.log", "cache.db", "cache.db-wal", "cache.db-shm")
+            clearDirFiles(cacheDir, skipFiles = skipNames, skipRunningConfigs = running)
             
             val parentDir = cacheDir.parentFile
             val relativeCache = File(parentDir, "cache")
             if (relativeCache.exists() && relativeCache.isDirectory) {
-                clearDirFiles(relativeCache)
+                clearDirFiles(relativeCache, skipFiles = skipNames, skipRunningConfigs = running)
             }
             
             Toast.makeText(requireContext(), R.string.clear_cache_success, Toast.LENGTH_SHORT).show()
@@ -408,28 +410,20 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
         }
     }
 
-    private fun clearDirFiles(dir: File, skipFiles: Set<String> = emptySet()): Boolean {
+    private fun clearDirFiles(dir: File, skipFiles: Set<String> = emptySet(), skipRunningConfigs: Boolean = false): Boolean {
         if (dir.isDirectory) {
             val children = dir.list() ?: return true
             
             for (child in children) {
                 val childFile = File(dir, child)
                 
-                if (child == "neko.log") {
-                    try {
-                        childFile.writeText("")
-                        continue
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                }
                 
-                if (child in skipFiles) {
+                if (child in skipFiles || CacheCleanupPolicy.preserve(child, skipRunningConfigs)) {
                     continue
                 }
                 
                 if (childFile.isDirectory) {
-                    clearDirFiles(childFile, skipFiles)
+                    clearDirFiles(childFile, skipFiles, skipRunningConfigs)
                 } else {
                     childFile.delete()
                 }

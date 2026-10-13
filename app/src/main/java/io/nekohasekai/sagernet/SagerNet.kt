@@ -294,7 +294,7 @@ class SagerNet : Application(),
             application.sendBroadcast(applyExtras(Intent(Action.APPLY).setPackage(application.packageName), request))
         }
 
-        var underlyingNetwork: Network? = null
+        @Volatile var underlyingNetwork: Network? = null
 
         var appVersionNameForDisplay = {
             var n = BuildConfig.VERSION_NAME

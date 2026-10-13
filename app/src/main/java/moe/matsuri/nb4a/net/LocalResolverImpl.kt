@@ -3,8 +3,10 @@ package moe.matsuri.nb4a.net
 import android.net.DnsResolver
 import android.os.CancellationSignal
 import android.system.ErrnoException
+import android.system.OsConstants
 import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.ktx.Logs
+import io.nekohasekai.sagernet.utils.DefaultNetworkListener
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asExecutor
 import libcore.ExchangeContext
@@ -17,39 +19,67 @@ object LocalResolverImpl : LocalDNSTransport {
 
     override fun raw(): Boolean = true
 
-    override fun networkHandle(): Long = SagerNet.underlyingNetwork?.networkHandle ?: 0
+    override fun networkHandle(): Long =
+        (SagerNet.underlyingNetwork ?: DefaultNetworkListener.findUnderlyingNetwork())?.networkHandle ?: 0
 
     override fun exchange(ctx: ExchangeContext, message: ByteArray) {
+        val network = SagerNet.underlyingNetwork ?: DefaultNetworkListener.findUnderlyingNetwork()
+        if (network == null) {
+            ctx.errnoCode(OsConstants.ENETUNREACH)
+            return
+        }
+
         val signal = CancellationSignal()
         ctx.onCancel(signal::cancel)
 
         val callback = object : DnsResolver.Callback<ByteArray> {
             override fun onAnswer(answer: ByteArray, rcode: Int) {
-                ctx.rawSuccess(answer)
+                try {
+                    ctx.rawSuccess(answer)
+                } catch (e: Throwable) {
+                    Logs.w(e)
+                    ctx.errnoCode(OsConstants.EIO)
+                }
             }
 
             override fun onError(error: DnsResolver.DnsException) {
-                val cause = error.cause
-                if (cause is ErrnoException) {
-                    ctx.errnoCode(cause.errno)
-                } else {
-                    Logs.w(error)
-                    ctx.errnoCode(114514)
+                try {
+                    val cause = error.cause
+                    if (cause is ErrnoException) {
+                        ctx.errnoCode(cause.errno)
+                    } else {
+                        Logs.w(error)
+                        ctx.errnoCode(OsConstants.ECONNREFUSED)
+                    }
+                } catch (e: Throwable) {
+                    Logs.w(e)
+                    ctx.errnoCode(OsConstants.EIO)
                 }
             }
         }
 
-        DnsResolver.getInstance().rawQuery(
-            SagerNet.underlyingNetwork,
-            message,
-            DnsResolver.FLAG_NO_RETRY,
-            Dispatchers.IO.asExecutor(),
-            signal,
-            callback
-        )
+        try {
+            DnsResolver.getInstance().rawQuery(
+                network,
+                message,
+                DnsResolver.FLAG_NO_RETRY,
+                Dispatchers.IO.asExecutor(),
+                signal,
+                callback
+            )
+        } catch (e: Throwable) {
+            Logs.w(e)
+            ctx.errnoCode(OsConstants.EIO)
+        }
     }
 
     override fun lookup(ctx: ExchangeContext, network: String, domain: String) {
+        val net = SagerNet.underlyingNetwork ?: DefaultNetworkListener.findUnderlyingNetwork()
+        if (net == null) {
+            ctx.errnoCode(OsConstants.ENETUNREACH)
+            return
+        }
+
         val signal = CancellationSignal()
         ctx.onCancel(signal::cancel)
 
@@ -61,9 +91,9 @@ object LocalResolverImpl : LocalDNSTransport {
                     } else {
                         ctx.errorCode(rcode)
                     }
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     Logs.w(e)
-                    ctx.errnoCode(114514)
+                    ctx.errnoCode(OsConstants.EIO)
                 }
             }
 
@@ -74,11 +104,11 @@ object LocalResolverImpl : LocalDNSTransport {
                         ctx.errnoCode(cause.errno)
                     } else {
                         Logs.w(error)
-                        ctx.errnoCode(114514)
+                        ctx.errnoCode(OsConstants.ECONNREFUSED)
                     }
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     Logs.w(e)
-                    ctx.errnoCode(114514)
+                    ctx.errnoCode(OsConstants.EIO)
                 }
             }
         }
@@ -88,25 +118,30 @@ object LocalResolverImpl : LocalDNSTransport {
             network.endsWith("6") -> DnsResolver.TYPE_AAAA
             else -> null
         }
-        if (type != null) {
-            DnsResolver.getInstance().query(
-                SagerNet.underlyingNetwork,
-                domain,
-                type,
-                DnsResolver.FLAG_NO_RETRY,
-                Dispatchers.IO.asExecutor(),
-                signal,
-                callback
-            )
-        } else {
-            DnsResolver.getInstance().query(
-                SagerNet.underlyingNetwork,
-                domain,
-                DnsResolver.FLAG_NO_RETRY,
-                Dispatchers.IO.asExecutor(),
-                signal,
-                callback
-            )
+        try {
+            if (type != null) {
+                DnsResolver.getInstance().query(
+                    net,
+                    domain,
+                    type,
+                    DnsResolver.FLAG_NO_RETRY,
+                    Dispatchers.IO.asExecutor(),
+                    signal,
+                    callback
+                )
+            } else {
+                DnsResolver.getInstance().query(
+                    net,
+                    domain,
+                    DnsResolver.FLAG_NO_RETRY,
+                    Dispatchers.IO.asExecutor(),
+                    signal,
+                    callback
+                )
+            }
+        } catch (e: Throwable) {
+            Logs.w(e)
+            ctx.errnoCode(OsConstants.EIO)
         }
     }
 

@@ -6,6 +6,7 @@ import (
 	"libcore/procfs"
 	"log"
 	"net/netip"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -21,7 +22,9 @@ import (
 
 var boxPlatformInterfaceInstance adapter.PlatformInterface = &boxPlatformInterfaceWrapper{}
 
-type boxPlatformInterfaceWrapper struct{}
+type boxPlatformInterfaceWrapper struct {
+	myInterfaceAddresses []netip.Addr
+}
 
 func (w *boxPlatformInterfaceWrapper) Initialize(n adapter.NetworkManager) error {
 	return nil
@@ -32,9 +35,16 @@ func (w *boxPlatformInterfaceWrapper) UsePlatformAutoDetectInterfaceControl() bo
 }
 
 func (w *boxPlatformInterfaceWrapper) AutoDetectInterfaceControl(fd int) error {
-	// call protect_path
 	if !isBgProcess {
-		_ = sendFdToProtect(fd, "protect_path")
+		// With no active VPN the UI can dial directly. Otherwise only the VPN
+		// service can protect this descriptor, via the cross-process socket.
+		if err := intfBox.AutoDetectInterfaceControl(int32(fd)); err == nil {
+			return nil
+		}
+		if err := sendFdToProtect(fd, "protect_path"); err != nil {
+			log.Printf("[protect] UI sendFdToProtect fail fd=%d err=%v", fd, err)
+			return err
+		}
 		return nil
 	}
 	// bg process call VPNService
@@ -128,8 +138,26 @@ func (w *boxPlatformInterfaceWrapper) FindConnectionOwner(request *adapter.FindC
 	packageName, _ := intfBox.PackageNameByUid(uid)
 	return &adapter.ConnectionOwner{
 		UserId:       uid,
-		PackageNames: []string{packageName},
+		PackageNames: parsePackageNames(packageName),
 	}, nil
+}
+
+func parsePackageNames(encoded string) []string {
+	seen := make(map[string]struct{})
+	packages := make([]string, 0)
+	for _, packageName := range strings.Split(encoded, ",") {
+		packageName = strings.TrimSpace(packageName)
+		if packageName == "" {
+			continue
+		}
+		if _, ok := seen[packageName]; ok {
+			continue
+		}
+		seen[packageName] = struct{}{}
+		packages = append(packages, packageName)
+	}
+	sort.Strings(packages)
+	return packages
 }
 
 func (w *boxPlatformInterfaceWrapper) UsePlatformWIFIMonitor() bool {
@@ -149,7 +177,18 @@ func (w *boxPlatformInterfaceWrapper) CancelNotification(identifier string, type
 }
 
 func (w *boxPlatformInterfaceWrapper) MyInterfaceAddress() []netip.Addr {
-	return nil
+	return w.myInterfaceAddresses
+}
+
+func tunAddressesFromOptions(options *tun.Options) []netip.Addr {
+	addresses := make([]netip.Addr, 0, len(options.Inet4Address)+len(options.Inet6Address))
+	for _, prefix := range options.Inet4Address {
+		addresses = append(addresses, prefix.Addr())
+	}
+	for _, prefix := range options.Inet6Address {
+		addresses = append(addresses, prefix.Addr())
+	}
+	return addresses
 }
 
 func (w *boxPlatformInterfaceWrapper) UsePlatformNeighborResolver() bool {

@@ -4,11 +4,17 @@ import io.nekohasekai.sagernet.*
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.GroupManager
 import io.nekohasekai.sagernet.database.ProxyGroup
+import io.nekohasekai.sagernet.database.RestoreCoordinator
 import io.nekohasekai.sagernet.database.SubscriptionBean
+import io.nekohasekai.sagernet.fmt.KryoConverters
+import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.fmt.AbstractBean
 import io.nekohasekai.sagernet.fmt.http.HttpBean
 import io.nekohasekai.sagernet.fmt.hysteria.HysteriaBean
 import io.nekohasekai.sagernet.fmt.naive.NaiveBean
+import io.nekohasekai.sagernet.fmt.juicity.JuicityBean
+import io.nekohasekai.sagernet.fmt.tuic.TuicBean
+import moe.matsuri.nb4a.proxy.anytls.AnyTLSBean
 import io.nekohasekai.sagernet.fmt.trojan.TrojanBean
 import io.nekohasekai.sagernet.fmt.trojan_go.TrojanGoBean
 import io.nekohasekai.sagernet.fmt.v2ray.StandardV2RayBean
@@ -40,7 +46,7 @@ abstract class GroupUpdater {
         profiles: List<AbstractBean>, groupId: Long?
     ) {
         val ipv6Mode = DataStore.ipv6Mode
-        val lookupPool = newFixedThreadPoolContext(5, "DNS Lookup")
+        val lookupDispatcher = Dispatchers.IO.limitedParallelism(5)
         val progress = Progress(profiles.size)
         if (groupId != null) {
             GroupUpdater.progress[groupId] = progress
@@ -63,31 +69,29 @@ abstract class GroupUpdater {
 
                     if (profile.serverAddress.isIpAddress()) continue
 
-                    launch(lookupPool) {
+                    launch(lookupDispatcher) {
                         try {
-                            val underlyingNetwork = SagerNet.underlyingNetwork
+                            val underlying = SagerNet.underlyingNetwork
                             val results = if (
-                                underlyingNetwork != null &&
-                                DataStore.enableFakeDns &&
+                                underlying != null &&
                                 DataStore.serviceState.started &&
                                 DataStore.serviceMode == Key.MODE_VPN
                             ) {
-                                // FakeDNS
-                                underlyingNetwork!!
+                                underlying
                                     .getAllByName(profile.serverAddress)
                                     .filterNotNull()
                             } else {
-                                // System DNS is enough (when VPN connected, it uses v2ray-core)
                                 InetAddress.getAllByName(profile.serverAddress).filterNotNull()
                             }
-                            if (results.isEmpty()) error("empty response")
                             ensureActive()
+                            if (results.isEmpty()) error("empty response")
                             rewriteAddress(profile, results, ipv6First)
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
                             Logs.d(e) { "Lookup ${profile.serverAddress} failed: ${e.readableMessage}" }
                         }
+                        ensureActive()
                         if (groupId != null) {
                             progress.progress++
                             if (reloadBatcher?.shouldReloadNow() == true) {
@@ -96,10 +100,9 @@ abstract class GroupUpdater {
                         }
                     }
                 }
-
             }
         } finally {
-            lookupPool.close()
+            // Dispatchers.IO.limitedParallelism does not require closing
         }
         if (groupId != null) {
             GroupManager.postReload(groupId)
@@ -110,7 +113,7 @@ abstract class GroupUpdater {
     protected fun rewriteAddress(
         bean: AbstractBean, addresses: List<InetAddress>, ipv6First: Boolean
     ) {
-        val address = addresses.sortedBy { (it is Inet4Address) xor ipv6First }[0].hostAddress
+        val address = addresses.sortedBy { (it is Inet4Address) xor ipv6First }.firstOrNull()?.hostAddress ?: return
 
         with(bean) {
             when (this) {
@@ -119,7 +122,7 @@ abstract class GroupUpdater {
                 }
                 is StandardV2RayBean -> {
                     when (security) {
-                        "tls" -> if (sni.isBlank()) sni = bean.serverAddress
+                        "tls", "reality" -> if (sni.isBlank()) sni = bean.serverAddress
                     }
                 }
                 is TrojanBean -> {
@@ -129,6 +132,15 @@ abstract class GroupUpdater {
                     if (sni.isBlank()) sni = bean.serverAddress
                 }
                 is HysteriaBean -> {
+                    if (sni.isBlank()) sni = bean.serverAddress
+                }
+                is TuicBean -> {
+                    if (sni.isBlank()) sni = bean.serverAddress
+                }
+                is JuicityBean -> {
+                    if (sni.isBlank()) sni = bean.serverAddress
+                }
+                is AnyTLSBean -> {
                     if (sni.isBlank()) sni = bean.serverAddress
                 }
             }
@@ -141,45 +153,59 @@ abstract class GroupUpdater {
 
         val updating = Collections.synchronizedSet<Long>(mutableSetOf())
         val progress = Collections.synchronizedMap<Long, Progress>(mutableMapOf())
+        private val updateScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
         fun startUpdate(proxyGroup: ProxyGroup, byUser: Boolean) {
-            runOnDefaultDispatcher {
+            updateScope.launch {
                 executeUpdate(proxyGroup, byUser)
             }
         }
 
         suspend fun executeUpdate(proxyGroup: ProxyGroup, byUser: Boolean): Boolean {
             return coroutineScope {
-                if (!updating.add(proxyGroup.id)) return@coroutineScope false
-                GroupManager.postReload(proxyGroup.id)
-
-                val subscription = proxyGroup.subscription!!
-                val connected = DataStore.serviceState.connected
-                val userInterface = GroupManager.userInterface
-
-                if (byUser && (subscription.link?.startsWith("http://") == true || subscription.updateWhenConnectedOnly) && !connected) {
-                    if (userInterface == null || !userInterface.confirm(app.getString(R.string.update_subscription_warning))) {
-                        finishUpdate(proxyGroup)
-                        return@coroutineScope false
-                    }
+                if (RestoreCoordinator.isActive()) {
+                    Logs.w("Restore is in progress, skipping subscription update for group ${proxyGroup.id}")
+                    return@coroutineScope false
                 }
-
+                if (!updating.add(proxyGroup.id)) return@coroutineScope false
+                val userInterface = GroupManager.userInterface
+                var originalGroup: ByteArray? = null
                 try {
-                    val routerSnapshot = GroupManager.snapshotRouterMembers()
+                    originalGroup = KryoConverters.serialize(proxyGroup)
+                    GroupManager.postReload(proxyGroup.id)
+
+                    val subscription = proxyGroup.subscription!!
+                    val connected = DataStore.serviceState.connected
+
+                    if (byUser && (subscription.link?.startsWith("http://") == true || subscription.updateWhenConnectedOnly) && !connected) {
+                        if (userInterface == null || !userInterface.confirm(app.getString(R.string.update_subscription_warning))) {
+                            return@coroutineScope false
+                        }
+                    }
+
                     RawUpdater.doUpdate(proxyGroup, subscription, userInterface, byUser)
-                    GroupManager.reconcileRouterMembers(routerSnapshot)
                     true
                 } catch (e: CancellationException) {
-                    withContext(NonCancellable) { finishUpdate(proxyGroup) }
                     throw e
                 } catch (e: Throwable) {
                     Logs.w(e)
-                    GroupManager.markRouterRefreshFailed(proxyGroup.id, e.readableMessage)
-                    userInterface?.onUpdateFailure(proxyGroup, e.readableMessage)
-                    finishUpdate(proxyGroup)
+                    if (e !is RestoreCoordinator.SubscriptionWriteRejected) {
+                        runCatching {
+                            RestoreCoordinator.withSubscriptionWrite(SagerNet.application.filesDir) {
+                                val current = SagerDatabase.groupDao.getById(proxyGroup.id)
+                                if (current != null && originalGroup?.contentEquals(KryoConverters.serialize(current)) == true) {
+                                    GroupManager.markRouterRefreshFailed(proxyGroup.id, e.readableMessage)
+                                }
+                            }
+                        }.onFailure { Logs.w(it) }
+                    }
+                    runCatching { userInterface?.onUpdateFailure(proxyGroup, e.readableMessage) }
+                        .onFailure { Logs.w(it) }
                     false
                 } finally {
-                    GroupManager.cleanupDanglingRouterMembers()
+                    withContext(NonCancellable) {
+                        runCatching { finishUpdate(proxyGroup) }.onFailure { Logs.w(it) }
+                    }
                 }
             }
         }

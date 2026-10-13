@@ -5,6 +5,10 @@ import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.SubscriptionFilterMode
 import io.nekohasekai.sagernet.database.*
 import io.nekohasekai.sagernet.fmt.AbstractBean
+import io.nekohasekai.sagernet.fmt.KryoConverters
+import io.nekohasekai.sagernet.SagerNet
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import io.nekohasekai.sagernet.fmt.http.HttpBean
 import io.nekohasekai.sagernet.fmt.hysteria.HysteriaBean
 import io.nekohasekai.sagernet.fmt.hysteria.parseHysteria1Json
@@ -49,17 +53,32 @@ object RawUpdater : GroupUpdater() {
         byUser: Boolean
     ) {
 
+        val dir = SagerNet.application.filesDir
+        val groupBeforeFetch = KryoConverters.serialize(proxyGroup)
+        val generation = RestoreCoordinator.withSubscriptionWrite(dir) { epoch ->
+            val current = SagerDatabase.groupDao.getById(proxyGroup.id)
+            if (current == null || !groupBeforeFetch.contentEquals(KryoConverters.serialize(current))) {
+                throw RestoreCoordinator.SubscriptionWriteRejected("Subscription group changed before download")
+            }
+            epoch
+        }
+
         val link = subscription.link
         var proxies: List<AbstractBean>
         if (link.startsWith("content://")) {
-            val contentText = app.contentResolver.openInputStream(link.toUri())?.use {
-                ImportLimits.readBytes(it, ImportLimits.SUBSCRIPTION_BYTES).toString(Charsets.UTF_8)
+            val contentText = runCatching {
+                app.contentResolver.openInputStream(link.toUri())
+                    ?.use { ImportLimits.readBytes(it, ImportLimits.SUBSCRIPTION_BYTES).toString(Charsets.UTF_8) }
+            }.getOrElse { e ->
+                Logs.w(e)
+                throw java.io.IOException("Unable to read subscription content URI", e)
             }
 
             proxies = contentText?.let { parseRaw(contentText) }
                 ?: error(app.getString(R.string.no_proxies_found_in_subscription))
         } else {
-
+            // Explicit HTTP subscription URLs use libcore's native client; platform
+            // cleartext permission stays disabled for every other app network call.
             val response = Libcore.newHttpClient().apply {
                 trySocks5(
                     DataStore.mixedPort,
@@ -78,6 +97,9 @@ object RawUpdater : GroupUpdater() {
                 setUserAgent(subscription.customUserAgent.takeIf { it.isNotBlank() } ?: USER_AGENT)
             }.execute()
             val content = Util.getStringBox(response.getContentStringLimited(ImportLimits.SUBSCRIPTION_BYTES.toLong()))
+            if (content.isBlank()) {
+                throw java.io.IOException("Subscription response body is empty")
+            }
             proxies = parseRaw(content)
                 ?: error(app.getString(R.string.no_proxies_found))
 
@@ -128,7 +150,6 @@ object RawUpdater : GroupUpdater() {
             Logs.d({ "After filter (mode=$filterMode): ${proxies.size}" })
         }
 
-        val exists = SagerDatabase.proxyDao.getByGroup(proxyGroup.id)
         val duplicate = ArrayList<String>()
         if (subscription.deduplication) {
             Logs.d({ "Before deduplication: ${proxies.size}" })
@@ -169,80 +190,100 @@ object RawUpdater : GroupUpdater() {
 
         Logs.d({ "Unique profiles: ${nameMap.size}" })
 
-        val toDelete = ArrayList<ProxyEntity>()
-        val toReplace = exists.mapNotNull { entity ->
-            val name = entity.displayName()
-            if (nameMap.contains(name)) name to entity else let {
-                toDelete.add(entity)
-                null
-            }
-        }.toMap()
-
-        Logs.d({ "toDelete profiles: ${toDelete.size}" })
-        Logs.d({ "toReplace profiles: ${toReplace.size}" })
-
-        val toUpdate = ArrayList<ProxyEntity>()
         val added = mutableListOf<String>()
         val updated = mutableMapOf<String, String>()
-        val deleted = toDelete.map { it.displayName() }
+        var deleted: List<String> = emptyList()
+        var changed = 0
+        RestoreCoordinator.withSubscriptionWrite(dir, generation) {
+            coroutineContext.ensureActive()
+            val routerSnapshot = GroupManager.snapshotRouterMembers()
+            withCurrentSubscriptionProfiles(SagerDatabase.instance, proxyGroup.id, groupBeforeFetch) { exists ->
+                val toDelete = ArrayList<ProxyEntity>()
+                val toReplace = exists.mapNotNull { entity ->
+                    val name = entity.displayName()
+                    if (nameMap.contains(name)) name to entity else let {
+                        toDelete.add(entity)
+                        null
+                    }
+                }.toMap()
 
-        var userOrder = 1L
-        var changed = toDelete.size
-        for ((name, bean) in nameMap.entries) {
-            if (toReplace.contains(name)) {
-                val entity = toReplace[name]!!
-                val existsBean = entity.requireBean()
-                val existingStableId = entity.uuid
-                // 更新订阅，保留自定义覆写设置
-                bean.customOutboundJson = existsBean.customOutboundJson
-                bean.customConfigJson = existsBean.customConfigJson
-                entity.uuid = stableIds[bean] ?: bean.routerStableIdentity()
-                when {
-                    existsBean != bean -> {
+                Logs.d({ "toDelete profiles: ${toDelete.size}" })
+                Logs.d({ "toReplace profiles: ${toReplace.size}" })
+
+                val toUpdate = ArrayList<ProxyEntity>()
+                deleted = toDelete.map { it.displayName() }
+
+                var userOrder = 1L
+                changed = toDelete.size
+                val toInsert = ArrayList<ProxyEntity>()
+                for ((name, bean) in nameMap.entries) {
+                    if (toReplace.contains(name)) {
+                        val entity = toReplace[name]!!
+                        val existsBean = entity.requireBean()
+                        val existingStableId = entity.uuid
+                        // 更新订阅，保留自定义覆写设置
+                        bean.customOutboundJson = existsBean.customOutboundJson
+                        bean.customConfigJson = existsBean.customConfigJson
+                        entity.uuid = stableIds[bean] ?: bean.routerStableIdentity()
+                        when {
+                            existsBean != bean -> {
+                                changed++
+                                entity.putBean(bean)
+                                entity.userOrder = userOrder
+                                toUpdate.add(entity)
+                                updated[entity.displayName()] = name
+
+                                Logs.d({ "Updated profile: $name" })
+                            }
+
+                            entity.userOrder != userOrder || existingStableId != entity.uuid -> {
+                                entity.putBean(bean)
+                                toUpdate.add(entity)
+                                entity.userOrder = userOrder
+
+                                Logs.d({ "Reordered profile: $name" })
+                            }
+
+                            else -> {
+                                Logs.d({ "Ignored profile: $name" })
+                            }
+                        }
+                    } else {
                         changed++
-                        entity.putBean(bean)
-                        toUpdate.add(entity)
-                        updated[entity.displayName()] = name
-
-                        Logs.d({ "Updated profile: $name" })
+                        toInsert.add(
+                            ProxyEntity(
+                                groupId = proxyGroup.id, userOrder = userOrder
+                            ).apply {
+                                putBean(bean)
+                                uuid = stableIds[bean] ?: bean.routerStableIdentity()
+                            }
+                        )
+                        added.add(name)
+                        Logs.d({ "Inserted profile: $name" })
                     }
+                    userOrder++
+                }
 
-                    entity.userOrder != userOrder || existingStableId != entity.uuid -> {
-                        entity.putBean(bean)
-                        toUpdate.add(entity)
-                        entity.userOrder = userOrder
-
-                        Logs.d({ "Reordered profile: $name" })
-                    }
-
-                    else -> {
-                        Logs.d({ "Ignored profile: $name" })
+                if (toInsert.isNotEmpty()) {
+                    SagerDatabase.proxyDao.insert(toInsert)
+                }
+                if (toUpdate.isNotEmpty()) {
+                    SagerDatabase.proxyDao.updateProxy(toUpdate).also {
+                        Logs.d({ "Updated profiles: $it" })
                     }
                 }
-            } else {
-                changed++
-                SagerDatabase.proxyDao.addProxy(
-                    ProxyEntity(
-                        groupId = proxyGroup.id, userOrder = userOrder
-                    ).apply {
-                        putBean(bean)
-                        uuid = stableIds[bean] ?: bean.routerStableIdentity()
-                    })
-                added.add(name)
-                Logs.d({ "Inserted profile: $name" })
+                toDelete.forEach { proxy ->
+                    SagerDatabase.routerMemberDao.deleteByProxy(proxy.id)
+                }
+                if (toDelete.isNotEmpty()) {
+                    SagerDatabase.proxyDao.deleteProxy(toDelete).also {
+                        Logs.d({ "Deleted profiles: $it" })
+                    }
+                }
+                subscription.lastUpdated = (System.currentTimeMillis() / 1000).toInt()
+                SagerDatabase.groupDao.updateGroup(proxyGroup)
             }
-            userOrder++
-        }
-
-        SagerDatabase.proxyDao.updateProxy(toUpdate).also {
-            Logs.d({ "Updated profiles: $it" })
-        }
-
-        toDelete.forEach { proxy ->
-            SagerDatabase.routerMemberDao.deleteByProxy(proxy.id)
-        }
-        SagerDatabase.proxyDao.deleteProxy(toDelete).also {
-            Logs.d({ "Deleted profiles: $it" })
+            GroupManager.reconcileRouterMembers(routerSnapshot)
         }
 
         val existCount = SagerDatabase.proxyDao.countByGroup(proxyGroup.id).toInt()
@@ -250,10 +291,6 @@ object RawUpdater : GroupUpdater() {
         if (existCount != proxies.size) {
             Logs.e("Exist profiles: $existCount, new profiles: ${proxies.size}")
         }
-
-        subscription.lastUpdated = (System.currentTimeMillis() / 1000).toInt()
-        SagerDatabase.groupDao.updateGroup(proxyGroup)
-        finishUpdate(proxyGroup)
 
         userInterface?.onUpdateSuccess(
             proxyGroup, changed, added, updated, deleted, duplicate, byUser
@@ -274,6 +311,7 @@ object RawUpdater : GroupUpdater() {
         return title
     }
 
+    @Suppress("UNCHECKED_CAST")
     suspend fun parseRaw(text: String, fileName: String = ""): List<AbstractBean>? {
         ImportLimits.checkSubscription(text)
         return parseRawUnchecked(text, fileName)?.also {
@@ -281,7 +319,6 @@ object RawUpdater : GroupUpdater() {
         }
     }
 
-    @Suppress("UNCHECKED_CAST")
     private suspend fun parseRawUnchecked(text: String, fileName: String): List<AbstractBean>? {
 
         val proxies = mutableListOf<AbstractBean>()
@@ -702,57 +739,63 @@ object RawUpdater : GroupUpdater() {
                         }
 
                         "wireguard" -> {
-                            val peers = proxy["peers"] as? List<Map<String, Any?>>
-                            val configToUse = peers?.firstOrNull() ?: proxy
-
                             val bean = WireGuardBean().apply {
                                 name = proxy["name"].toString()
 
-                                for ((key, value) in configToUse) {
-                                    when (key.replace("_", "-")) {
-                                        "server" -> serverAddress = value.toString()
-                                        "port" -> serverPort = value.toString().toIntOrNull() ?: 0
-                                        "mtu" -> mtu = value.toString().toIntOrNull() ?: 0
-                                        "ip" -> {
-                                            val ipValue = value.toString()
-                                            localAddress = if (!ipValue.contains("/")) {
-                                                "$ipValue/32"
-                                            } else {
-                                                ipValue
-                                            }
-                                        }
-                                        "ipv6" -> {
-                                            val ipv6Value = value.toString()
-                                            val processedIPv6Value = if (!ipv6Value.contains("/")) {
-                                                "$ipv6Value/128"
-                                            } else {
-                                                ipv6Value
-                                            }
-                                            if (localAddress.isNullOrEmpty()) {
-                                                localAddress = processedIPv6Value
-                                            } else {
-                                                localAddress += "\n$processedIPv6Value"
-                                            }
-                                        }
-                                        "private-key" -> privateKey = value.toString()
-                                        "public-key" -> peerPublicKey = value.toString()
-                                        "pre-shared-key", "preshared-key" -> peerPreSharedKey = value.toString()
-                                        "reserved" -> {
-                                            val reservedValue = value
-                                            when (reservedValue) {
-                                                is List<*> -> {
-                                                    if (reservedValue.size == 1) {
-                                                        reserved = reservedValue[0].toString().replace("[\\[\\] ]".toRegex(), "")
-                                                    } else {
-                                                        reserved = reservedValue.joinToString("\n") { it.toString() }
-                                                    }
+                                fun applyConfigMap(map: Map<String, Any?>) {
+                                    for ((key, value) in map) {
+                                        when (key.replace("_", "-")) {
+                                            "server" -> serverAddress = value.toString()
+                                            "port" -> serverPort = value.toString().toIntOrNull() ?: 0
+                                            "mtu" -> mtu = value.toString().toIntOrNull() ?: 0
+                                            "ip" -> {
+                                                val ipValue = value.toString()
+                                                localAddress = if (!ipValue.contains("/")) {
+                                                    "$ipValue/32"
+                                                } else {
+                                                    ipValue
                                                 }
-                                                else -> {
-                                                    reserved = reservedValue.toString().replace("[\\[\\] ]".toRegex(), "")
+                                            }
+                                            "ipv6" -> {
+                                                val ipv6Value = value.toString()
+                                                val processedIPv6Value = if (!ipv6Value.contains("/")) {
+                                                    "$ipv6Value/128"
+                                                } else {
+                                                    ipv6Value
+                                                }
+                                                if (localAddress.isNullOrEmpty()) {
+                                                    localAddress = processedIPv6Value
+                                                } else {
+                                                    localAddress += "\n$processedIPv6Value"
+                                                }
+                                            }
+                                            "private-key" -> privateKey = value.toString()
+                                            "public-key" -> peerPublicKey = value.toString()
+                                            "pre-shared-key", "preshared-key" -> peerPreSharedKey = value.toString()
+                                            "reserved" -> {
+                                                val reservedValue = value
+                                                when (reservedValue) {
+                                                    is List<*> -> {
+                                                        if (reservedValue.size == 1) {
+                                                            reserved = reservedValue[0].toString().replace("[\\[\\] ]".toRegex(), "")
+                                                        } else {
+                                                            reserved = reservedValue.joinToString("\n") { it.toString() }
+                                                        }
+                                                    }
+                                                    else -> {
+                                                        reserved = reservedValue.toString().replace("[\\[\\] ]".toRegex(), "")
+                                                    }
                                                 }
                                             }
                                         }
                                     }
+                                }
+
+                                applyConfigMap(proxy)
+                                val peers = proxy["peers"] as? List<Map<String, Any?>>
+                                val firstPeer = peers?.firstOrNull()
+                                if (firstPeer != null) {
+                                    applyConfigMap(firstPeer)
                                 }
                             }
                             proxies.add(bean)
@@ -889,10 +932,10 @@ object RawUpdater : GroupUpdater() {
                                 }
                             }
                             if (ip.isNotBlank()) {
-                                bean.serverAddress = ip
                                 if (bean.sni.isNullOrBlank() && !bean.serverAddress.isNullOrBlank() && !bean.serverAddress.isIpAddress()) {
                                     bean.sni = bean.serverAddress
                                 }
+                                bean.serverAddress = ip
                             }
                             proxies.add(bean)
                         }

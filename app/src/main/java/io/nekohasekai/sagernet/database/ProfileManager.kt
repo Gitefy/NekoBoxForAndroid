@@ -91,6 +91,11 @@ object ProfileManager {
         return profile
     }
 
+    suspend fun updateTestResult(profile: ProxyEntity) {
+        SagerDatabase.proxyDao.updateTestResult(profile.id, profile.status, profile.ping, profile.error)
+        iterator { onUpdated(profile, true) }
+    }
+
     suspend fun updateProfile(profile: ProxyEntity) {
         SagerDatabase.proxyDao.updateProxy(profile)
         iterator { onUpdated(profile, false) }

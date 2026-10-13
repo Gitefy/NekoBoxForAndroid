@@ -42,6 +42,37 @@ class RequestRuleFactoryTest {
     }
 
     @Test
+    fun packageRequestPreservesAllDistinctTrimmedPackages() {
+        val draft = RequestRuleFactory.build(
+            match = RequestRuleFactory.MatchKind.APP,
+            outboundKind = RequestRuleFactory.OutboundKind.PROXY,
+            domain = "",
+            packageName = " com.example.one, ,com.example.two,com.example.one ",
+            destinationIp = "",
+            routerStableTag = "",
+            routersByStableTag = emptyMap(),
+        )!!
+
+        assertEquals(setOf("com.example.one", "com.example.two"), draft.packages)
+        assertEquals("com.example.one, com.example.two", draft.name)
+    }
+
+    @Test
+    fun packageRequestRejectsAnEmptyPackageList() {
+        val draft = RequestRuleFactory.build(
+            match = RequestRuleFactory.MatchKind.APP,
+            outboundKind = RequestRuleFactory.OutboundKind.PROXY,
+            domain = "",
+            packageName = " , , ",
+            destinationIp = "",
+            routerStableTag = "",
+            routersByStableTag = emptyMap(),
+        )
+
+        assertEquals(null, draft)
+    }
+
+    @Test
     fun ipRequestCreatesIpRuleShape() {
         val rule = RequestRuleFactory.build(
             match = RequestRuleFactory.MatchKind.DEST_IP,

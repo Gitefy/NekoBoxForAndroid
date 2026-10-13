@@ -2,8 +2,10 @@ package io.nekohasekai.sagernet.bg.proto
 
 import android.os.SystemClock
 import io.nekohasekai.sagernet.SagerNet
+import io.nekohasekai.sagernet.bg.runStopCleanup
 import io.nekohasekai.sagernet.bg.AbstractInstance
 import io.nekohasekai.sagernet.bg.GuardedProcessPool
+import io.nekohasekai.sagernet.bg.runStopCleanup
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.fmt.ConfigBuildResult
@@ -18,15 +20,17 @@ import io.nekohasekai.sagernet.fmt.trojan_go.TrojanGoBean
 import io.nekohasekai.sagernet.fmt.trojan_go.buildTrojanGoConfig
 import io.nekohasekai.sagernet.ktx.*
 import io.nekohasekai.sagernet.plugin.PluginManager
+import io.nekohasekai.sagernet.utils.DefaultNetworkListener
 import io.nekohasekai.sagernet.route.RouterRuntimeSelection
 import kotlinx.coroutines.*
 import libcore.BoxInstance
 import libcore.Libcore
 import moe.matsuri.nb4a.net.LocalResolverImpl
 import java.io.File
+import java.io.IOException
 
 abstract class BoxInstance(
-    val profile: ProxyEntity
+    val profile: ProxyEntity,
 ) : AbstractInstance {
 
     lateinit var config: ConfigBuildResult
@@ -39,6 +43,11 @@ abstract class BoxInstance(
     private var cacheFiles = ArrayList<File>()
     fun isInitialized(): Boolean {
         return ::config.isInitialized && ::box.isInitialized
+    }
+
+    fun onDeviceIdleChanged(idle: Boolean) {
+        if (!isInitialized()) return
+        if (idle) box.sleep() else box.wake()
     }
 
     val groupSelectionFallbackCount = java.util.concurrent.atomic.AtomicInteger(0)
@@ -96,22 +105,30 @@ abstract class BoxInstance(
 
                     is HysteriaBean -> {
                         initPlugin("hysteria-plugin")
+                        val tmpDir = File(app.cacheDir, "tmpcfg").apply { mkdirs() }
                         pluginConfigs[port] = profile.type to bean.buildHysteria1Config(port) {
                             File(
-                                app.cacheDir, "hysteria_" + SystemClock.elapsedRealtime() + ".ca"
+                                tmpDir, "hysteria_" + SystemClock.elapsedRealtime() + ".ca"
                             ).apply {
                                 parentFile?.mkdirs()
                                 cacheFiles.add(this)
                             }
                         }
                     }
+
                 }
             }
+        }
+        DefaultNetworkListener.start(this) { SagerNet.underlyingNetwork = it }
+        // Await the real non-VPN interface before sing-box starts its network manager.
+        if (withTimeoutOrNull(3_000) { DefaultNetworkListener.get() } == null) {
+            Logs.w("Awaiting default network timed out, proceeding with fallback")
+            DefaultNetworkListener.findUnderlyingNetwork()?.let { SagerNet.underlyingNetwork = it }
         }
         loadConfig()
     }
 
-    override fun launch() {
+    override suspend fun launch() {
         // TODO move, this is not box
         val cacheDir = File(SagerNet.application.cacheDir, "tmpcfg")
         cacheDir.mkdirs()
@@ -121,7 +138,6 @@ abstract class BoxInstance(
                 val bean = profile.requireBean()
                 val needChain = index != chain.size - 1
                 val (profileType, config) = pluginConfigs[port] ?: (0 to "")
-
                 when {
                     externalInstances.containsKey(port) -> {
                         externalInstances[port]!!.launch()
@@ -224,21 +240,21 @@ abstract class BoxInstance(
         box.start()
     }
 
-    @Suppress("EXPERIMENTAL_API_USAGE")
     override fun close() {
-        for (instance in externalInstances.values) {
-            runCatching {
-                instance.close()
-            }
+        val files = cacheFiles.toList()
+        cacheFiles.clear()
+        val failure = runBlocking(Dispatchers.IO) {
+            runStopCleanup(
+                *externalInstances.values.map { instance -> suspend { instance.close() } }.toTypedArray(),
+                { if (::processes.isInitialized) processes.closeAndJoin() },
+                *files.map { file -> suspend {
+                    if (file.exists() && !file.delete()) throw IOException("Cannot delete runtime file: ${file.name}")
+                } }.toTypedArray(),
+                { if (::box.isInitialized) box.close() },
+                { DefaultNetworkListener.stop(this@BoxInstance) },
+            )
         }
-
-        cacheFiles.removeAll { it.delete(); true }
-
-        if (::processes.isInitialized) processes.close(GlobalScope + Dispatchers.IO)
-
-        if (::box.isInitialized) {
-            box.close()
-        }
+        failure?.let { throw it }
     }
 
 }

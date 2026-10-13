@@ -32,5 +32,6 @@ func (w *boxPlatformInterfaceWrapper) OpenInterface(options *tun.Options, platfo
 	}
 	//
 	options.FileDescriptor = int(tunFd)
+	w.myInterfaceAddresses = tunAddressesFromOptions(options)
 	return tun.New(*options)
 }

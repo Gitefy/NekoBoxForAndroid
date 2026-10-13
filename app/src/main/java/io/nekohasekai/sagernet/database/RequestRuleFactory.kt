@@ -24,6 +24,9 @@ object RequestRuleFactory {
     enum class MatchKind { EXACT_DOMAIN, DOMAIN_SUFFIX, APP, DEST_IP }
     enum class OutboundKind { DIRECT, REJECT, PROXY, ROUTER }
 
+    fun parsePackageNames(value: String): List<String> =
+        value.split(',').map(String::trim).filter(String::isNotEmpty).distinct()
+
     fun build(
         match: MatchKind,
         outboundKind: OutboundKind,
@@ -42,9 +45,12 @@ object RequestRuleFactory {
         val routerId = if (outboundKind == OutboundKind.ROUTER) {
             routersByStableTag[routerStableTag] ?: return null
         } else 0L
+        val packages = if (match == MatchKind.APP) {
+            parsePackageNames(packageName).takeIf { it.isNotEmpty() } ?: return null
+        } else emptyList()
         val name = when (match) {
             MatchKind.EXACT_DOMAIN, MatchKind.DOMAIN_SUFFIX -> domain.ifBlank { return null }
-            MatchKind.APP -> packageName.ifBlank { return null }
+            MatchKind.APP -> packages.joinToString(", ")
             MatchKind.DEST_IP -> destinationIp.ifBlank { return null }
         }
         return RequestRuleDraft(
@@ -55,7 +61,7 @@ object RequestRuleFactory {
                 else -> ""
             },
             ip = if (match == MatchKind.DEST_IP) destinationIp else "",
-            packages = if (match == MatchKind.APP) setOf(packageName) else emptySet(),
+            packages = packages.toSet(),
             outbound = outbound,
             routerGroupId = routerId,
         )

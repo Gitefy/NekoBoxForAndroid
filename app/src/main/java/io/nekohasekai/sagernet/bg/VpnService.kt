@@ -62,10 +62,17 @@ class VpnService : BaseVpnService(),
     }
 
     @Suppress("EXPERIMENTAL_API_USAGE")
-    override fun killProcesses() {
-        conn?.close()
-        conn = null
-        super.killProcesses()
+    override suspend fun killProcesses() {
+        try {
+            conn?.close()
+        } finally {
+            conn = null
+            try {
+                super.killProcesses()
+            } finally {
+                DataStore.vpnService = null
+            }
+        }
     }
 
     override fun onBind(intent: Intent) = when (intent.action) {
@@ -213,15 +220,20 @@ class VpnService : BaseVpnService(),
     }
 
     fun updateUnderlyingNetwork(builder: Builder? = null) {
-        SagerNet.underlyingNetwork?.let {
-            builder?.setUnderlyingNetworks(arrayOf(SagerNet.underlyingNetwork))
-                ?: setUnderlyingNetworks(arrayOf(SagerNet.underlyingNetwork))
+        val net = SagerNet.underlyingNetwork
+        val networks = if (net != null) arrayOf(net) else null
+        if (builder != null) {
+            builder.setUnderlyingNetworks(networks)
+        } else {
+            setUnderlyingNetworks(networks)
         }
     }
 
     override fun onRevoke() = stopRunner()
 
     override fun onDestroy() {
+        releaseWakeLock()
+        DataStore.vpnService = null
         DataStore.vpnService = null
         super.onDestroy()
         data.binder.close()

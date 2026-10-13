@@ -236,10 +236,13 @@ fun buildConfig(
 fun captureConfigSnapshot(
     proxy: ProxyEntity, forTest: Boolean = false, forExport: Boolean = false
 ): CapturedConfig {
-    val settings = ConfigSnapshot.fromFrozenRows(
+    var settings = ConfigSnapshot.fromFrozenRows(
         DataStore.configurationStore.cachedAll(),
         mixedPortFallback = 2080 + Binder.getCallingUserHandle().hashCode(),
     )
+    if (!forTest && !forExport && settings.enableClashAPI) {
+        settings = settings.copy(clashApiSecret = DataStore.ensureClashApiSecret())
+    }
     lateinit var captured: CapturedConfig
     SagerDatabase.instance.runInTransaction {
         val groups = HashMap<Long, ProxyGroup?>()
@@ -463,15 +466,17 @@ fun compileConfig(captured: CapturedConfig): ConfigBuildResult {
                 cache_file = CacheFile().apply {
                     enabled = true
                     path = "../cache/cache.db"
-                    // if (snap.enableClashAPI) {
+                    // if (snap.enableClashAPI && !forExport) {
                     store_fakeip = true
                     // }
                 }
                 
-                if (snap.enableClashAPI) {
+                if (snap.enableClashAPI && !forExport) {
                     clash_api = ClashAPIOptions().apply {
                         external_controller = "127.0.0.1:9090"
                         external_ui = "../files/yacd"
+                    require(snap.clashApiSecret.isNotBlank()) { "Clash API credential was not captured" }
+                    secret = snap.clashApiSecret
                     }
                 }
             }

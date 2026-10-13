@@ -28,6 +28,7 @@ class ProxyService : Service(), BaseService.Interface {
         super<BaseService.Interface>.onStartCommand(intent, flags, startId)
 
     override fun onDestroy() {
+        releaseWakeLock()
         data.binder.close()
         super.onDestroy()
     }

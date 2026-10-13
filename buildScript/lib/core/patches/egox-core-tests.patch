@@ -1,3 +1,59 @@
+diff --git a/common/trafficcontrol/egox_metadata_test.go b/common/trafficcontrol/egox_metadata_test.go
+new file mode 100644
+index 0000000..6bca2a7
+--- /dev/null
++++ b/common/trafficcontrol/egox_metadata_test.go
+@@ -0,0 +1,50 @@
++package trafficcontrol
++
++import (
++	"runtime"
++	"sync"
++	"sync/atomic"
++	"testing"
++
++	"github.com/gofrs/uuid/v5"
++)
++
++type snapshotTracker struct{ metadata TrackerMetadata }
++
++func (t *snapshotTracker) Metadata() *TrackerMetadata { return &t.metadata }
++func (t *snapshotTracker) Close() error               { return nil }
++func TestEgoXClosedSnapshotDoesNotMutateActiveMetadata(t *testing.T) {
++	m := NewManager()
++	tracker := &snapshotTracker{metadata: TrackerMetadata{ID: uuid.Must(uuid.NewV4()), Upload: new(atomic.Int64), Download: new(atomic.Int64)}}
++	m.join(tracker)
++	snapshot := m.Connections()[0]
++	done := make(chan struct{})
++	var wg sync.WaitGroup
++	wg.Add(1)
++	go func() {
++		defer wg.Done()
++		for {
++			select {
++			case <-done:
++				return
++			default:
++			}
++			_ = snapshot.ClosedAt.IsZero()
++			runtime.Gosched()
++		}
++	}()
++	m.leave(tracker)
++	close(done)
++	wg.Wait()
++	if !snapshot.ClosedAt.IsZero() {
++		t.Fatal("closing a connection changed previously published metadata")
++	}
++	closed := m.ClosedConnections()
++	if len(closed) != 1 || closed[0].ClosedAt.IsZero() {
++		t.Fatal("closed snapshot lacks its closure timestamp")
++	}
++	m.leave(tracker)
++	if len(m.ClosedConnections()) != 1 {
++		t.Fatal("duplicate close created another history entry")
++	}
++}
 diff --git a/experimental/cachefile/egox_fakeip_test.go b/experimental/cachefile/egox_fakeip_test.go
 new file mode 100644
 index 0000000..b9b33d8
@@ -160,5 +216,132 @@ index 0000000..b9b33d8
 +				}
 +			}
 +		})
++	}
++}
+diff --git a/protocol/group/egox_failover_test.go b/protocol/group/egox_failover_test.go
+new file mode 100644
+index 0000000..53dfacd
+--- /dev/null
++++ b/protocol/group/egox_failover_test.go
+@@ -0,0 +1,68 @@
++package group
++
++import (
++	"context"
++	"errors"
++	"net"
++	"testing"
++
++	"github.com/sagernet/sing-box/adapter"
++	"github.com/sagernet/sing-box/common/interrupt"
++	"github.com/sagernet/sing-box/common/urltest"
++	"github.com/sagernet/sing-box/log"
++	M "github.com/sagernet/sing/common/metadata"
++	N "github.com/sagernet/sing/common/network"
++)
++
++type failoverOutbound struct {
++	adapter.Outbound
++	tag string
++}
++
++func (o *failoverOutbound) Tag() string       { return o.tag }
++func (o *failoverOutbound) Network() []string { return []string{N.NetworkTCP, N.NetworkUDP} }
++func (o *failoverOutbound) DialContext(ctx context.Context, _ string, _ M.Socksaddr) (net.Conn, error) {
++	if ctx.Err() != nil {
++		return nil, ctx.Err()
++	}
++	return nil, errors.New("node unreachable")
++}
++func (o *failoverOutbound) ListenPacket(ctx context.Context, _ M.Socksaddr) (net.PacketConn, error) {
++	if ctx.Err() != nil {
++		return nil, ctx.Err()
++	}
++	return nil, errors.New("node unreachable")
++}
++func TestEgoXFailedNodeReselection(t *testing.T) {
++	for _, network := range []string{N.NetworkTCP, N.NetworkUDP} {
++		for _, cancelled := range []bool{false, true} {
++			a, b := &failoverOutbound{tag: "a"}, &failoverOutbound{tag: "b"}
++			history := urltest.NewHistoryStorage()
++			history.StoreURLTestHistory("a", &adapter.URLTestHistory{Delay: 10})
++			history.StoreURLTestHistory("b", &adapter.URLTestHistory{Delay: 20})
++			g := &URLTestGroup{history: history, outbounds: []adapter.Outbound{a, b}, selectedOutboundTCP: a, selectedOutboundUDP: a, interruptGroup: interrupt.NewGroup()}
++			s := &URLTest{group: g, logger: log.NewNOPFactory().NewLogger("test")}
++			ctx, cancel := context.WithCancel(context.Background())
++			if cancelled {
++				cancel()
++			}
++			if network == N.NetworkTCP {
++				_, _ = s.DialContext(ctx, network, M.Socksaddr{})
++			} else {
++				_, _ = s.ListenPacket(ctx, M.Socksaddr{})
++			}
++			cancel()
++			selected := g.selectedOutboundTCP
++			if network == N.NetworkUDP {
++				selected = g.selectedOutboundUDP
++			}
++			if cancelled {
++				if selected != a || history.LoadURLTestHistory("a") == nil {
++					t.Fatal("cancelled caller evicted healthy selection")
++				}
++			} else if selected != b || history.LoadURLTestHistory("a") != nil {
++				t.Fatalf("failed %s node remains selected", network)
++			}
++		}
++	}
++}
+diff --git a/route/udp_sniff_packet_test.go b/route/udp_sniff_packet_test.go
+new file mode 100644
+index 0000000..e66af0b
+--- /dev/null
++++ b/route/udp_sniff_packet_test.go
+@@ -0,0 +1,47 @@
++package route
++
++import (
++	"bytes"
++	"context"
++	"testing"
++	"time"
++
++	"github.com/sagernet/sing-box/adapter"
++	"github.com/sagernet/sing-box/common/sniff"
++	"github.com/sagernet/sing-box/log"
++	R "github.com/sagernet/sing-box/route/rule"
++	"github.com/sagernet/sing/common/buf"
++	M "github.com/sagernet/sing/common/metadata"
++	N "github.com/sagernet/sing/common/network"
++)
++
++type udpSniffDatagram struct {
++	N.PacketConn
++	payload []byte
++}
++
++func (c *udpSniffDatagram) ReadPacket(buffer *buf.Buffer) (M.Socksaddr, error) {
++	_, err := buffer.Write(c.payload)
++	return M.ParseSocksaddr("127.0.0.1:4444"), err
++}
++
++func (*udpSniffDatagram) SetReadDeadline(time.Time) error { return nil }
++
++func TestUDPSniffPreservesFullDatagram(t *testing.T) {
++	for _, size := range []int{16384, 65507} {
++		payload := bytes.Repeat([]byte{0x5a}, size)
++		r := &Router{logger: log.NewNOPFactory().NewLogger("test")}
++		metadata := &adapter.InboundContext{Network: N.NetworkUDP, Destination: M.ParseSocksaddr("127.0.0.1:4444")}
++		action := &R.RuleActionSniff{PacketSniffers: []sniff.PacketSniffer{sniff.DomainNameQuery}}
++		_, packets, err := r.actionSniff(context.Background(), metadata, action, nil, &udpSniffDatagram{payload: payload}, nil, nil)
++		if err != nil || len(packets) != 1 {
++			t.Fatalf("sniff cached packet: count %d, error %v", len(packets), err)
++		}
++		got := packets[0].Buffer.Len()
++		equal := bytes.Equal(packets[0].Buffer.Bytes(), payload)
++		N.ReleaseMultiPacketBuffer(packets)
++		if !equal {
++			t.Fatalf("sniff truncated packet: got %d bytes, want %d", got, size)
++		}
 +	}
 +}

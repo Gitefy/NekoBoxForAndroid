@@ -32,6 +32,7 @@ class RestoreCoordinatorTest {
         val dir = dir()
         val cfg = mutableListOf("old-cfg")
         val sager = mutableListOf("old-sager")
+        var first = true
         val out = RestoreCoordinator.commit(
             dir = dir,
             incomingConfig = listOf(row("k", "new")),
@@ -39,7 +40,12 @@ class RestoreCoordinatorTest {
             capturePreviousSager = { previousSagerJson.toByteArray() },
             restoreConfig = { rows ->
                 cfg[0] = rows.first().string ?: ""
-                false
+                if (first) {
+                    first = false
+                    false
+                } else {
+                    true
+                }
             },
             restoreSagerIncoming = { sager[0] = "new-sager"; true },
             restoreSagerPrevious = { bytes ->
@@ -206,7 +212,7 @@ class RestoreCoordinatorTest {
     @Test
     fun emptyConfigSnapshotMustNotWipeLiveSettings() {
         val dir = dir()
-        RestoreCoordinator.snapshotFile(dir).writeBytes(RestoreCoordinator.encodeRows(emptyList()))
+        RestoreCoordinator.snapshotFile(dir).writeBytes(ByteArray(0))
         RestoreCoordinator.sagerSnapshotFile(dir).writeBytes(ByteArray(0))
         RestoreCoordinator.journalFile(dir).writeText(RestoreCoordinator.Phase.PREPARED.name)
         var cfg = "LIVE"
@@ -218,18 +224,78 @@ class RestoreCoordinatorTest {
                 { bytes -> sager = String(bytes); true },
             )
         }
-        assertTrue(recovered.success)
+        assertFalse(recovered.success)
         assertEquals("LIVE", cfg)
         assertEquals("LIVE_SAGER", sager)
-        assertFalse(RestoreCoordinator.journalFile(dir).exists())
+        assertTrue(RestoreCoordinator.journalFile(dir).exists())
     }
 
     @Test
-    fun emptySagerJsonMustNotCountAsUsableSnapshot() {
+    fun validEmptySagerJsonIsUsableButMalformedSnapshotsAreNot() {
         val empty = """{"version":1,"groups":[],"profiles":[],"routerGroups":[],"rules":[]}"""
-        assertFalse(RestoreCoordinator.hasUsableSagerSnapshot(empty.toByteArray()))
+        assertTrue(RestoreCoordinator.hasUsableSagerSnapshot(empty.toByteArray()))
         assertFalse(RestoreCoordinator.hasUsableSagerSnapshot(ByteArray(0)))
+        assertFalse(RestoreCoordinator.hasUsableSagerSnapshot("{}".toByteArray()))
+        assertFalse(RestoreCoordinator.hasUsableSagerSnapshot("{\"groups\":[],\"profiles\":null,\"rules\":[]}".toByteArray()))
         val usable = """{"version":1,"groups":[{}],"profiles":[],"routerGroups":[],"rules":[]}"""
         assertTrue(RestoreCoordinator.hasUsableSagerSnapshot(usable.toByteArray()))
+    }
+    @Test fun audit2MissingSettingsSnapshotMustFailClosed() {
+        val dir = Files.createTempDirectory("audit2-missing").toFile()
+        try {
+            RestoreCoordinator.sagerSnapshotFile(dir).writeText("{\"groups\":[{}],\"profiles\":[],\"rules\":[]}")
+            RestoreCoordinator.journalFile(dir).writeText("CONFIG_COMMITTED")
+            var configCalled = false
+            var dbCalled = false
+            val out = RestoreCoordinator.recoverLocked(dir, { configCalled = true; true }, { dbCalled = true; true })
+            println("missing settings: success=${out.success}, configCalled=$configCalled, journal=${RestoreCoordinator.journalFile(dir).exists()}")
+            assertFalse("Missing old settings snapshot treated as successful rollback", out.success)
+            assertFalse(configCalled || dbCalled)
+            assertTrue(RestoreCoordinator.journalFile(dir).exists())
+            assertTrue(RestoreCoordinator.sagerSnapshotFile(dir).exists())
+        } finally { dir.deleteRecursively() }
+    }
+    @Test fun audit2MissingSagerSnapshotMustFailClosed() {
+        val dir = Files.createTempDirectory("audit2-missing-db").toFile()
+        try {
+            RestoreCoordinator.snapshotFile(dir).writeBytes(RestoreCoordinator.encodeRows(emptyList()))
+            RestoreCoordinator.journalFile(dir).writeText("CONFIG_COMMITTED")
+            var dbCalled = false
+            var configCalled = false
+            val out = RestoreCoordinator.recoverLocked(dir, { configCalled = true; true }, { dbCalled = true; true })
+            println("missing db: success=${out.success}, dbCalled=$dbCalled, journal=${RestoreCoordinator.journalFile(dir).exists()}")
+            assertFalse("Missing old database snapshot treated as successful rollback", out.success)
+            assertFalse(configCalled || dbCalled)
+            assertTrue(RestoreCoordinator.journalFile(dir).exists())
+            assertTrue(RestoreCoordinator.snapshotFile(dir).exists())
+        } finally { dir.deleteRecursively() }
+    }
+    @Test fun audit2ValidEmptySagerMustRestore() {
+        val dir = Files.createTempDirectory("audit2-empty-db").toFile()
+        try {
+            RestoreCoordinator.snapshotFile(dir).writeBytes(RestoreCoordinator.encodeRows(emptyList()))
+            RestoreCoordinator.sagerSnapshotFile(dir).writeText("{\"groups\":[],\"profiles\":[],\"routerGroups\":[],\"rules\":[]}")
+            RestoreCoordinator.journalFile(dir).writeText("CONFIG_COMMITTED")
+            var dbCalled = false
+            val out = RestoreCoordinator.recoverLocked(dir, { true }, { dbCalled = true; true })
+            println("empty db: success=${out.success}, dbCalled=$dbCalled")
+            assertTrue("Valid empty database snapshot rejected", out.success && dbCalled)
+        } finally { dir.deleteRecursively() }
+    }
+
+    @Test fun incompleteRestoreCannotBeOverwrittenByAnotherImport() {
+        val dir = dir()
+        try {
+            val old = RestoreCoordinator.encodeRows(listOf(row("k", "old")))
+            RestoreCoordinator.snapshotFile(dir).writeBytes(old)
+            RestoreCoordinator.journalFile(dir).writeText("CONFIG_COMMITTED")
+            val out = RestoreCoordinator.commit(dir, emptyList(), { error("must not capture") },
+                { error("must not capture") }, { error("must not write") },
+                { error("must not write") }, { error("must not write") })
+            assertFalse(out.success)
+            assertEquals(ApplyErrorCodes.RESTORE_FAILED, out.error)
+            assertTrue(old.contentEquals(RestoreCoordinator.snapshotFile(dir).readBytes()))
+            assertEquals("CONFIG_COMMITTED", RestoreCoordinator.journalFile(dir).readText())
+        } finally { dir.deleteRecursively() }
     }
 }

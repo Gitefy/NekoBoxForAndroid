@@ -26,7 +26,9 @@ object PackageCache {
     lateinit var installedPluginPackages: Map<String, PackageInfo>
     lateinit var installedApps: Map<String, ApplicationInfo>
     lateinit var packageMap: Map<String, Int>
-    val uidMap = HashMap<Int, HashSet<String>>()
+    @Volatile
+    var uidMap: Map<Int, List<String>> = emptyMap()
+        private set
     val loaded = Mutex(true)
     var registerd = AtomicBoolean(false)
 
@@ -116,11 +118,12 @@ object PackageCache {
         }.getOrNull() ?: return
         installedApps = installed.associateBy { it.packageName }
         packageMap = installed.associate { it.packageName to it.uid }
-        uidMap.clear()
+        val packagesByUid = HashMap<Int, MutableList<String>>()
         for (info in installed) {
             val uid = info.uid
-            uidMap.getOrPut(uid) { HashSet() }.add(info.packageName)
+            packagesByUid.getOrPut(uid) { ArrayList() }.add(info.packageName)
         }
+        uidMap = packagesByUid.mapValues { (_, packages) -> packages.sorted() }
     }
 
     operator fun get(uid: Int) = uidMap[uid]

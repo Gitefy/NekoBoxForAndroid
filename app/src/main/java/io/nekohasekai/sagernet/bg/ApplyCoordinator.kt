@@ -36,13 +36,15 @@ object ApplyCoordinator {
         pending?.generation == generation
     }
 
+    fun hasNewer(generation: Long): Boolean = commandGeneration.get() > generation
+
     fun accept(request: ApplyRequest): Pair<Long, CompletableDeferred<ApplyResult>> {
-        val generation = commandGeneration.incrementAndGet()
         val deferred = CompletableDeferred<ApplyResult>()
-        val previous = synchronized(lock) {
+        val (generation, previous) = synchronized(lock) {
+            val gen = commandGeneration.incrementAndGet()
             val old = pending
-            pending = PendingRequest(request.requestId, generation, deferred)
-            old
+            pending = PendingRequest(request.requestId, gen, deferred)
+            gen to old
         }
         previous?.deferred?.let {
             if (!it.isCompleted) {

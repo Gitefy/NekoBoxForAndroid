@@ -10,6 +10,21 @@ index a17ab63..f04f82b 100644
  	Reset() error
  }
  
+diff --git a/common/trafficcontrol/manager.go b/common/trafficcontrol/manager.go
+index 5e938cf..7708570 100644
+--- a/common/trafficcontrol/manager.go
++++ b/common/trafficcontrol/manager.go
+@@ -95,8 +95,9 @@ func (m *Manager) leave(tracker Tracker) {
+ 		m.closedConnectionsAccess.Unlock()
+ 		return
+ 	}
+-	metadata.ClosedAt = closedAt
+ 	metadataCopy := *metadata
++	// Active snapshots and NEW events share metadata; publish closure on the copy.
++	metadataCopy.ClosedAt = closedAt
+ 	if m.closedConnections.Len() >= closedConnectionsLimit {
+ 		evicted := m.closedConnections.PopFront()
+ 		m.closedUploadTotal += evicted.Upload.Load()
 diff --git a/dns/transport/fakeip/store.go b/dns/transport/fakeip/store.go
 index aa948a1..e9d8c02 100644
 --- a/dns/transport/fakeip/store.go
@@ -104,8 +119,41 @@ index ae05200..0f0f8b7 100644
  }
  
  type RouteActionResolve struct {
+diff --git a/protocol/group/urltest.go b/protocol/group/urltest.go
+index f69773e..66fb858 100644
+--- a/protocol/group/urltest.go
++++ b/protocol/group/urltest.go
+@@ -182,7 +182,7 @@ func (s *URLTest) DialContext(ctx context.Context, network string, destination M
+ 		return s.group.interruptGroup.NewConn(conn, interrupt.IsExternalConnectionFromContext(ctx)), nil
+ 	}
+ 	s.logger.ErrorContext(ctx, err)
+-	s.group.history.DeleteURLTestHistory(outbound.Tag())
++	s.invalidateFailedOutbound(ctx, outbound, network)
+ 	return nil, err
+ }
+ 
+@@ -200,10 +200,18 @@ func (s *URLTest) ListenPacket(ctx context.Context, destination M.Socksaddr) (ne
+ 		return s.group.interruptGroup.NewPacketConn(conn, interrupt.IsExternalConnectionFromContext(ctx)), nil
+ 	}
+ 	s.logger.ErrorContext(ctx, err)
+-	s.group.history.DeleteURLTestHistory(outbound.Tag())
++	s.invalidateFailedOutbound(ctx, outbound, N.NetworkUDP)
+ 	return nil, err
+ }
+ 
++func (s *URLTest) invalidateFailedOutbound(ctx context.Context, failed adapter.Outbound, network string) {
++	if ctx.Err() != nil {
++		return
++	}
++	s.group.history.DeleteURLTestHistory(RealTag(failed, network))
++	s.group.performUpdateCheck()
++}
++
+ type URLTestGroup struct {
+ 	ctx                          context.Context
+ 	outbound                     adapter.OutboundManager
 diff --git a/route/route.go b/route/route.go
-index 24befe3..2441680 100644
+index 24befe3..728816b 100644
 --- a/route/route.go
 +++ b/route/route.go
 @@ -393,11 +393,18 @@ func (r *Router) PreMatch(metadata adapter.InboundContext, firstPacket []byte) a
@@ -156,6 +204,15 @@ index 24befe3..2441680 100644
  				}
  			}
  			if metadata.Domain != "" && metadata.Client != "" {
+@@ -839,7 +853,7 @@ func (r *Router) actionSniff(
+ 		}
+ 		for {
+ 			var (
+-				sniffBuffer = buf.NewPacket()
++				sniffBuffer = buf.NewSize(65535)
+ 				destination M.Socksaddr
+ 				done        = make(chan struct{})
+ 			)
 @@ -899,11 +913,18 @@ func (r *Router) actionSniff(
  		}
  	finally:

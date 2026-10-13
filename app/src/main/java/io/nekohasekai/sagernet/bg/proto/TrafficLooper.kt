@@ -29,7 +29,7 @@ class TrafficLooper(
         ): Boolean = mainActivityForeground || hasMainUrlTestTag
     }
 
-    private val runtimeGeneration: Long = boundProxy?.let { data.applyGeneration } ?: 0L
+    private val runtimeGeneration: Long = boundProxy?.let { data.runtimeGeneration } ?: 0L
     private var job: Job? = null
     private val updateRequests = Channel<Unit>(Channel.CONFLATED)
 
@@ -92,7 +92,7 @@ class TrafficLooper(
             ProfileManager.updateTraffic(id, rx, tx)
         }
         val isCurrent = data.proxy === targetProxy &&
-            (boundProxy == null || data.applyGeneration == runtimeGeneration)
+            (boundProxy == null || data.runtimeGeneration == runtimeGeneration)
         if (isCurrent && traffic.isNotEmpty()) {
             val batches = traffic.values.chunked(TRAFFIC_BATCH_SIZE).map {
                 TrafficDataBatch(ArrayList(it))
@@ -221,7 +221,7 @@ class TrafficLooper(
         ProfileManager.resetTraffic(targetIds.toLongArray())
         val targetProxy = boundProxy ?: data.proxy
         val isCurrent = data.proxy === targetProxy &&
-            (boundProxy == null || data.applyGeneration == runtimeGeneration)
+            (boundProxy == null || data.runtimeGeneration == runtimeGeneration)
         if (isCurrent && batches.isNotEmpty()) {
             data.binder.broadcast { callback ->
                 if (data.binder.callbackIdMap[callback] ==
@@ -252,7 +252,7 @@ class TrafficLooper(
                 awaitUpdate(TrafficLoopPolicy.initializationRetryMillis(delayMs))
                 continue
             }
-            if (data.proxy !== proxy || (boundProxy != null && data.applyGeneration != runtimeGeneration)) {
+            if (data.proxy !== proxy || (boundProxy != null && data.runtimeGeneration != runtimeGeneration)) {
                 // Runtime generation changed or proxy replaced; drop out of old looper immediately
                 break
             }
@@ -298,7 +298,7 @@ class TrafficLooper(
                 continue
             }
             val snapshot = withStateLock {
-                if (data.proxy !== proxy || (boundProxy != null && data.applyGeneration != runtimeGeneration)) {
+                if (data.proxy !== proxy || (boundProxy != null && data.runtimeGeneration != runtimeGeneration)) {
                     return@withStateLock null
                 }
                 var pendingSwitchTraffic: Triple<Long, Long, Long>? = null
@@ -448,7 +448,7 @@ class TrafficLooper(
             }
 
             val isCurrent = data.proxy === proxy &&
-                (boundProxy == null || data.applyGeneration == runtimeGeneration)
+                (boundProxy == null || data.runtimeGeneration == runtimeGeneration)
 
             if (isCurrent && snapshot != null) {
                 if (mainActivityForeground && data.state == BaseService.State.Connected) {

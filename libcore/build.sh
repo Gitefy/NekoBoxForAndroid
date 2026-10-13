@@ -1,6 +1,6 @@
 #!/bin/bash
 
-source ./env_java.sh || true
+[ ! -f ./env_java.sh ] || source ./env_java.sh
 source ../buildScript/init/env_ndk.sh
 
 BUILD=".build"
@@ -13,7 +13,11 @@ if [ -z "$GOPATH" ]; then
   GOPATH=$(go env GOPATH)
 fi
 
-export GOBIND=gobind-matsuri
+PROJECT_ROOT=$(cd .. && pwd)
+export GOBIND="$PROJECT_ROOT/.deps/tool-bin/gobind"
+if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* ]]; then
+  GOBIND="$GOBIND.exe"
+fi
 source ../buildScript/lib/core/get_source_env.sh
 export GOTOOLCHAIN=go1.25.5
 SING_BOX_VERSION="${SING_BOX_VERSION:?Missing pinned sing-box version}"
@@ -22,7 +26,7 @@ SING_BOX_REVISION="${COMMIT_SING_BOX:-unknown}"
 # but the native ELF must also align every PT_LOAD segment to 16 KB.
 NATIVE_INPUTS=$(python ../scripts/native-provenance.py inputs) || exit 1
 LDFLAGS="-s -w -linkmode=external -extldflags=-Wl,-z,max-page-size=16384 -X github.com/sagernet/sing-box/constant.Version=${SING_BOX_VERSION} -X libcore.buildRevision=${SING_BOX_REVISION}"
-"$GOPATH"/bin/gomobile-matsuri bind -v -androidapi 21 -target=android/arm64 -cache "$(realpath $BUILD)" -trimpath -ldflags="$LDFLAGS" -tags='with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api' . || exit 1
+"$PROJECT_ROOT/.deps/tool-bin/gomobile" bind -v -androidapi 21 -target=android/arm64 -cache "$(realpath $BUILD)" -trimpath -ldflags="$LDFLAGS" -tags='with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api' . || exit 1
 rm -r libcore-sources.jar
 
 proj=../app/libs

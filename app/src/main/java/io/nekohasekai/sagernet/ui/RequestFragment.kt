@@ -33,9 +33,10 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
 
     private lateinit var list: RecyclerView
     private lateinit var adapter: RequestAdapter
-    private val labels = RequestAppLabelCache { pkg ->
-        runCatching { PackageCache.loadLabel(pkg) }.getOrNull()?.takeUnless { it == pkg }
-    }
+    private val labels = RequestAppLabelCache(
+        resolve = { pkg -> runCatching { PackageCache.loadLabel(pkg) }.getOrNull() },
+        isInstalled = { pkg -> PackageCache[pkg] != null },
+    )
     private val listener = { refresh() }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
@@ -84,6 +85,9 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
 
     override fun onDestroyView() {
         RequestStore.removeListener(listener)
+        if (::list.isInitialized) {
+            list.adapter = null
+        }
         super.onDestroyView()
     }
 
@@ -134,7 +138,9 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
 
         fun bind(flow: RequestFlowData) {
             bindApp(flow)
-            val host = flow.domain.ifBlank {
+            val host = if (flow.domain.isNotBlank()) {
+                RequestDestination.formatHostPort(flow.domain, flow.destinationPort)
+            } else {
                 RequestDestination.formatHostPort(flow.destinationAddress, flow.destinationPort)
             }
             targetView.text = listOf(flow.network.uppercase(Locale.US), host).filter { it.isNotBlank() }.joinToString(" · ")
@@ -156,14 +162,19 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
 
         fun bindStats(flow: RequestFlowData) {
             val state = if (flow.closed) "closed" else "active"
-            metaView.text = "↑ ${formatBytes(flow.uploadBytes)}  ↓ ${formatBytes(flow.downloadBytes)}  $state"
+            val time = formatTime(flow.createdAt)
+            metaView.text = "$time  ↑ ${formatBytes(flow.uploadBytes)}  ↓ ${formatBytes(flow.downloadBytes)}  $state"
         }
     }
 
     private fun appLabel(flow: RequestFlowData): String {
-        val pkg = flow.packageName.substringBefore(',')
-        if (pkg.isNotBlank()) return labels.display(pkg)
-        return if (flow.uid > 0) "UID ${flow.uid}" else ""
+        val packages = labels.displayAll(flow.packageName)
+        if (packages.isNotEmpty()) return packages.joinToString(", ")
+        return if (flow.uid > 0) {
+            getString(R.string.request_uid_label, flow.uid)
+        } else {
+            getString(R.string.request_app_unknown)
+        }
     }
 
     private fun formatBytes(value: Long): String {
@@ -172,22 +183,41 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
         return String.format(Locale.US, "%.1f MB", value / (1024.0 * 1024.0))
     }
 
+    private fun formatTime(epochMs: Long): String {
+        if (epochMs <= 0L) return ""
+        return java.text.SimpleDateFormat("HH:mm:ss", Locale.US).format(java.util.Date(epochMs))
+    }
+
+    private fun formatTimeFull(epochMs: Long): String {
+        if (epochMs <= 0L) return ""
+        return java.text.SimpleDateFormat("MM-dd HH:mm:ss", Locale.US).format(java.util.Date(epochMs))
+    }
+
     private fun showDetail(flow: RequestFlowData) {
         val body = buildString {
-            appendLine("App: ${appLabel(flow)}")
-            appendLine("Package: ${flow.packageName}")
-            appendLine("UID: ${flow.uid}")
+            appendLine("${getString(R.string.request_app_identity)}: ${appLabel(flow)}")
+            appendLine("${getString(R.string.request_packages)}: ${RequestRuleFactory.parsePackageNames(flow.packageName).joinToString(", ").ifBlank { getString(R.string.request_app_unknown) }}")
+            appendLine("${getString(R.string.request_uid)}: ${flow.uid}")
+            if (RequestRuleFactory.parsePackageNames(flow.packageName).size > 1) {
+                appendLine(getString(R.string.request_shared_uid_notice))
+            }
             appendLine("Domain: ${flow.domain}")
             appendLine("Destination: ${RequestDestination.formatHostPort(flow.destinationAddress, flow.destinationPort)}")
+            if (flow.originDestination.isNotBlank()) {
+                appendLine("Origin: ${flow.originDestination}")
+            }
             appendLine("Network: ${flow.network}")
             appendLine("Rule: ${flow.matchedRuleText}")
+            if (flow.chain.isNotBlank()) {
+                appendLine("Chain: ${flow.chain}")
+            }
             appendLine("Logical: ${flow.logicalOutbound}")
             appendLine("Router: ${flow.routerName.ifBlank { flow.routerStableTag }}")
             appendLine("Actual: ${flow.finalProfileName.ifBlank { flow.finalOutboundTag }}")
             appendLine("Upload: ${formatBytes(flow.uploadBytes)}")
             appendLine("Download: ${formatBytes(flow.downloadBytes)}")
-            appendLine("Start: ${flow.createdAt}")
-            appendLine("Closed: ${if (flow.closed) flow.closedAt else "active"}")
+            appendLine("Start: ${formatTimeFull(flow.createdAt)}")
+            appendLine("Closed: ${if (flow.closed) formatTimeFull(flow.closedAt) else "active"}")
         }
         MaterialAlertDialogBuilder(requireContext())
             .setTitle(R.string.menu_request)
@@ -206,7 +236,7 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
             matchLabels.add(getString(R.string.request_match_domain_suffix))
             matchKinds.add(RequestRuleFactory.MatchKind.DOMAIN_SUFFIX)
         }
-        if (flow.packageName.isNotBlank()) {
+        if (labels.hasResolvedPackages(flow.packageName)) {
             matchLabels.add(getString(R.string.request_match_app))
             matchKinds.add(RequestRuleFactory.MatchKind.APP)
         }
@@ -215,8 +245,12 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
             matchKinds.add(RequestRuleFactory.MatchKind.DEST_IP)
         }
         if (matchKinds.isEmpty()) return
+        val sharedUidPackages = RequestRuleFactory.parsePackageNames(flow.packageName)
         MaterialAlertDialogBuilder(requireContext())
             .setTitle(R.string.request_match)
+            .apply {
+                if (sharedUidPackages.size > 1) setMessage(R.string.request_shared_uid_notice)
+            }
             .setItems(matchLabels.toTypedArray()) { _, which ->
                 showOutboundPicker(flow, matchKinds[which])
             }
@@ -266,7 +300,7 @@ class RequestFragment : ToolbarFragment(R.layout.layout_request) {
             match = match,
             outboundKind = outbound,
             domain = flow.domain,
-            packageName = flow.packageName.substringBefore(','),
+            packageName = flow.packageName,
             destinationIp = flow.destinationAddress,
             routerStableTag = routerTag,
             routersByStableTag = routers,

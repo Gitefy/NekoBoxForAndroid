@@ -37,6 +37,50 @@
 - APK SHA256：`d2a8cadfe58d279f554718f40dc03df9d5a96db52b3b8fd2d32678dea18d0c4e`；详细记录：`app/build/outputs/verified/verification.json`。
 - 未连接 Android 设备，未做真机验收；Windows 缺少宿主 Cgo 编译器，未运行 `-race`，已将 FakeIP 竞态回归加入 Linux CI。以上为提交前本地主机验收，远端 CI 结果单独核对。
 
+## 2026-10-13 通用可靠性迁移
+
+参考 `Gitefy/vela` 的 `EgoX` 分支固定快照 `de4d8cc17a57a44a24a9bb08c756d99a604ba464`，
+逐项迁移到本仓库；参考仓库和原有 sibling core 工作区均不修改。
+未引入 Vela 协议、Rust 客户端、协议 Bean 或导入入口。包名、版本、alpha.12 pin、
+Router 不可用时的既有回退行为和备份 Parcel 格式保留。
+
+### 迁移内容
+
+- 隐藏节点分享链接与插件命令中的敏感参数；日志页面离线程读取、分类并保留原始诊断。
+- 清理缓存保留 FakeIP 数据库、日志及运行中的插件配置；独立测速使用临时缓存，
+  TCP ping 工作任务上限 16，取消与异常路径释放资源。
+- 测速只写入 `status/ping/error`，不覆盖节点编辑、订阅刷新或流量计数。
+- 恢复采用持久化准备阶段、原子日志替换和结果明确的双数据库回滚；
+  回滚失败保留快照，恢复失败阻止启动。Windows JVM 跳过不支持的目录 fsync，
+  Android/Linux 保留目录持久化；失败不降级成非原子覆盖。
+- 订阅提交与恢复共用文件锁和恢复代次；数据库事务内读取最新节点和分组，
+  拒绝恢复前发起或设置已经变化的下载结果；后台更新增加联网约束和有界重试。
+- socket 保护错误传播，并绑定捕获的底层网络；网络变更同步到 native interface monitor，
+  取消待取网络请求，避免本地 DNS 回退到 VPN 自身。
+- START 在连接过程中等待旧实例清理；停止尝试释放所有资源；
+  请求和流量发布使用独立运行代次，拒绝已替换实例的迟到数据。
+- 共享 UID 保留全部包名，Requests 显示应用、包名及 UID，创建应用规则时保持完整集合。
+- 本地 Clash API 使用事务生成的随机密钥，内置面板在本地 origin 初始化认证；
+  密钥不进入 URL、外部页面或配置导出；释放 WebView 与列表视图资源。
+- alpha.12 叠加失败 URLTest 节点重选、完整 UDP 嗅探报文和流量关闭元数据副本补丁。
+  URLTest 重选和元数据补丁用原始 alpha.12 overlay 先复现失败，再验证通过。
+
+### 构建和验收
+
+- 固定 Matsuri gomobile 源码 `17d6af34f6bd6d7e1e428e0c652c8b54a46bda4f`；
+  绑定工具在 `.deps/tool-bin` 构建，保持 Go 1.25.5，不安装浮动 `gobind@latest`。
+  Android arm64 绑定不使用 OpenAL，只准备所需工作目录。
+- 普通和完整 Release 标签 Go 测试、核心补丁回归、干净 alpha.12 补丁重放及原生来源验证通过。
+- Debug / Release JVM 各 504 项测试通过（包含面板认证与导出隔离）；原生来源/获取测试 7 项通过。
+- Debug / Release lint 均为 0 错误，分别保留 61 / 44 项已有警告；两种 APK 构建通过。
+- AAR 与两种 APK 的 native 字节相同，alpha.12 / revision / Go 版本正确；ELF 与 APK 16 KB 对齐通过，
+  Release v2 签名证书与原版本一致。新交付文件：
+  `app/build/outputs/verified/EgoX-4.3.2-alpha.12-reference-hardening-arm64-v8a.apk`，
+  SHA256 `fc7c68f81f51e553c6283f73fbf2c39e1b4d0642eb6e50bc289726e9a783b49a`。
+- AndroidTest Kotlin 编译通过，新增 Room 延迟测速写回用例尚未在设备执行。
+- 无连接设备；VPN、切网、UDP/QUIC、休眠及数据库并发设备验收仍待完成。
+  Windows 未执行 Go `-race`；Linux CI 执行 libcore 与核心补丁的竞态回归。
+
 ## 先前 pin（v1.15.0-alpha.6）
 
 | 组件 | 版本 / Commit |

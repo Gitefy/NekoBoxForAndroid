@@ -2,6 +2,7 @@ package io.nekohasekai.sagernet.bg.proto
 
 import io.nekohasekai.sagernet.bg.BaseService
 import io.nekohasekai.sagernet.bg.ServiceNotification
+import io.nekohasekai.sagernet.bg.runStopCleanup
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.ktx.Logs
 import kotlinx.coroutines.CoroutineScope
@@ -40,7 +41,7 @@ class ProxyInstance(profile: ProxyEntity, var service: BaseService.Interface? = 
         super.loadConfig()
     }
 
-    override fun launch() {
+    override suspend fun launch() {
         box.setAsMain()
         super.launch() // start box
         looper = service?.let { TrafficLooper(it.data, runtimeScope, this) }
@@ -79,7 +80,7 @@ class ProxyInstance(profile: ProxyEntity, var service: BaseService.Interface? = 
                         tagToProfileName = tagToName,
                     )
                 },
-                runtimeGeneration = svc.data.applyGeneration,
+                runtimeGeneration = svc.data.runtimeGeneration,
                 scope = runtimeScope,
             )
         }
@@ -92,14 +93,20 @@ class ProxyInstance(profile: ProxyEntity, var service: BaseService.Interface? = 
     }
 
     override fun close() {
+        val failure: Throwable?
         try {
-            connectionObserver?.stop()
-            runBlocking { looper?.stop() }
+            failure = runBlocking {
+                runStopCleanup(
+                    { connectionObserver?.stop() },
+                    { looper?.stop() },
+                    { runtimeScope.cancel() },
+                    { super.close() },
+                )
+            }
         } finally {
             connectionObserver = null
             looper = null
-            runtimeScope.cancel()
-            super.close()
         }
+        failure?.let { throw it }
     }
 }

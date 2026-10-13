@@ -45,11 +45,11 @@ jobs:
       - name: Libcore Tests
         run: |
           cd libcore
-          go test ./... -count=1
+          go test -race ./... -count=1
           go test -tags with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api ./... -count=1
           python ../scripts/test_native_provenance.py
           cd ../.deps/sing-box
-          go test -race ./experimental/cachefile -run 'TestFakeIPMetadataPersistenceAndRecovery|TestEgoXStoreRecoversLegacyMappings' -count=1
+          go test -race ./experimental/cachefile ./route ./protocol/group ./common/trafficcontrol -run 'TestFakeIPMetadataPersistenceAndRecovery|TestEgoX|TestUDPSniffPreservesFullDatagram' -count=1
   build:
     name: Build OSS APK
     runs-on: ubuntu-latest
