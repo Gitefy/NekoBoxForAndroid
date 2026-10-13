@@ -111,6 +111,7 @@ class BaseService {
         var connectingJob: Job? = null
         @Volatile var pendingRestorePermit: RestoreCoordinator.Permit? = null
         @Volatile var urlTestRefreshJob: Job? = null
+        @Volatile var lastUrlTestRefreshTime: Long = 0L
         @Volatile var applyGeneration: Long = 0L
         @Volatile var runtimeGeneration: Long = 0L
         @Volatile var pendingRestart: Boolean = false
@@ -741,6 +742,14 @@ class BaseService {
                                 ensureActive()
                                 if (data.state != State.Connected || data.proxy !== runningProxy ||
                                     SagerNet.underlyingNetwork != network) return@launch
+
+                                val now = SystemClock.elapsedRealtime()
+                                if (now - data.lastUrlTestRefreshTime < URL_TEST_NETWORK_REFRESH_COOLDOWN_MS) {
+                                    Logs.d { "Skipping router URLTest refresh due to cooldown window (${now - data.lastUrlTestRefreshTime}ms < ${URL_TEST_NETWORK_REFRESH_COOLDOWN_MS}ms)" }
+                                    return@launch
+                                }
+                                data.lastUrlTestRefreshTime = now
+
                                 runningProxy.config.routerUrlTestTags.values.distinct().forEach {
                                     runningProxy.box.refreshURLTestFor(it)
                                 }
@@ -984,6 +993,7 @@ class BaseService {
 
     companion object {
         private const val URL_TEST_NETWORK_REFRESH_DEBOUNCE_MS = 1_500L
+        private const val URL_TEST_NETWORK_REFRESH_COOLDOWN_MS = 30_000L
     }
 
 }

@@ -354,5 +354,45 @@ class BatchConfigBuilderTest {
         assertEquals(listOf(badB), result.fallbackProfiles)
         assertEquals(mapOf(201L to "ut-201-main", 203L to "ut-203-main"), result.targetTagMap)
     }
+
+    @Test
+    fun unsupportedSsrAndSnellVersionsRouteToFallback() {
+        val goodNode = socks(301L, "10.0.0.1", 1080)
+        val ssrNode = ProxyEntity(id = 302L, groupId = 1L, type = ProxyEntity.TYPE_SSR).apply {
+            putBean(io.nekohasekai.sagernet.fmt.shadowsocksr.ShadowsocksRBean().apply {
+                serverAddress = "ssr.example.com"
+                serverPort = 8388
+                name = "ssr-node"
+                applyDefaultValues()
+            })
+        }
+        val snellV3Node = ProxyEntity(id = 303L, groupId = 1L).apply {
+            putBean(io.nekohasekai.sagernet.fmt.snell.SnellBean().apply {
+                serverAddress = "snell.example.com"
+                serverPort = 1234
+                version = 3
+                psk = "secret"
+                name = "snell-v3"
+                applyDefaultValues()
+            })
+        }
+        val snellV4Node = ProxyEntity(id = 304L, groupId = 1L).apply {
+            putBean(io.nekohasekai.sagernet.fmt.snell.SnellBean().apply {
+                serverAddress = "snell.example.com"
+                serverPort = 1234
+                version = 4
+                psk = "secret"
+                name = "snell-v4"
+                applyDefaultValues()
+            })
+        }
+
+        val result = BatchConfigBuilder.build(listOf(goodNode, ssrNode, snellV3Node, snellV4Node))
+
+        assertEquals(listOf(goodNode, snellV4Node), result.batchEligibleProfiles)
+        assertEquals(listOf(ssrNode, snellV3Node), result.fallbackProfiles)
+        assertEquals(mapOf(301L to "ut-301-main", 304L to "ut-304-main"), result.targetTagMap)
+    }
 }
+
 

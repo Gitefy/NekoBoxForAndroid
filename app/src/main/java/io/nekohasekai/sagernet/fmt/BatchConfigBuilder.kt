@@ -242,6 +242,16 @@ object BatchConfigBuilder {
                     val elem = runCatching { JsonParser.parseString(bean.config) }.getOrNull() ?: return false
                     if (!elem.isJsonObject) return false
                 }
+                is ShadowsocksRBean -> {
+                    // SSR is not supported by sing-box 1.15 core; isolate to fallback
+                    return false
+                }
+                is SnellBean -> {
+                    // sing-box 1.15 only supports Snell v4 and v6
+                    val v = bean.version ?: 4
+                    if (v != 4 && v != 6) return false
+                    if (bean.serverAddress.isBlank() || bean.serverPort <= 0) return false
+                }
                 else -> {
                     if (bean.serverAddress.isBlank() || bean.serverPort <= 0) return false
                 }
